@@ -1,0 +1,6 @@
+pytest
+ruff
+mypy
+types-PyYAML
+black
+pyinstaller
