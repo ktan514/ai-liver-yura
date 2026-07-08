@@ -38,6 +38,79 @@ async def test_action_planner_uses_response_generator_for_conversation() -> None
     assert action_plan_group.action_plans[2].required_resources == {ActionResource.FACE}
 
 
+# Additional tests for startup, stream opening, and stream closing greetings
+@pytest.mark.asyncio
+async def test_action_planner_uses_response_generator_for_startup_reaction() -> None:
+    activity = Activity(
+        activity_type=ActivityType.STARTUP_REACTION,
+        goal="起動直後の状況に反応する",
+    )
+    planner = ActionPlanner(response_generator=FakeResponseGenerator())
+
+    action_plan_group = await planner.plan(activity)
+
+    assert action_plan_group.source_activity_id == activity.activity_id
+    assert [plan.action_type for plan in action_plan_group.action_plans] == [
+        ActionType.SPEAK,
+        ActionType.UPDATE_SUBTITLE,
+        ActionType.CHANGE_EXPRESSION,
+    ]
+    assert action_plan_group.action_plans[0].text == "generated: 起動直後の状況に反応する"
+    assert action_plan_group.action_plans[0].required_resources == {ActionResource.MOUTH}
+    assert action_plan_group.action_plans[1].text == "generated: 起動直後の状況に反応する"
+    assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
+    assert action_plan_group.action_plans[2].text == "smile"
+    assert action_plan_group.action_plans[2].required_resources == {ActionResource.FACE}
+
+
+@pytest.mark.asyncio
+async def test_action_planner_uses_response_generator_for_stream_opening_greeting() -> None:
+    activity = Activity(
+        activity_type=ActivityType.STREAM_OPENING_GREETING,
+        goal="配信開始時のあいさつをする",
+    )
+    planner = ActionPlanner(response_generator=FakeResponseGenerator())
+
+    action_plan_group = await planner.plan(activity)
+
+    assert action_plan_group.source_activity_id == activity.activity_id
+    assert [plan.action_type for plan in action_plan_group.action_plans] == [
+        ActionType.SPEAK,
+        ActionType.UPDATE_SUBTITLE,
+        ActionType.CHANGE_EXPRESSION,
+    ]
+    assert action_plan_group.action_plans[0].text == "generated: 配信開始時のあいさつをする"
+    assert action_plan_group.action_plans[0].required_resources == {ActionResource.MOUTH}
+    assert action_plan_group.action_plans[1].text == "generated: 配信開始時のあいさつをする"
+    assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
+    assert action_plan_group.action_plans[2].text == "smile"
+    assert action_plan_group.action_plans[2].required_resources == {ActionResource.FACE}
+
+
+@pytest.mark.asyncio
+async def test_action_planner_uses_response_generator_for_stream_closing_greeting() -> None:
+    activity = Activity(
+        activity_type=ActivityType.STREAM_CLOSING_GREETING,
+        goal="配信終了前のあいさつをする",
+    )
+    planner = ActionPlanner(response_generator=FakeResponseGenerator())
+
+    action_plan_group = await planner.plan(activity)
+
+    assert action_plan_group.source_activity_id == activity.activity_id
+    assert [plan.action_type for plan in action_plan_group.action_plans] == [
+        ActionType.SPEAK,
+        ActionType.UPDATE_SUBTITLE,
+        ActionType.CHANGE_EXPRESSION,
+    ]
+    assert action_plan_group.action_plans[0].text == "generated: 配信終了前のあいさつをする"
+    assert action_plan_group.action_plans[0].required_resources == {ActionResource.MOUTH}
+    assert action_plan_group.action_plans[1].text == "generated: 配信終了前のあいさつをする"
+    assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
+    assert action_plan_group.action_plans[2].text == "soft_smile"
+    assert action_plan_group.action_plans[2].required_resources == {ActionResource.FACE}
+
+
 @pytest.mark.asyncio
 async def test_action_planner_uses_response_generator_for_autonomous_talk() -> None:
     activity = Activity(

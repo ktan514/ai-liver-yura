@@ -1,24 +1,86 @@
-
-
 from __future__ import annotations
 
 import asyncio
+from queue import Queue
 
 import pytest
 
 from app.adapters.llm import DummyResponseGenerator
-from app.domain.actions import ActionType
+from app.adapters.prompt import SimplePromptBuilder
+from app.domain.actions import ActionPlan, ActionType
+from app.domain.character import CharacterProfile
+from app.domain.drives import DriveState
 from app.domain.events import AgentEvent, AgentEventType
-from app.runtime import ActionPlanner, ActivityManager, EventQueue, RuntimeCoordinator
-from app.usecases import ExecuteActionUsecase
+from app.runtime import ActionPlanner, ActivityManager, AgentLifeService, EventQueue, RuntimeCoordinator
+from app.runtime.action_scheduler import ActionScheduler
+from app.runtime.activity_executor_thread import ActivityExecutorThread
+from app.runtime.activity_planner_thread import (
+    ActivityPlannerThread,
+    ActivityPlanningRequest,
+    ActivityPlanningService,
+)
+from app.runtime.planned_activity_queue import PlannedActivityQueue
 
 
-def _create_runtime() -> RuntimeCoordinator:
+class FakeActionExecutor:
+    async def execute(self, action_plan: ActionPlan) -> None:
+        if action_plan.text:
+            print(f"[{action_plan.action_type.value}] {action_plan.text}")
+
+
+def _create_character_profile() -> CharacterProfile:
+    return CharacterProfile(
+        name="ミナト",
+        personality="明るく好奇心が強い",
+        speaking_style="親しみやすく、少しくだけた口調",
+        streaming_style="視聴者と一緒に楽しむ雑談配信",
+        likes=["海の生き物", "ゲーム"],
+        dislikes=["攻撃的な話題"],
+        behavior_policy=["短く自然に返答する"],
+    )
+
+
+def _create_runtime(
+    activity_manager: ActivityManager | None = None,
+    agent_life_service: AgentLifeService | None = None,
+) -> RuntimeCoordinator:
+    activity_manager = activity_manager or ActivityManager()
+    agent_life_service = agent_life_service or AgentLifeService(activity_manager)
+    activity_planning_request_queue: Queue[ActivityPlanningRequest] = Queue()
+    planned_activity_queue = PlannedActivityQueue()
+    action_planner = ActionPlanner(
+        response_generator=DummyResponseGenerator(
+            character_profile=_create_character_profile(),
+            prompt_builder=SimplePromptBuilder(),
+        )
+    )
+    action_scheduler = ActionScheduler(action_executor=FakeActionExecutor())
+    activity_planning_service = ActivityPlanningService(
+        agent_life_service=agent_life_service,
+        activity_manager=activity_manager,
+    )
+    activity_planner_thread = ActivityPlannerThread(
+        request_queue=activity_planning_request_queue,
+        planned_activity_queue=planned_activity_queue,
+        planning_service=activity_planning_service,
+    )
+    activity_executor_thread = ActivityExecutorThread(
+        planned_activity_queue=planned_activity_queue,
+        action_planner=action_planner,
+        action_scheduler=action_scheduler,
+        activity_manager=activity_manager,
+        agent_life_service=agent_life_service,
+    )
+
     return RuntimeCoordinator(
         event_queue=EventQueue(),
-        activity_manager=ActivityManager(),
-        action_planner=ActionPlanner(response_generator=DummyResponseGenerator()),
-        action_executor=ExecuteActionUsecase(),
+        activity_manager=activity_manager,
+        action_planner=action_planner,
+        action_scheduler=action_scheduler,
+        activity_planning_request_queue=activity_planning_request_queue,
+        activity_planner_thread=activity_planner_thread,
+        activity_executor_thread=activity_executor_thread,
+        agent_life_service=agent_life_service,
     )
 
 
@@ -136,7 +198,6 @@ async def test_publish_events_keeps_user_text_and_latest_camera_frame() -> None:
     assert third_action is None
 
 
-
 @pytest.mark.asyncio
 async def test_run_processes_published_event_until_stopped(capsys: pytest.CaptureFixture[str]) -> None:
     runtime = _create_runtime()
@@ -169,3 +230,111 @@ async def test_run_can_be_stopped_without_events() -> None:
     await run_task
 
     assert run_task.done()
+
+
+@pytest.mark.asyncio
+async def test_run_once_updates_agent_life_loop_state() -> None:
+    activity_manager = ActivityManager()
+    agent_life_service = AgentLifeService(activity_manager)
+    runtime = _create_runtime(
+        activity_manager=activity_manager,
+        agent_life_service=agent_life_service,
+    )
+
+    await runtime.publish_event(
+        AgentEvent(
+            event_type=AgentEventType.USER_TEXT,
+            payload={"text": "状態更新テスト"},
+        )
+    )
+
+    await runtime.run_once()
+
+    assert agent_life_service.agent_state.last_user_input_at is not None
+    assert agent_life_service.agent_state.active_activity is None
+
+
+@pytest.mark.asyncio
+async def test_speech_lifecycle_event_updates_agent_life_loop_only() -> None:
+    activity_manager = ActivityManager()
+    agent_life_service = AgentLifeService(activity_manager)
+    runtime = _create_runtime(
+        activity_manager=activity_manager,
+        agent_life_service=agent_life_service,
+    )
+
+    await runtime.publish_event(
+        AgentEvent(event_type=AgentEventType.SPEECH_STARTED)
+    )
+
+    action_plan_group = await runtime.run_once()
+
+    assert action_plan_group is not None
+    assert action_plan_group.is_empty()
+    assert agent_life_service.agent_state.last_speech_started_at is not None
+    assert agent_life_service.agent_state.active_activity is None
+
+
+# Additional tests for autonomous event planning
+
+@pytest.mark.asyncio
+async def test_run_once_plans_autonomous_event_when_event_queue_is_empty() -> None:
+    activity_manager = ActivityManager()
+    agent_life_service = AgentLifeService(activity_manager)
+    agent_life_service.update_drive(DriveState(curiosity=0.9))
+    runtime = _create_runtime(
+        activity_manager=activity_manager,
+        agent_life_service=agent_life_service,
+    )
+
+    action_plan_group = await runtime.run_once()
+
+    assert action_plan_group is None
+    assert runtime._activity_planning_request_queue.qsize() == 1  # noqa: SLF001
+    assert agent_life_service.agent_state.active_activity is None
+
+
+@pytest.mark.asyncio
+async def test_run_once_plans_autonomous_event_even_when_event_queue_has_event() -> None:
+    activity_manager = ActivityManager()
+    agent_life_service = AgentLifeService(activity_manager)
+    agent_life_service.update_drive(DriveState(curiosity=0.9))
+    runtime = _create_runtime(
+        activity_manager=activity_manager,
+        agent_life_service=agent_life_service,
+    )
+
+    await runtime.publish_event(
+        AgentEvent(
+            event_type=AgentEventType.CAMERA_FRAME,
+            payload={"frame_id": "latest"},
+        )
+    )
+
+    first_action_plan_group = await runtime.run_once()
+    second_action_plan_group = await runtime.run_once()
+
+    assert first_action_plan_group is not None
+    assert any(
+        action_plan.action_type == ActionType.OBSERVE
+        for action_plan in first_action_plan_group.action_plans
+    )
+    assert second_action_plan_group is None
+    assert runtime._activity_planning_request_queue.qsize() == 1  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_run_once_does_not_plan_autonomous_event_when_active_activity_exists() -> None:
+    activity_manager = ActivityManager()
+    agent_life_service = AgentLifeService(activity_manager)
+    runtime = _create_runtime(
+        activity_manager=activity_manager,
+        agent_life_service=agent_life_service,
+    )
+
+    await runtime.publish_event(
+        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"})
+    )
+    await runtime.run_once()
+
+    assert agent_life_service.agent_state.active_activity is None

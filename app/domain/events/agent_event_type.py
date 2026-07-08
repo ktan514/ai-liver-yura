@@ -10,6 +10,7 @@ class AgentEventType(str, Enum):
     CAMERA_FRAME = "camera_frame"
 
     SILENCE_TIMEOUT = "silence_timeout"
+    SPEECH_STARTED = "speech_started"
     SPEECH_FINISHED = "speech_finished"
     CURIOSITY_PEAK = "curiosity_peak"
     TREND_UPDATED = "trend_updated"
@@ -17,3 +18,8 @@ class AgentEventType(str, Enum):
 
     SYSTEM_STARTED = "system_started"
     SYSTEM_STOPPED = "system_stopped"
+
+    APP_STARTED = "app_started"
+    STREAM_STARTED = "stream_started"
+    STREAM_ENDING = "stream_ending"
+    STREAM_ENDED = "stream_ended"

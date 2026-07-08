@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from app.domain.activities import ActivityStatus, ActivityType
@@ -25,12 +23,63 @@ def test_user_text_becomes_foreground_activity() -> None:
     assert manager.suspended_activities() == []
 
 
-def test_user_text_interrupts_autonomous_talk() -> None:
+def test_app_started_becomes_startup_reaction_activity() -> None:
+    manager = ActivityManager()
+
+    foreground = manager.handle_event(
+        AgentEvent(
+            event_type=AgentEventType.APP_STARTED,
+            payload={"source": "test"},
+            priority=20,
+        )
+    )
+
+    assert foreground.activity_type == ActivityType.STARTUP_REACTION
+    assert foreground.status == ActivityStatus.ACTIVE
+    assert foreground.interruptible is False
+    assert manager.foreground_activity == foreground
+
+
+def test_stream_started_becomes_opening_greeting_activity() -> None:
+    manager = ActivityManager()
+
+    foreground = manager.handle_event(
+        AgentEvent(
+            event_type=AgentEventType.STREAM_STARTED,
+            payload={"source": "test"},
+            priority=20,
+        )
+    )
+
+    assert foreground.activity_type == ActivityType.STREAM_OPENING_GREETING
+    assert foreground.status == ActivityStatus.ACTIVE
+    assert foreground.interruptible is False
+    assert manager.foreground_activity == foreground
+
+
+def test_stream_ending_becomes_closing_greeting_activity() -> None:
+    manager = ActivityManager()
+
+    foreground = manager.handle_event(
+        AgentEvent(
+            event_type=AgentEventType.STREAM_ENDING,
+            payload={"source": "test"},
+            priority=20,
+        )
+    )
+
+    assert foreground.activity_type == ActivityType.STREAM_CLOSING_GREETING
+    assert foreground.status == ActivityStatus.ACTIVE
+    assert foreground.interruptible is False
+    assert manager.foreground_activity == foreground
+
+
+def test_user_text_interrupts_curiosity_peak_autonomous_talk() -> None:
     manager = ActivityManager()
 
     autonomous = manager.handle_event(
         AgentEvent(
-            event_type=AgentEventType.SILENCE_TIMEOUT,
+            event_type=AgentEventType.CURIOSITY_PEAK,
             payload={},
             priority=8,
         )
@@ -55,7 +104,7 @@ def test_user_text_interrupts_autonomous_talk() -> None:
     assert suspended[0].status == ActivityStatus.SUSPENDED
 
 
-def test_conversation_is_not_interrupted_by_silence_timeout() -> None:
+def test_conversation_is_not_interrupted_by_silence_timeout_observation() -> None:
     manager = ActivityManager()
 
     conversation = manager.handle_event(
@@ -76,12 +125,12 @@ def test_conversation_is_not_interrupted_by_silence_timeout() -> None:
 
     pending = manager.pending_activities()
 
-    assert foreground.activity_type == ActivityType.AUTONOMOUS_TALK
+    assert foreground.activity_type == ActivityType.IDLE_OBSERVATION
     assert foreground.status == ActivityStatus.PENDING
     assert manager.foreground_activity == conversation
     assert len(pending) == 1
     assert pending[0] == foreground
-    assert pending[0].activity_type == ActivityType.AUTONOMOUS_TALK
+    assert pending[0].activity_type == ActivityType.IDLE_OBSERVATION
     assert pending[0].status == ActivityStatus.PENDING
 
 
@@ -90,7 +139,7 @@ def test_lower_priority_activity_becomes_pending() -> None:
 
     autonomous = manager.handle_event(
         AgentEvent(
-            event_type=AgentEventType.SILENCE_TIMEOUT,
+            event_type=AgentEventType.CURIOSITY_PEAK,
             payload={},
             priority=30,
         )
@@ -147,7 +196,7 @@ def test_complete_foreground_activity_resumes_pending_activity() -> None:
 
     pending_autonomous = manager.handle_event(
         AgentEvent(
-            event_type=AgentEventType.SILENCE_TIMEOUT,
+            event_type=AgentEventType.CURIOSITY_PEAK,
             payload={},
             priority=8,
         )
@@ -204,7 +253,7 @@ def test_resume_next_pending_selects_highest_priority_activity() -> None:
 
     high_priority_pending = manager.handle_event(
         AgentEvent(
-            event_type=AgentEventType.SILENCE_TIMEOUT,
+            event_type=AgentEventType.CURIOSITY_PEAK,
             payload={},
             priority=8,
         )

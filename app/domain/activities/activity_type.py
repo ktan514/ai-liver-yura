@@ -6,6 +6,9 @@ class ActivityType(str, Enum):
 
     CONVERSATION_WITH_USER = "conversation_with_user"
     AUTONOMOUS_TALK = "autonomous_talk"
+    STARTUP_REACTION = "startup_reaction"
+    STREAM_OPENING_GREETING = "stream_opening_greeting"
+    STREAM_CLOSING_GREETING = "stream_closing_greeting"
     LISTENING_MODE = "listening_mode"
     STIMULUS_REACTION = "stimulus_reaction"
     CURIOSITY_RESEARCH = "curiosity_research"
