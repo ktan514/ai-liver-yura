@@ -1,0 +1,20 @@
+{
+    "cSpell.words": [
+        "asyncio",
+        "BIGSERIAL",
+        "capsys",
+        "cooldown",
+        "delenv",
+        "discardable",
+        "hnsw",
+        "interruptible",
+        "mypy",
+        "Ollama",
+        "pgvector",
+        "prioritizer",
+        "pytest",
+        "qwen",
+        "TIMESTAMPTZ",
+        "usecases"
+    ]
+}
