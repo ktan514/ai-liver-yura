@@ -6,8 +6,9 @@ name = "pypi"
 [packages]
 pyqt6 = "*"
 python-dotenv = "*"
-pydantic = "*"
 pyyaml = "*"
+pydantic = "*"
+asyncpg = "*"
 
 [dev-packages]
 pytest-asyncio = "*"

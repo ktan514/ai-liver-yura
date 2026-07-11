@@ -16,5 +16,6 @@
         "qwen",
         "TIMESTAMPTZ",
         "usecases"
-    ]
+    ],
+    "python-envs.defaultEnvManager": "ms-python.python:pipenv"
 }
