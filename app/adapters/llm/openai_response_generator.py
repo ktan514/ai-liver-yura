@@ -8,7 +8,7 @@ import urllib.request
 
 from typing import Any
 
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 
 from app.adapters.prompt import SimplePromptBuilder
 from app.domain.activities import Activity

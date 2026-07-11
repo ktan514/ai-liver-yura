@@ -3,7 +3,9 @@ from __future__ import annotations
 from app.adapters.prompt import SimplePromptBuilder
 from app.domain.activities import Activity, ActivityType
 from app.domain.character import CharacterProfile
-from app.runtime.short_term_memory import ShortTermMemory
+from app.domain.topic import TopicCategory, TopicHistory
+from app.domain.topic_memory import SimilarTopicMemory, TopicMemoryEntry
+from app.domain.short_term_memory import ShortTermMemory
 
 
 def _create_character_profile() -> CharacterProfile:
@@ -15,6 +17,19 @@ def _create_character_profile() -> CharacterProfile:
         likes=["海の生き物", "ゲーム", "新しい技術"],
         dislikes=["攻撃的な話題", "長すぎる説明"],
         behavior_policy=["短く自然に返答する", "視聴者を否定しない"],
+    )
+
+
+def _create_topic_memory_entry(
+    category: TopicCategory,
+    summary: str,
+) -> TopicMemoryEntry:
+    return TopicMemoryEntry(
+        category=category,
+        summary=summary,
+        source_text=summary,
+        activity_type="speak",
+        embedding=[0.1, 0.2, 0.3],
     )
 
 
@@ -133,6 +148,113 @@ def test_simple_prompt_builder_includes_recent_speech_connection_examples() -> N
     assert "例2: 同じ話題を少し広げる場合" in prompt
     assert "例3: 関連する別の話題へ移る場合" in prompt
     assert "例4: 話題を変える場合" in prompt
+
+
+def test_simple_prompt_builder_includes_topic_history_for_autonomous_talk() -> None:
+    activity = Activity(
+        activity_type=ActivityType.AUTONOMOUS_TALK,
+        goal="自律的に話題を出して話す",
+    )
+    character_profile = _create_character_profile()
+    topic_history = TopicHistory()
+    topic_history.add(category=TopicCategory.SEA_LIFE, summary="海の光")
+    topic_history.add(category=TopicCategory.SEA_LIFE, summary="潮の流れ")
+    topic_history.add(category=TopicCategory.SEA_LIFE, summary="岩場の生き物")
+    prompt_builder = SimplePromptBuilder(topic_history=topic_history)
+
+    prompt = prompt_builder.build_prompt(activity, character_profile)
+
+    assert "# 直近の話題履歴" in prompt
+    assert "- sea_life: 海の光" in prompt
+    assert "- sea_life: 潮の流れ" in prompt
+    assert "- sea_life: 岩場の生き物" in prompt
+    assert "# 話題選択の注意" in prompt
+    assert "- 直近で sea_life 系の話題が続いているため、次は別カテゴリへ自然に広げる" in prompt
+    assert "- 話題を変える場合は、直前の話題との共通点を使って自然に橋渡しする" in prompt
+    assert "- 同じ大テーマの細部だけを掘り続けない" in prompt
+
+
+def test_simple_prompt_builder_includes_related_topic_memories_for_autonomous_talk() -> None:
+    activity = Activity(
+        activity_type=ActivityType.AUTONOMOUS_TALK,
+        goal="自律的に話題を出して話す",
+        context={
+            "similar_topic_memories": [
+                SimilarTopicMemory(
+                    entry=_create_topic_memory_entry(
+                        category=TopicCategory.NATURE,
+                        summary="海辺の静かな雰囲気について話した記憶",
+                    ),
+                    similarity=0.82,
+                ),
+                SimilarTopicMemory(
+                    entry=_create_topic_memory_entry(
+                        category=TopicCategory.SEA_LIFE,
+                        summary="クラゲ展示がきれいだった記憶",
+                    ),
+                    similarity=0.91,
+                ),
+            ]
+        },
+    )
+    character_profile = _create_character_profile()
+    prompt_builder = SimplePromptBuilder()
+
+    prompt = prompt_builder.build_prompt(activity, character_profile)
+
+    assert "# 関連する過去の記憶" in prompt
+    assert "- sea_life: クラゲ展示がきれいだった記憶" in prompt
+    assert "- nature: 海辺の静かな雰囲気について話した記憶" in prompt
+    assert prompt.index("- sea_life: クラゲ展示がきれいだった記憶") < prompt.index(
+        "- nature: 海辺の静かな雰囲気について話した記憶"
+    )
+    assert "# 関連記憶の扱い" in prompt
+    assert "- 関連記憶をそのまま読み上げず、必要な要素だけを会話の流れに溶け込ませる" in prompt
+    assert "- 関連性が低い場合は無理に使わない" in prompt
+
+
+def test_simple_prompt_builder_does_not_include_related_topic_memories_for_conversation() -> None:
+    activity = Activity(
+        activity_type=ActivityType.CONVERSATION_WITH_USER,
+        goal="ユーザー入力に応答する",
+        context={
+            "event_payload": {"text": "こんにちは"},
+            "similar_topic_memories": [
+                SimilarTopicMemory(
+                    entry=_create_topic_memory_entry(
+                        category=TopicCategory.SEA_LIFE,
+                        summary="クラゲ展示がきれいだった記憶",
+                    ),
+                    similarity=0.91,
+                )
+            ],
+        },
+    )
+    character_profile = _create_character_profile()
+    prompt_builder = SimplePromptBuilder()
+
+    prompt = prompt_builder.build_prompt(activity, character_profile)
+
+    assert "# 関連する過去の記憶" not in prompt
+    assert "# 関連記憶の扱い" not in prompt
+    assert "クラゲ展示がきれいだった記憶" not in prompt
+
+
+def test_simple_prompt_builder_does_not_include_topic_history_for_conversation() -> None:
+    activity = Activity(
+        activity_type=ActivityType.CONVERSATION_WITH_USER,
+        goal="ユーザー入力に応答する",
+        context={"event_payload": {"text": "こんにちは"}},
+    )
+    character_profile = _create_character_profile()
+    topic_history = TopicHistory()
+    topic_history.add(category=TopicCategory.SEA_LIFE, summary="海の光")
+    prompt_builder = SimplePromptBuilder(topic_history=topic_history)
+
+    prompt = prompt_builder.build_prompt(activity, character_profile)
+
+    assert "# 直近の話題履歴" not in prompt
+    assert "# 話題選択の注意" not in prompt
 
 
 def test_simple_prompt_builder_includes_startup_reaction_instruction() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import threading
 
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 from app.domain.actions import ActionPlanGroup
 from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler

@@ -1,11 +1,11 @@
 
 from __future__ import annotations
 
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 
 from app.domain.actions import ActionPlan, ActionPlanGroup, ActionResource, ActionType
 from app.domain.activities import Activity, ActivityType
-from app.runtime.response_generator import ResponseGenerator
+from app.ports.response_generator import ResponseGenerator
 
 
 class ActionPlanner:

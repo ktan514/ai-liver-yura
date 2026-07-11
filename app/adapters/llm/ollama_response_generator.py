@@ -6,12 +6,12 @@ import json
 from typing import Any
 from urllib import error, request
 
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 
 from app.domain.activities import Activity
 from app.domain.character import CharacterProfile
-from app.runtime import PromptBuilder
-from app.runtime.response_generator import ResponseGenerator
+from app.ports.prompt_builder import PromptBuilder
+from app.ports.response_generator import ResponseGenerator
 
 
 class OllamaResponseGenerator(ResponseGenerator):

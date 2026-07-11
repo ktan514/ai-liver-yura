@@ -44,6 +44,42 @@ class ResponseGeneratorSettings:
     dummy: DummyResponseGeneratorSettings
 
 
+# TopicMemory/Memory settings dataclasses
+@dataclass(frozen=True, slots=True)
+class TopicMemoryDatabaseSettings:
+    type: str
+    dsn_env: str
+
+
+
+@dataclass(frozen=True, slots=True)
+class TopicMemoryEmbeddingSettings:
+    type: str
+    model: str
+    dimension: int
+    api_key_env: str
+    timeout_seconds: float
+
+
+@dataclass(frozen=True, slots=True)
+class TopicMemorySummarySettings:
+    type: str
+    fallback_max_length: int
+
+
+@dataclass(frozen=True, slots=True)
+class TopicMemorySettings:
+    enabled: bool
+    database: TopicMemoryDatabaseSettings
+    embedding: TopicMemoryEmbeddingSettings
+    summary: TopicMemorySummarySettings
+
+
+@dataclass(frozen=True, slots=True)
+class MemorySettings:
+    topic_memory: TopicMemorySettings
+
+
 @dataclass(frozen=True, slots=True)
 class CharacterSettings:
     name: str
@@ -78,6 +114,7 @@ class InputReceiverSettings:
 class AppConfig:
     app: AppSettings
     response_generator: ResponseGeneratorSettings
+    memory: MemorySettings
     character: CharacterSettings
     input_receivers: InputReceiverSettings
 
@@ -90,6 +127,7 @@ def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
         response_generator=_load_response_generator_settings(
             _require_dict(raw_config, "response_generator")
         ),
+        memory=_load_memory_settings(_require_dict(raw_config, "memory")),
         character=_load_character_settings(_require_dict(raw_config, "character")),
         input_receivers=_load_input_receiver_settings(
             _require_dict(raw_config, "input_receivers")
@@ -140,12 +178,60 @@ def _load_ollama_settings(config: dict[str, Any]) -> OllamaSettings:
     )
 
 
+
 def _load_openai_settings(config: dict[str, Any]) -> OpenAISettings:
     return OpenAISettings(
         model=_require_string(config, "model"),
         api_key_env=_require_string(config, "api_key_env"),
         timeout_seconds=_require_float(config, "timeout_seconds"),
         fallback_response=_require_string(config, "fallback_response"),
+    )
+
+
+# Memory settings loader functions
+def _load_memory_settings(config: dict[str, Any]) -> MemorySettings:
+    return MemorySettings(
+        topic_memory=_load_topic_memory_settings(_require_dict(config, "topic_memory")),
+    )
+
+
+def _load_topic_memory_settings(config: dict[str, Any]) -> TopicMemorySettings:
+    return TopicMemorySettings(
+        enabled=_require_bool(config, "enabled"),
+        database=_load_topic_memory_database_settings(_require_dict(config, "database")),
+        embedding=_load_topic_memory_embedding_settings(_require_dict(config, "embedding")),
+        summary=_load_topic_memory_summary_settings(_require_dict(config, "summary")),
+    )
+
+
+def _load_topic_memory_database_settings(
+    config: dict[str, Any],
+) -> TopicMemoryDatabaseSettings:
+    return TopicMemoryDatabaseSettings(
+        type=_require_string(config, "type"),
+        dsn_env=_require_string(config, "dsn_env"),
+    )
+
+
+
+def _load_topic_memory_embedding_settings(
+    config: dict[str, Any],
+) -> TopicMemoryEmbeddingSettings:
+    return TopicMemoryEmbeddingSettings(
+        type=_require_string(config, "type"),
+        model=_require_string(config, "model"),
+        dimension=_require_int(config, "dimension"),
+        api_key_env=_require_string(config, "api_key_env"),
+        timeout_seconds=_require_float(config, "timeout_seconds"),
+    )
+
+
+def _load_topic_memory_summary_settings(
+    config: dict[str, Any],
+) -> TopicMemorySummarySettings:
+    return TopicMemorySummarySettings(
+        type=_require_string(config, "type"),
+        fallback_max_length=_require_int(config, "fallback_max_length"),
     )
 
 
@@ -224,6 +310,15 @@ def _require_float(config: dict[str, Any], setting_path: str) -> float:
         raise RuntimeError(f"{setting_path} は数値で指定してください。")
 
     return float(value)
+
+
+def _require_int(config: dict[str, Any], setting_path: str) -> int:
+    value = _get_required_value(config, setting_path)
+
+    if not isinstance(value, int):
+        raise RuntimeError(f"{setting_path} は整数で指定してください。")
+
+    return value
 
 
 def _require_optional_int(config: dict[str, Any], setting_path: str) -> int | None:

@@ -5,7 +5,7 @@ app:
   mode: console
 
 response_generator:
-  type: openai
+  type: ollama
   ollama:
     model: local-agent:qwen7b-prompt-test
     api_url: http://localhost:11434/api/generate
@@ -18,6 +18,22 @@ response_generator:
     fallback_response: うまく言葉が出てこなかったみたい。もう一度話しかけてね。
   dummy:
     enabled: false
+
+memory:
+  topic_memory:
+    enabled: true
+    database:
+      type: postgres
+      dsn_env: AI_LIVER_DATABASE_URL
+    embedding:
+      type: openai
+      model: text-embedding-3-small
+      dimension: 1536
+      api_key_env: OPENAI_API_KEY
+      timeout_seconds: 30.0
+    summary:
+      type: llm
+      fallback_max_length: 120
 
 character:
   name: 星波ゆら

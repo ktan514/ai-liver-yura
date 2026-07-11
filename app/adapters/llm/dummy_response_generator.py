@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from app.domain.activities import Activity, ActivityType
 from app.domain.character import CharacterProfile
-from app.runtime import PromptBuilder
-from app.runtime.response_generator import ResponseGenerator
+from app.ports.prompt_builder import PromptBuilder
+from app.ports.response_generator import ResponseGenerator
 
 
 class DummyResponseGenerator(ResponseGenerator):

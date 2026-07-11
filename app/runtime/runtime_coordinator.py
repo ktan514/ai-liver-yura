@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from queue import Queue
 
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 
 from app.domain.actions import ActionPlanGroup
 from app.domain.events import AgentEvent, AgentEventType

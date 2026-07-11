@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 
 from app.domain.activities import Activity, ActivityStatus, ActivityType
 from app.domain.events import AgentEvent, AgentEventType

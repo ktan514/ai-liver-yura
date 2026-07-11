@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from typing import Protocol
 
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 
 from app.domain.actions import ActionPlan, ActionPlanGroup, ActionResource
 

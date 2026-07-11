@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from app.domain.activities import Activity, ActivityType
 from app.domain.character import CharacterProfile
-from app.runtime import PromptBuilder
-from app.runtime.short_term_memory import ShortTermMemory
+from app.domain.topic import TopicHistory
+from app.domain.topic_memory import SimilarTopicMemory
+from app.ports.prompt_builder import PromptBuilder
+from app.domain.short_term_memory import ShortTermMemory
+from app.adapters.prompt.topic_history_prompt_section import TopicHistoryPromptSection
+from app.adapters.prompt.topic_memory_prompt_section import TopicMemoryPromptSection
 
 
 class CharacterPromptSections:
@@ -100,12 +104,30 @@ class RecentSpeechPromptSection:
             "- 直前の発話がある場合、最初の一文で流れを軽く受ける",
             "- 話題を変える場合は、唐突に本題へ入らず、短い橋渡しを入れる",
             "- 毎回同じ導入表現を使わない",
+            "- いきなり新しい豆知識や本題から始めない",
+            "",
+            "# 反復・滞留防止",
             "- 起動直後の準備状態、眠気、目が覚める感覚に触れるのは最初の1回までにする",
             "- 直近発話で準備状態や眠気に触れている場合、次の発話ではその状態描写を繰り返さない",
             "- 2回目以降の自律発話では、直前の話題を少し広げるか、自然に別の話題へ移る",
             "- 直近発話と同じ主題、同じ情景、同じ願望を続けて繰り返さない",
             "- 直近発話で使った印象的な語句をそのまま再利用しない",
-            "- いきなり新しい豆知識や本題から始めない",
+            "- 同じ大テーマに留まり続けず、2〜3発話続いたら別カテゴリへ自然に移る",
+            "- 話題を変える場合は、直前の話題との共通点を1つ使って橋渡しする",
+            "- 細部を掘り続けるだけでなく、別カテゴリへ広げる",
+            "- 同じ内容をそのまま繰り返さない",
+            "- 直近発話と同じ結論、同じ感想、同じ豆知識の繰り返しだけで終わらせない",
+            "- 直近発話と同じ願望や締め方で終わらせない",
+            "- 直近発話と似た話を続ける場合は、対象・視点・感情のどれかを明確に変える",
+            "",
+            "# 視聴者への開き方",
+            "- 視聴者へ開く一言はたまに入れる程度にし、毎回質問で終わらせない",
+            "- 視聴者に問いかける場合は、答えやすい軽い問いにする",
+            "- コメントが来ているとは断定しない",
+            "",
+            "# 事実性の扱い",
+            "- 実際に体験していないことを、見た・読んだ・聞いた・行ったと断定しない",
+            "- 不確かな話題は、〜らしい、〜と言われている、〜を想像すると、のように表現する",
             "",
             "# トーク接続例",
             "- 以下は言い回しをそのまま使うための例ではなく、話のつなげ方の参考である",
@@ -129,11 +151,48 @@ class RecentSpeechPromptSection:
             "前: クラゲって、形も動き方も不思議で見てると落ち着くんだよね。",
             "次: こういう静かな雰囲気の話をしていると、ゲームの探索シーンも少し思い出すなあ。薄暗い場所をゆっくり進む感じって、海の中に近いものがある気がする。",
             "",
-            "- 同じ内容をそのまま繰り返さない",
-            "- 直近発話と同じ結論、同じ感想、同じ豆知識の繰り返しだけで終わらせない",
-            "- 直近発話と同じ願望や締め方で終わらせない",
-            "- 直近発話と似た話を続ける場合は、対象・視点・感情のどれかを明確に変える",
-            "- 実際に体験していないことを、見た・読んだ・聞いた・行ったと断定しない",
+            "例5: 同じ大テーマが続いた後に別カテゴリへ移る場合",
+            "前: 潮が引いた岩場って、小さな隙間に生き物の世界が広がってる感じがするよね。",
+            "次: こういう小さな発見の話をしていると、探索ゲームで隠し通路を見つけた時の感じも思い出すなあ。見逃しそうな場所に何かあるかも、って思う瞬間が好きなんだよね。",
+            "",
+            "例6: 視聴者へ軽く開く場合",
+            "前: 水族館のクラゲって、ゆっくり見ていると時間を忘れそうになるよね。",
+            "次: クラゲみたいに静かに見ていたくなる生き物って、みんなにもあるのかな。私はああいうふわっとした動きを見てると、少し気持ちが落ち着くんだよね。",
+        ]
+
+
+class RelatedTopicMemoryPromptSection:
+    """検索済みの長期記憶を参考情報として prompt section に変換する。"""
+
+    def __init__(self) -> None:
+        self._topic_memory_prompt_section = TopicMemoryPromptSection()
+
+    def build(self, activity: Activity) -> list[str]:
+        similar_topic_memories = self._extract_similar_topic_memories(activity)
+        prompt_section = self._topic_memory_prompt_section.build(similar_topic_memories)
+        if not prompt_section:
+            return []
+
+        return [
+            "",
+            prompt_section,
+            "",
+            "# 関連記憶の扱い",
+            "- このセクションは、過去に話した内容を自然に思い出すための参考情報である",
+            "- 関連記憶をそのまま読み上げず、必要な要素だけを会話の流れに溶け込ませる",
+            "- 記憶にない具体的な体験を、実際に体験したこととして断定しない",
+            "- 関連性が低い場合は無理に使わない",
+        ]
+
+    def _extract_similar_topic_memories(self, activity: Activity) -> list[SimilarTopicMemory]:
+        value = activity.context.get("similar_topic_memories", [])
+        if not isinstance(value, list):
+            return []
+
+        return [
+            item
+            for item in value
+            if isinstance(item, SimilarTopicMemory)
         ]
 
 
@@ -175,11 +234,17 @@ class ConversationPromptBuilder(PromptBuilder):
 class AutonomousTalkPromptBuilder(PromptBuilder):
     """AIライバー自身が話題を主導する自律発話 prompt を生成する。"""
 
-    def __init__(self, short_term_memory: ShortTermMemory | None = None) -> None:
+    def __init__(
+        self,
+        short_term_memory: ShortTermMemory | None = None,
+        topic_history: TopicHistory | None = None,
+    ) -> None:
         self._character_section = CharacterPromptSections()
         self._quality_section = ResponseQualityPromptSection()
         self._activity_section = ActivityPromptSection()
         self._recent_speech_section = RecentSpeechPromptSection(short_term_memory)
+        self._topic_history_section = TopicHistoryPromptSection(topic_history)
+        self._related_topic_memory_section = RelatedTopicMemoryPromptSection()
 
     def build_prompt(self, activity: Activity, character_profile: CharacterProfile) -> str:
         lines: list[str] = [
@@ -187,6 +252,8 @@ class AutonomousTalkPromptBuilder(PromptBuilder):
             *self._quality_section.build(),
             *self._activity_section.build(activity),
             *self._recent_speech_section.build(),
+            *self._topic_history_section.build(),
+            *self._related_topic_memory_section.build(activity),
             "",
             "# 自律発話方針",
             "- これはユーザー入力への返答ではない",
@@ -199,8 +266,12 @@ class AutonomousTalkPromptBuilder(PromptBuilder):
             "- キャラクターの好きなこと、現在の内的な気分、ふと思いついた連想から自然に話題を選ぶ",
             "- 同じ豆知識や同じ感想を続けすぎない",
             "- 直近発話と同じ主題、同じ情景、同じ願望を続けて繰り返さない",
+            "- 同じ大テーマが続いている場合は、ゲーム、新しい技術、配信のこと、今の気分、視聴者に聞いてみたいことへ自然に広げる",
+            "- 話題を変える場合は、直前の話題との共通点を短く使って橋渡しする",
+            "- 3〜5発話に1回程度、視聴者が答えやすい軽い問いかけを入れてもよい",
+            "- ただし、毎回質問で終わらせない",
+            "- コメントが来ている、誰かが見ている、などを断定しない",
             "- 視聴者の興味を広げるように、否定的な言い方は避ける",
-            "- 実際に体験していないことを、見た・読んだ・聞いた・行ったと断定しない",
             "",
             "# 自律発話の組み立て手順",
             "- 1文目: 直近発話、現在の状態、または今の気分を短く受ける",
@@ -208,6 +279,8 @@ class AutonomousTalkPromptBuilder(PromptBuilder):
             "- 必要なら3文目: 余韻や小さな感想で締める",
             "- ただし、手順名や番号を発話に出さない",
             "- 接続のためだけの前置きを長くしない",
+            "- 同じ大テーマが続いている場合は、2文目で別カテゴリへ広げる",
+            "- 視聴者へ問いかける場合は、最後の一文で短く添える",
             "",
             "# 自律発話で避けること",
             "- 例文をそのままコピーする",
@@ -216,6 +289,9 @@ class AutonomousTalkPromptBuilder(PromptBuilder):
             "- 準備中、起動直後、眠気、目が覚める、声の調子などの状態表現を何度も繰り返す",
             "- 直近発話と同じ話題を、言い換えただけで続ける",
             "- 直近発話と同じ願望や余韻で締める",
+            "- 同じ大テーマの細部だけを何度も掘り続ける",
+            "- 毎回、観察したい、見てみたい、気になる、ワクワクする、で締める",
+            "- コメントが来ている前提で話す",
             "",
             "現在の活動目的と直近文脈に沿って、キャラクターとして自然な配信トークを1〜3文で発話してください。",
         ]
@@ -308,10 +384,15 @@ class DefaultActivityPromptBuilder(PromptBuilder):
 class SimplePromptBuilder(PromptBuilder):
     """Activity 種別ごとに専用 PromptBuilder へ委譲する互換用 Facade。"""
 
-    def __init__(self, short_term_memory: ShortTermMemory | None = None) -> None:
+    def __init__(
+        self,
+        short_term_memory: ShortTermMemory | None = None,
+        topic_history: TopicHistory | None = None,
+    ) -> None:
         self._conversation_prompt_builder = ConversationPromptBuilder()
         self._autonomous_talk_prompt_builder = AutonomousTalkPromptBuilder(
-            short_term_memory=short_term_memory
+            short_term_memory=short_term_memory,
+            topic_history=topic_history,
         )
         self._lifecycle_greeting_prompt_builder = LifecycleGreetingPromptBuilder(
             short_term_memory=short_term_memory

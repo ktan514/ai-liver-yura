@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 
 from app.domain.drives import DriveState
 from app.domain.events import AgentEvent, AgentEventType

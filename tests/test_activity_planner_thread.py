@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import time
 from datetime import datetime, timezone
 from queue import Queue
 
 from app.domain.activities import Activity, ActivityType
-from app.runtime.activity_planner_thread import ActivityPlannerThread, ActivityPlanningRequest
+from app.domain.events import AgentEvent, AgentEventType
+from app.runtime.activity_planner_thread import (
+    ActivityPlannerThread,
+    ActivityPlanningRequest,
+    ActivityPlanningService,
+)
 from app.runtime.planned_activity_queue import PlannedActivity, PlannedActivityQueue
 
 
@@ -17,6 +24,53 @@ class FakeActivityPlanningService:
     def plan_once(self, now: datetime | None = None) -> PlannedActivity | None:
         self.received_now.append(now)
         return self._planned_activity
+
+
+# Fake classes for ActivityPlanningService tests
+class FakeAgentState:
+    def __init__(self) -> None:
+        self.current_drive = None
+        self.current_emotion = None
+
+
+class FakeAgentLifeService:
+    def __init__(self, event: AgentEvent | None) -> None:
+        self.event = event
+        self.agent_state = FakeAgentState()
+        self.received_now: list[datetime | None] = []
+        self.handled_events: list[AgentEvent] = []
+        self.sync_count = 0
+
+    def plan_next_event(self, now: datetime | None = None) -> AgentEvent | None:
+        self.received_now.append(now)
+        return self.event
+
+    def handle_event(self, event: AgentEvent) -> None:
+        self.handled_events.append(event)
+
+    def sync_from_activity_manager(self) -> None:
+        self.sync_count += 1
+
+
+class FakeActivityManager:
+    def __init__(self, activity: Activity) -> None:
+        self.activity = activity
+        self.handled_events: list[AgentEvent] = []
+
+    def handle_event(self, event: AgentEvent) -> Activity:
+        self.handled_events.append(event)
+        return self.activity
+
+
+class FakeEnrichActivityWithTopicMemoryUsecase:
+    def __init__(self) -> None:
+        self.received_activities: list[Activity] = []
+
+    async def enrich(self, activity: Activity) -> Activity:
+        self.received_activities.append(activity)
+        enriched_context = dict(activity.context)
+        enriched_context["similar_topic_memories"] = ["memory-1"]
+        return replace(activity, context=enriched_context)
 
 
 def _create_planned_activity(priority: int = 10) -> PlannedActivity:
@@ -47,6 +101,13 @@ def _create_thread(
         planning_service=planning_service,  # type: ignore[arg-type]
         idle_sleep_seconds=0.01,
         max_queue_size=max_queue_size,
+    )
+
+
+def _create_agent_event() -> AgentEvent:
+    return AgentEvent(
+        event_type=list(AgentEventType)[0],
+        payload={"reason": "unit_test"},
     )
 
 
@@ -105,6 +166,43 @@ def test_run_once_does_not_plan_when_output_queue_is_full() -> None:
     assert result is None
     assert planned_activity_queue.size() == 1
     assert planning_service.received_now == []
+
+
+def test_activity_planning_service_enriches_activity_before_returning_planned_activity() -> None:
+    event = _create_agent_event()
+    activity = Activity(
+        activity_type=ActivityType.AUTONOMOUS_TALK,
+        goal="自律的に話す",
+        priority=50,
+        context={"original": "value"},
+        interruptible=True,
+    )
+    agent_life_service = FakeAgentLifeService(event=event)
+    activity_manager = FakeActivityManager(activity=activity)
+    enrich_usecase = FakeEnrichActivityWithTopicMemoryUsecase()
+    planning_service = ActivityPlanningService(
+        agent_life_service=agent_life_service,  # type: ignore[arg-type]
+        activity_manager=activity_manager,  # type: ignore[arg-type]
+        enrich_activity_with_topic_memory_usecase=enrich_usecase,  # type: ignore[arg-type]
+    )
+    now = datetime.now(timezone.utc)
+
+    planned_activity = planning_service.plan_once(now=now)
+
+    assert planned_activity is not None
+    assert planned_activity.activity is not activity
+    assert planned_activity.activity.context == {
+        "original": "value",
+        "similar_topic_memories": ["memory-1"],
+    }
+    assert activity.context == {"original": "value"}
+    assert enrich_usecase.received_activities == [activity]
+    assert planned_activity.priority == 50
+    assert planned_activity.planning_reason == event.event_type.value
+    assert agent_life_service.received_now == [now]
+    assert agent_life_service.handled_events == [event]
+    assert agent_life_service.sync_count == 1
+    assert activity_manager.handled_events == [event]
 
 
 def test_run_processes_request_queue_until_stopped() -> None:

@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+
 import threading
 from dataclasses import dataclass
 from datetime import datetime
 from queue import Empty, Queue
 
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 from app.domain.activities import Activity
 from app.domain.events import AgentEvent
 from app.runtime.activity_manager import ActivityManager
 from app.runtime.agent_life_service import AgentLifeService
 from app.runtime.planned_activity_queue import PlannedActivity, PlannedActivityQueue
+from app.usecases.enrich_activity_with_topic_memory_usecase import (
+    EnrichActivityWithTopicMemoryUsecase,
+)
 
 
 @dataclass(frozen=True)
@@ -27,9 +32,11 @@ class ActivityPlanningService:
         self,
         agent_life_service: AgentLifeService,
         activity_manager: ActivityManager,
+        enrich_activity_with_topic_memory_usecase: EnrichActivityWithTopicMemoryUsecase | None = None,
     ) -> None:
         self._agent_life_service = agent_life_service
         self._activity_manager = activity_manager
+        self._enrich_activity_with_topic_memory_usecase = enrich_activity_with_topic_memory_usecase
 
     def plan_once(self, now: datetime | None = None) -> PlannedActivity | None:
         """必要であれば Activity を1件計画する。"""
@@ -39,6 +46,7 @@ class ActivityPlanningService:
             return None
 
         activity = self._create_activity(event)
+        activity = self._enrich_activity(activity)
         return PlannedActivity(
             activity=activity,
             source="agent_life_service",
@@ -55,6 +63,16 @@ class ActivityPlanningService:
         self._agent_life_service.handle_event(event)
         self._agent_life_service.sync_from_activity_manager()
         return activity
+
+    def _enrich_activity(self, activity: Activity) -> Activity:
+        """Activity に関連長期記憶を追加する。"""
+
+        if self._enrich_activity_with_topic_memory_usecase is None:
+            return activity
+
+        return asyncio.run(
+            self._enrich_activity_with_topic_memory_usecase.enrich(activity)
+        )
 
 
 class ActivityPlannerThread(threading.Thread):

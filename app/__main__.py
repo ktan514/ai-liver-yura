@@ -4,7 +4,7 @@ import asyncio
 
 from app.adapters.input import ConsoleInputReceiver
 from app.config.app_config import load_app_config
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 from app.domain.events import AgentEvent, AgentEventType
 from app.runtime import create_runtime_coordinator
 

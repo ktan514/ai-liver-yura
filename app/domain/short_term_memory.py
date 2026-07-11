@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Deque
 
-from app.common.trace import TraceLogger
+from app.utils.trace import TraceLogger
 
 
 @dataclass(frozen=True, slots=True)
