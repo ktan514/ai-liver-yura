@@ -1,14 +1,13 @@
 import pytest
 
 from app.domain.actions import ActionPlan, ActionType
-from app.domain.events import AgentEvent, AgentEventType
 from app.domain.emotions import EmotionState, MoodType
+from app.domain.events import AgentEvent, AgentEventType
+from app.domain.short_term_memory import ShortTermMemory
 from app.domain.topic import TopicCategory, TopicHistory
 from app.domain.topic_memory import SimilarTopicMemory, TopicMemoryEntry
-from app.domain.short_term_memory import ShortTermMemory
-
-from app.usecases import ExecuteActionUsecase
 from app.ports.memory_summary_generator import MemorySummaryGenerator
+from app.usecases import ExecuteActionUsecase
 
 
 class FakeEventPublisher:
@@ -104,6 +103,7 @@ async def test_speak_action_publishes_speech_started_and_finished_events() -> No
         action_type=ActionType.SPEAK,
         text="こんにちは",
         source_activity_id="activity-1",
+        output_unit_id="output-1",
     )
 
     await usecase.execute(action_plan)
@@ -115,11 +115,13 @@ async def test_speak_action_publishes_speech_started_and_finished_events() -> No
     assert event_publisher.published_events[0].payload == {
         "action_id": action_plan.action_id,
         "source_activity_id": "activity-1",
+        "output_unit_id": "output-1",
         "text": "こんにちは",
     }
     assert event_publisher.published_events[1].payload == {
         "action_id": action_plan.action_id,
         "source_activity_id": "activity-1",
+        "output_unit_id": "output-1",
         "text": "こんにちは",
     }
 

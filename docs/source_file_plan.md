@@ -494,6 +494,20 @@ ActionScheduler の確定仕様:
 - 異なる required_resources を持つ ActionPlan は並列実行できる
 - 同じ required_resources を持つ ActionPlan は同時実行しない
 - 複数リソースを持つ ActionPlan は、リソース名順で Lock を取得してデッドロックを防ぐ
+- `SPEAK` を含む ActionPlanGroup は、字幕・表情・音声を同一の出力単位として直列実行する
+- 同一出力単位では字幕・表情を音声より先に反映し、音声完了までグループの全リソースを保持する
+- 次の出力単位は、現在の音声が完了するまで字幕・表情を含めて開始しない
+- 同一出力単位の ActionPlan と ActionPlanGroup は共通の `output_unit_id` を持つ
+- 出力単位と各 Action の開始・完了は `output_unit_id` / `action_id` 付きのINFOログで追跡できる
+
+音声出力の優先順位:
+
+- 発話を含む出力単位は、スレッドセーフな優先待ちゲートを通して1件ずつ開始する
+- 優先順位はユーザー応答（100）、通常の反応・挨拶（50）、自律発話（10）の順とする
+- 同じ優先順位ではゲートへ到着した順序を維持し、複数のユーザー応答を逆転させない
+- 待機中の自律発話より、後から到着したユーザー応答を先に開始する
+- すでに再生を開始した音声は強制停止せず、その1件の完了後に最優先の待機出力を開始する
+- 待機開始・選択・実行開始ログには `output_unit_id`、`output_priority`、`queue_sequence` を含める
 
 ### USER_TEXT受理時の自律Activity割り込み
 
@@ -525,6 +539,10 @@ ActionScheduler の確定仕様:
 - 異なるリソースの Action は実行される
 - required_resources なしの Action も実行される
 - `MOUTH` を共有する複数 Action は同時実行されない
+- 同一出力単位の字幕・表情・音声が対応し、次の字幕は現在の音声完了前に表示されない
+- 同一出力単位の各Actionは共通の`output_unit_id`を持つ
+- 待機中の自律発話よりユーザー応答が先に再生される
+- 複数のユーザー応答は到着順のまま再生される
 - RuntimeCoordinator は ActionPlanGroup を返す
 - RuntimeCoordinator 経由でも `SPEAK` / `OBSERVE` を取り出して確認できる
 - `SPEAK` Action 実行時に `SPEECH_STARTED` / `SPEECH_FINISHED` Event が発行される

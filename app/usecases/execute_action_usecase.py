@@ -57,6 +57,7 @@ class ExecuteActionUsecase:
             action_id=action_plan.action_id,
             action_type=action_plan.action_type.value,
             source_activity_id=action_plan.source_activity_id,
+            output_unit_id=action_plan.output_unit_id,
             text_length=len(action_plan.text),
             required_resources=[resource.value for resource in action_plan.required_resources],
         )
@@ -308,6 +309,7 @@ class ExecuteActionUsecase:
             event_type=event_type.value,
             action_id=action_plan.action_id,
             source_activity_id=action_plan.source_activity_id,
+            output_unit_id=action_plan.output_unit_id,
             publisher_exists=self._event_publisher is not None,
         )
         if self._event_publisher is None:
@@ -325,6 +327,7 @@ class ExecuteActionUsecase:
                 payload={
                     "action_id": action_plan.action_id,
                     "source_activity_id": action_plan.source_activity_id,
+                    "output_unit_id": action_plan.output_unit_id,
                     "text": action_plan.text,
                 },
             )
@@ -334,4 +337,5 @@ class ExecuteActionUsecase:
             event_type=event_type.value,
             action_id=action_plan.action_id,
             source_activity_id=action_plan.source_activity_id,
+            output_unit_id=action_plan.output_unit_id,
         )

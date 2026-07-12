@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import pytest
@@ -25,6 +23,10 @@ async def test_action_planner_uses_response_generator_for_conversation() -> None
     action_plan_group = await planner.plan(activity)
 
     assert action_plan_group.source_activity_id == activity.activity_id
+    assert {plan.output_unit_id for plan in action_plan_group.action_plans} == {
+        action_plan_group.group_id
+    }
+    assert action_plan_group.output_priority == 100
     assert [plan.action_type for plan in action_plan_group.action_plans] == [
         ActionType.SPEAK,
         ActionType.UPDATE_SUBTITLE,
@@ -50,6 +52,7 @@ async def test_action_planner_uses_response_generator_for_startup_reaction() -> 
     action_plan_group = await planner.plan(activity)
 
     assert action_plan_group.source_activity_id == activity.activity_id
+    assert action_plan_group.output_priority == 50
     assert [plan.action_type for plan in action_plan_group.action_plans] == [
         ActionType.SPEAK,
         ActionType.UPDATE_SUBTITLE,
@@ -122,6 +125,7 @@ async def test_action_planner_uses_response_generator_for_autonomous_talk() -> N
     action_plan_group = await planner.plan(activity)
 
     assert action_plan_group.source_activity_id == activity.activity_id
+    assert action_plan_group.output_priority == 10
     assert [plan.action_type for plan in action_plan_group.action_plans] == [
         ActionType.SPEAK,
         ActionType.UPDATE_SUBTITLE,
