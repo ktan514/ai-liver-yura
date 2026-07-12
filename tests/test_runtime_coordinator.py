@@ -8,10 +8,18 @@ import pytest
 from app.adapters.llm import DummyResponseGenerator
 from app.adapters.prompt import SimplePromptBuilder
 from app.domain.actions import ActionPlan, ActionType
+from app.domain.activities import Activity, ActivityType
 from app.domain.character import CharacterProfile
 from app.domain.drives import DriveState
 from app.domain.events import AgentEvent, AgentEventType
-from app.runtime import ActionPlanner, ActivityManager, AgentLifeService, EventQueue, RuntimeCoordinator
+from app.ports.response_generator import ResponseGenerator
+from app.runtime import (
+    ActionPlanner,
+    ActivityManager,
+    AgentLifeService,
+    EventQueue,
+    RuntimeCoordinator,
+)
 from app.runtime.action_scheduler import ActionScheduler
 from app.runtime.activity_executor_thread import ActivityExecutorThread
 from app.runtime.activity_planner_thread import (
@@ -20,6 +28,19 @@ from app.runtime.activity_planner_thread import (
     ActivityPlanningService,
 )
 from app.runtime.planned_activity_queue import PlannedActivityQueue
+
+
+class BlockingAutonomousResponseGenerator:
+    def __init__(self) -> None:
+        self.autonomous_started = asyncio.Event()
+        self.release_autonomous = asyncio.Event()
+
+    async def generate_response(self, activity: Activity) -> str:
+        if activity.activity_type == ActivityType.AUTONOMOUS_TALK:
+            self.autonomous_started.set()
+            await self.release_autonomous.wait()
+            return "自律発話"
+        return f"ユーザー応答: {activity.context['event_payload']['text']}"
 
 
 class FakeActionExecutor:
@@ -43,17 +64,17 @@ def _create_character_profile() -> CharacterProfile:
 def _create_runtime(
     activity_manager: ActivityManager | None = None,
     agent_life_service: AgentLifeService | None = None,
+    response_generator: ResponseGenerator | None = None,
 ) -> RuntimeCoordinator:
     activity_manager = activity_manager or ActivityManager()
     agent_life_service = agent_life_service or AgentLifeService(activity_manager)
     activity_planning_request_queue: Queue[ActivityPlanningRequest] = Queue()
     planned_activity_queue = PlannedActivityQueue()
-    action_planner = ActionPlanner(
-        response_generator=DummyResponseGenerator(
-            character_profile=_create_character_profile(),
-            prompt_builder=SimplePromptBuilder(),
-        )
+    response_generator = response_generator or DummyResponseGenerator(
+        character_profile=_create_character_profile(),
+        prompt_builder=SimplePromptBuilder(),
     )
+    action_planner = ActionPlanner(response_generator=response_generator)
     action_scheduler = ActionScheduler(action_executor=FakeActionExecutor())
     activity_planning_service = ActivityPlanningService(
         agent_life_service=agent_life_service,
@@ -128,6 +149,57 @@ async def test_publish_events_keeps_all_user_text_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_publish_user_text_immediately_suspends_foreground_autonomous() -> None:
+    activity_manager = ActivityManager()
+    autonomous = activity_manager.handle_event(
+        AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, priority=8)
+    )
+    runtime = _create_runtime(activity_manager=activity_manager)
+    user_event = AgentEvent(
+        event_type=AgentEventType.USER_TEXT,
+        payload={"text": "しりとりしたい"},
+        priority=50,
+    )
+
+    await runtime.publish_event(user_event)
+
+    activity = activity_manager.get_activity(autonomous.activity_id)
+    assert activity is not None
+    assert activity.status.value == "suspended"
+    assert activity_manager.foreground_activity is not None
+    assert activity_manager.foreground_activity.activity_type.value == "conversation_with_user"
+
+    action_group = await runtime.run_once()
+    assert action_group is not None
+    assert any(action.text == "ダミー応答: しりとりしたい" for action in action_group.action_plans)
+
+
+@pytest.mark.asyncio
+async def test_user_input_during_autonomous_planning_prevents_autonomous_actions() -> None:
+    response_generator = BlockingAutonomousResponseGenerator()
+    runtime = _create_runtime(response_generator=response_generator)
+    await runtime.publish_event(AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, priority=8))
+    autonomous_task = asyncio.create_task(runtime.run_once())
+    await response_generator.autonomous_started.wait()
+
+    await runtime.publish_event(
+        AgentEvent(
+            event_type=AgentEventType.USER_TEXT,
+            payload={"text": "しりとりしたい"},
+            priority=50,
+        )
+    )
+    response_generator.release_autonomous.set()
+    autonomous_result = await autonomous_task
+    user_result = await runtime.run_once()
+
+    assert autonomous_result is not None
+    assert autonomous_result.is_empty()
+    assert user_result is not None
+    assert any(action.text == "ユーザー応答: しりとりしたい" for action in user_result.action_plans)
+
+
+@pytest.mark.asyncio
 async def test_publish_events_replaces_camera_frame_with_latest_only() -> None:
     runtime = _create_runtime()
 
@@ -149,8 +221,7 @@ async def test_publish_events_replaces_camera_frame_with_latest_only() -> None:
 
     assert first_action is not None
     assert any(
-        action_plan.action_type == ActionType.OBSERVE
-        for action_plan in first_action.action_plans
+        action_plan.action_type == ActionType.OBSERVE for action_plan in first_action.action_plans
     )
     assert second_action is None
 
@@ -191,15 +262,16 @@ async def test_publish_events_keeps_user_text_and_latest_camera_frame() -> None:
 
     assert second_action is not None
     assert any(
-        action_plan.action_type == ActionType.OBSERVE
-        for action_plan in second_action.action_plans
+        action_plan.action_type == ActionType.OBSERVE for action_plan in second_action.action_plans
     )
 
     assert third_action is None
 
 
 @pytest.mark.asyncio
-async def test_run_processes_published_event_until_stopped(capsys: pytest.CaptureFixture[str]) -> None:
+async def test_run_processes_published_event_until_stopped(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     runtime = _create_runtime()
 
     run_task = asyncio.create_task(runtime.run())
@@ -263,9 +335,7 @@ async def test_speech_lifecycle_event_updates_agent_life_loop_only() -> None:
         agent_life_service=agent_life_service,
     )
 
-    await runtime.publish_event(
-        AgentEvent(event_type=AgentEventType.SPEECH_STARTED)
-    )
+    await runtime.publish_event(AgentEvent(event_type=AgentEventType.SPEECH_STARTED))
 
     action_plan_group = await runtime.run_once()
 
@@ -276,6 +346,7 @@ async def test_speech_lifecycle_event_updates_agent_life_loop_only() -> None:
 
 
 # Additional tests for autonomous event planning
+
 
 @pytest.mark.asyncio
 async def test_run_once_plans_autonomous_event_when_event_queue_is_empty() -> None:

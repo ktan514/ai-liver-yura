@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -145,6 +143,24 @@ def test_queue_clear_removes_all_activities() -> None:
 
     assert queue.is_empty() is True
     assert queue.get() is None
+
+
+def test_discard_where_removes_only_matching_autonomous_activities() -> None:
+    queue = PlannedActivityQueue()
+    autonomous = PlannedActivity(
+        activity=_create_activity(ActivityType.AUTONOMOUS_TALK, priority=50)
+    )
+    observation = PlannedActivity(
+        activity=_create_activity(ActivityType.IDLE_OBSERVATION, priority=10)
+    )
+    queue.extend([autonomous, observation])
+
+    discarded = queue.discard_where(
+        lambda item: item.activity.activity_type == ActivityType.AUTONOMOUS_TALK
+    )
+
+    assert discarded == [autonomous]
+    assert queue.items() == [observation]
 
 
 def test_queue_extend_adds_multiple_activities() -> None:

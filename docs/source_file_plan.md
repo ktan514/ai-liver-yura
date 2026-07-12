@@ -495,6 +495,30 @@ ActionScheduler の確定仕様:
 - 同じ required_resources を持つ ActionPlan は同時実行しない
 - 複数リソースを持つ ActionPlan は、リソース名順で Lock を取得してデッドロックを防ぐ
 
+### USER_TEXT受理時の自律Activity割り込み
+
+- USER_TEXTはEventQueueから取り出す時点ではなく、RuntimeCoordinatorが受理した時点で割り込み判定する
+- foregroundが割り込み可能なAUTONOMOUS_TALKの場合、直ちにSUSPENDEDへ変更する
+- 同じUSER_TEXTに対応するCONVERSATION_WITH_USER Activityを予約し、foregroundへ前面化する
+- EventQueueには元のUSER_TEXT Eventを残し、入力自体は破棄しない
+- Event処理時は予約済みActivityを再利用し、重複した会話Activityを作らない
+- ActivityExecutorThreadはAction実行直前に対象ActivityがACTIVEか再確認する
+- USER_TEXT受理によってSUSPENDEDになった自律ActivityのActionは、新規実行を開始しない
+- 退避時は対象activity_id、source_event_id、理由をINFOログへ記録する
+- すでに音声再生中のActionと、実行キューに生成済みのActionのキャンセルはTASK-002で扱う
+
+### USER_TEXT受理時の古い自律発話キャンセル
+
+- USER_TEXT受理時に、PlannedActivityQueue内の未実行AUTONOMOUS_TALKを取り除く
+- 取り除いたActivityはCANCELEDへ変更し、planned_activity_id、activity_id、source_event_id、理由をログへ記録する
+- ActionPlannerが処理中の場合は、生成完了後かつActionScheduler実行前にActivity状態を再確認する
+- 生成中にActivityがSUSPENDEDまたはCANCELEDになった場合、ActionGroupを実行しない
+- 生成済みActionを破棄するログにはaction_id、action_type、source_activity_idを含める
+- USER_TEXT Eventは通常どおりEventQueueへ保持し、キャンセル処理の対象にしない
+- すでに音声再生を開始したSPEAK Actionは初回実装では強制停止せず、現在の再生完了を待つ
+- 再生中Actionの強制停止はAudioPlayerの中断契約と音声リソース解放を別途設計してから導入する
+- 現在再生中の音声が完了した後は、キャンセル済み自律発話を再生せずユーザー応答を次に処理する
+
 テストで確認済みの内容:
 
 - 空の ActionPlanGroup は何もしない

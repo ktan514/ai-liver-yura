@@ -175,6 +175,14 @@ Runtimeが次のActivityを進める。
         ↓
     speak + expression + subtitle Actionを実行
 
+USER_TEXTは通常Eventより強い割り込み契機として扱う。
+受理時点で進行中の割り込み可能なAUTONOMOUS_TALKをSUSPENDEDへ退避し、
+対応するCONVERSATION_WITH_USERをforegroundへ予約する。
+ExecutorはAction開始直前にActivityのACTIVE状態を再確認し、退避後の自律Actionを開始しない。
+USER_TEXT受理時には未実行のAUTONOMOUS_TALKをPlannedActivityQueueから削除し、CANCELEDとして記録する。
+Action生成中に割り込まれた場合も、ActionSchedulerへ渡す直前に状態を再確認して生成済みActionを破棄する。
+すでに再生中の音声は初回実装では強制停止せず、完了後にユーザー応答を優先する。
+
 
 ============================================================
 5. モジュール差し替え方針

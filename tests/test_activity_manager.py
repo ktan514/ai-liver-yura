@@ -104,6 +104,72 @@ def test_user_text_interrupts_curiosity_peak_autonomous_talk() -> None:
     assert suspended[0].status == ActivityStatus.SUSPENDED
 
 
+def test_prepare_user_input_immediately_suspends_autonomous_talk() -> None:
+    manager = ActivityManager()
+    autonomous = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, priority=8)
+    )
+    user_event = AgentEvent(
+        event_type=AgentEventType.USER_TEXT,
+        payload={"text": "しりとりしたい"},
+        priority=50,
+    )
+    prepared = manager.prepare_user_input(user_event)
+
+    assert prepared is not None
+    assert prepared.activity_type == ActivityType.CONVERSATION_WITH_USER
+    assert prepared.status == ActivityStatus.ACTIVE
+    assert manager.foreground_activity == prepared
+
+    activity = manager.get_activity(autonomous.activity_id)
+    assert activity is not None
+    assert activity.status == ActivityStatus.SUSPENDED
+
+
+def test_handle_event_reuses_prepared_user_conversation() -> None:
+    manager = ActivityManager()
+    manager.handle_event(AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, priority=8))
+    user_event = AgentEvent(
+        event_type=AgentEventType.USER_TEXT,
+        payload={"text": "しりとりしたい"},
+        priority=50,
+    )
+    prepared = manager.prepare_user_input(user_event)
+
+    handled = manager.handle_event(user_event)
+
+    assert handled == prepared
+    assert (
+        len(
+            [
+                activity
+                for activity in manager.list_activities()
+                if activity.source_event_id == user_event.event_id
+            ]
+        )
+        == 1
+    )
+
+
+def test_cancel_activity_marks_suspended_autonomous_as_canceled() -> None:
+    manager = ActivityManager()
+    autonomous = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, priority=8)
+    )
+    manager.prepare_user_input(
+        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "入力"})
+    )
+
+    canceled = manager.cancel_activity(
+        autonomous.activity_id,
+        reason="user_text_received",
+    )
+
+    assert canceled is not None
+    assert canceled.status == ActivityStatus.CANCELED
+    assert canceled not in manager.suspended_activities()
+
+
 def test_conversation_is_not_interrupted_by_silence_timeout_observation() -> None:
     manager = ActivityManager()
 

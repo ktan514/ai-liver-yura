@@ -1,9 +1,9 @@
 from __future__ import annotations
-import threading
 
+import threading
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Iterable
 from uuid import uuid4
 
 from app.domain.activities import Activity
@@ -91,6 +91,17 @@ class PlannedActivityQueue:
 
         with self._lock:
             return self._discard_expired_locked(now=now)
+
+    def discard_where(self, predicate: Callable[[PlannedActivity], bool]) -> list[PlannedActivity]:
+        """条件に一致する未実行ActivityをQueueから取り除いて返す。"""
+
+        with self._lock:
+            discarded: list[PlannedActivity] = []
+            retained: list[PlannedActivity] = []
+            for item in self._items:
+                (discarded if predicate(item) else retained).append(item)
+            self._items = retained
+            return discarded
 
     def clear(self) -> None:
         """Queue を空にする。"""

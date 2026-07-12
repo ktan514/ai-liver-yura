@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from app.utils.trace import TraceLogger
+import threading
 
 from app.domain.activities import Activity, ActivityStatus, ActivityType
 from app.domain.events import AgentEvent, AgentEventType
+from app.utils.trace import TraceLogger
 
 
 class ActivityManager:
@@ -12,13 +13,54 @@ class ActivityManager:
     def __init__(self) -> None:
         self._activities: dict[str, Activity] = {}
         self._foreground_activity_id: str | None = None
+        self._lock = threading.RLock()
         self._trace_logger = TraceLogger()
 
     @property
     def foreground_activity(self) -> Activity | None:
-        if self._foreground_activity_id is None:
+        with self._lock:
+            if self._foreground_activity_id is None:
+                return None
+            return self._activities.get(self._foreground_activity_id)
+
+    def get_activity(self, activity_id: str) -> Activity | None:
+        with self._lock:
+            return self._activities.get(activity_id)
+
+    def prepare_user_input(self, event: AgentEvent) -> Activity | None:
+        """USER_TEXT受理時に自律Activityを退避し、会話を予約する。"""
+
+        if event.event_type != AgentEventType.USER_TEXT:
             return None
-        return self._activities.get(self._foreground_activity_id)
+        with self._lock:
+            prepared = self._find_by_source_event(event.event_id)
+            if prepared is not None:
+                return prepared
+            current = self.foreground_activity
+            if (
+                current is None
+                or current.activity_type != ActivityType.AUTONOMOUS_TALK
+                or not current.interruptible
+            ):
+                return None
+
+            suspended = current.with_status(ActivityStatus.SUSPENDED)
+            self._activities[current.activity_id] = suspended
+            conversation = self._create_activity_from_event(event)
+            active_conversation = self._activate(conversation)
+            self._trace_logger.info(
+                "activity_manager:user_input:autonomous_suspended",
+                activity_id=suspended.activity_id,
+                activity_type=suspended.activity_type.value,
+                source_event_id=event.event_id,
+                reason="user_text_received",
+            )
+            self._trace_logger.info(
+                "activity_manager:user_input:conversation_prepared",
+                activity_id=active_conversation.activity_id,
+                source_event_id=event.event_id,
+            )
+            return active_conversation
 
     def handle_event(self, event: AgentEvent) -> Activity:
         """イベントから Activity を生成し、現在の foreground と調停する。
@@ -26,6 +68,19 @@ class ActivityManager:
         戻り値は、ActionPlanner が今回のイベントに対して扱う Activity。
         foreground になれない場合は pending Activity を返す。
         """
+        with self._lock:
+            return self._handle_event_locked(event)
+
+    def _handle_event_locked(self, event: AgentEvent) -> Activity:
+        prepared = self._find_by_source_event(event.event_id)
+        if prepared is not None:
+            self._trace_logger.info(
+                "activity_manager:handle_event:prepared_activity_reused",
+                activity_id=prepared.activity_id,
+                activity_type=prepared.activity_type.value,
+                event_id=event.event_id,
+            )
+            return prepared
         self._trace_logger.write(
             "activity_manager:handle_event:start",
             event_type=event.event_type.value,
@@ -53,6 +108,16 @@ class ActivityManager:
             foreground_activity_id=self._foreground_activity_id,
         )
         return resolved_activity
+
+    def _find_by_source_event(self, event_id: str) -> Activity | None:
+        return next(
+            (
+                activity
+                for activity in self._activities.values()
+                if activity.source_event_id == event_id
+            ),
+            None,
+        )
 
     def list_activities(self) -> list[Activity]:
         return list(self._activities.values())
@@ -99,6 +164,29 @@ class ActivityManager:
         )
         return completed
 
+    def cancel_activity(self, activity_id: str, *, reason: str) -> Activity | None:
+        """未完了Activityをキャンセルし、foregroundなら解除する。"""
+
+        with self._lock:
+            activity = self._activities.get(activity_id)
+            if activity is None:
+                return None
+            if activity.status in {ActivityStatus.COMPLETED, ActivityStatus.CANCELED}:
+                return activity
+            canceled = activity.with_status(ActivityStatus.CANCELED)
+            self._activities[activity_id] = canceled
+            if self._foreground_activity_id == activity_id:
+                self._foreground_activity_id = None
+            self._trace_logger.info(
+                "activity_manager:activity_canceled",
+                activity_id=canceled.activity_id,
+                activity_type=canceled.activity_type.value,
+                previous_status=activity.status.value,
+                activity_source_event_id=canceled.source_event_id,
+                reason=reason,
+            )
+            return canceled
+
     def complete_foreground_activity(self) -> Activity | None:
         foreground = self.foreground_activity
         if foreground is None:
@@ -115,6 +203,16 @@ class ActivityManager:
         completed = self.complete_activity(foreground.activity_id)
         self.resume_next_pending()
         return completed
+
+    def complete_processed_activity(self, activity_id: str) -> Activity | None:
+        """実行対象Activityだけを完了し、foregroundだった場合だけ次を再開する。"""
+
+        with self._lock:
+            was_foreground = self._foreground_activity_id == activity_id
+            completed = self.complete_activity(activity_id)
+            if was_foreground:
+                self.resume_next_pending()
+            return completed
 
     def resume_next_pending(self) -> Activity | None:
         pending_activities = self.pending_activities()

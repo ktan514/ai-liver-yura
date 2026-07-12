@@ -4,6 +4,7 @@ import asyncio
 from queue import Queue
 
 from app.domain.actions import ActionPlanGroup
+from app.domain.activities import ActivityStatus
 from app.domain.events import AgentEvent, AgentEventType
 from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler
@@ -68,6 +69,27 @@ class RuntimeCoordinator:
                 event_id=event.event_id,
             )
             prioritized_event = self._event_prioritizer.prioritize(filtered_event)
+            prepared_activity = self._activity_manager.prepare_user_input(prioritized_event)
+            if prioritized_event.event_type == AgentEventType.USER_TEXT:
+                canceled = self._activity_executor_thread.cancel_pending_autonomous(
+                    source_event_id=prioritized_event.event_id,
+                    reason="user_text_received",
+                )
+                if canceled:
+                    self._trace_logger.info(
+                        "runtime_coordinator:user_input:pending_autonomous_canceled",
+                        event_id=prioritized_event.event_id,
+                        planned_activity_ids=[item.planned_activity_id for item in canceled],
+                        activity_ids=[item.activity.activity_id for item in canceled],
+                    )
+            if prepared_activity is not None:
+                self._agent_life_service.sync_from_activity_manager()
+                self._trace_logger.info(
+                    "runtime_coordinator:user_input:conversation_prepared",
+                    event_id=prioritized_event.event_id,
+                    activity_id=prepared_activity.activity_id,
+                    activity_type=prepared_activity.activity_type.value,
+                )
             self._trace_logger.write(
                 "runtime_coordinator:publish_events:prioritized",
                 event_type=prioritized_event.event_type.value,
@@ -216,10 +238,31 @@ class RuntimeCoordinator:
                 action_plan.action_type.value for action_plan in action_plan_group.action_plans
             ],
         )
+        current_activity = self._activity_manager.get_activity(activity.activity_id)
+        if current_activity is not None and current_activity.status != ActivityStatus.ACTIVE:
+            self._trace_logger.info(
+                "runtime_coordinator:handle_event:actions_canceled",
+                event_id=event.event_id,
+                activity_id=current_activity.activity_id,
+                activity_type=current_activity.activity_type.value,
+                activity_status=current_activity.status.value,
+                action_ids=[action.action_id for action in action_plan_group.action_plans],
+                action_types=[
+                    action.action_type.value for action in action_plan_group.action_plans
+                ],
+                source_activity_ids=[
+                    action.source_activity_id for action in action_plan_group.action_plans
+                ],
+                reason="activity_suspended_before_action_execution",
+            )
+            self._agent_life_service.sync_from_activity_manager()
+            return ActionPlanGroup()
         self._trace_logger.write("runtime_coordinator:handle_event:actions_execute_start")
         await self._action_scheduler.execute(action_plan_group)
         self._trace_logger.write("runtime_coordinator:handle_event:actions_execute_finished")
-        completed_activity = self._activity_manager.complete_foreground_activity()
+        completed_activity = self._activity_manager.complete_processed_activity(
+            activity.activity_id
+        )
         self._trace_logger.write(
             "runtime_coordinator:handle_event:foreground_activity_completed",
             completed=completed_activity is not None,
