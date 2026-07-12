@@ -16,62 +16,46 @@ class AppSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class OllamaSettings:
-    model: str
-    api_url: str
-    timeout_seconds: float
-    fallback_response: str
+class ServiceSettings:
+    type: str
+    base_url: str | None = None
+    api_key_env: str | None = None
+    dsn_env: str | None = None
+    timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class OpenAISettings:
-    model: str
-    api_key_env: str
-    timeout_seconds: float
-    fallback_response: str
-
-
-@dataclass(frozen=True, slots=True)
-class DummyResponseGeneratorSettings:
-    enabled: bool
+class ModelSettings:
+    service: str
+    name: str
+    dimension: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ResponseGeneratorSettings:
     type: str
-    ollama: OllamaSettings
-    openai: OpenAISettings
-    dummy: DummyResponseGeneratorSettings
+    model: str
+    fallback_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class TopicClassifierSettings:
+    model: str
 
 
 # TopicMemory/Memory settings dataclasses
 @dataclass(frozen=True, slots=True)
-class TopicMemoryDatabaseSettings:
-    type: str
-    dsn_env: str
-
-
-
-@dataclass(frozen=True, slots=True)
-class TopicMemoryEmbeddingSettings:
-    type: str
-    model: str
-    dimension: int
-    api_key_env: str
-    timeout_seconds: float
-
-
-@dataclass(frozen=True, slots=True)
 class TopicMemorySummarySettings:
     type: str
+    model: str
     fallback_max_length: int
 
 
 @dataclass(frozen=True, slots=True)
 class TopicMemorySettings:
     enabled: bool
-    database: TopicMemoryDatabaseSettings
-    embedding: TopicMemoryEmbeddingSettings
+    database_service: str
+    embedding_model: str
     summary: TopicMemorySummarySettings
 
 
@@ -113,7 +97,10 @@ class InputReceiverSettings:
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     app: AppSettings
+    services: dict[str, ServiceSettings]
+    models: dict[str, ModelSettings]
     response_generator: ResponseGeneratorSettings
+    topic_classifier: TopicClassifierSettings
     memory: MemorySettings
     character: CharacterSettings
     input_receivers: InputReceiverSettings
@@ -124,14 +111,17 @@ def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
 
     return AppConfig(
         app=_load_app_settings(_require_dict(raw_config, "app")),
+        services=_load_services(_require_dict(raw_config, "services")),
+        models=_load_models(_require_dict(raw_config, "models")),
         response_generator=_load_response_generator_settings(
             _require_dict(raw_config, "response_generator")
         ),
+        topic_classifier=_load_topic_classifier_settings(
+            _require_dict(raw_config, "topic_classifier")
+        ),
         memory=_load_memory_settings(_require_dict(raw_config, "memory")),
         character=_load_character_settings(_require_dict(raw_config, "character")),
-        input_receivers=_load_input_receiver_settings(
-            _require_dict(raw_config, "input_receivers")
-        ),
+        input_receivers=_load_input_receiver_settings(_require_dict(raw_config, "input_receivers")),
     )
 
 
@@ -161,31 +151,41 @@ def _load_app_settings(config: dict[str, Any]) -> AppSettings:
 def _load_response_generator_settings(config: dict[str, Any]) -> ResponseGeneratorSettings:
     return ResponseGeneratorSettings(
         type=_require_string(config, "type"),
-        ollama=_load_ollama_settings(_require_dict(config, "ollama")),
-        openai=_load_openai_settings(_require_dict(config, "openai")),
-        dummy=DummyResponseGeneratorSettings(
-            enabled=_require_bool(_require_dict(config, "dummy"), "enabled"),
-        ),
-    )
-
-
-def _load_ollama_settings(config: dict[str, Any]) -> OllamaSettings:
-    return OllamaSettings(
         model=_require_string(config, "model"),
-        api_url=_require_string(config, "api_url"),
-        timeout_seconds=_require_float(config, "timeout_seconds"),
         fallback_response=_require_string(config, "fallback_response"),
     )
 
 
+def _load_services(config: dict[str, Any]) -> dict[str, ServiceSettings]:
+    services: dict[str, ServiceSettings] = {}
+    for key, value in config.items():
+        if not isinstance(value, dict):
+            raise RuntimeError(f"services.{key} は object 形式で指定してください。")
+        services[key] = ServiceSettings(
+            type=_require_string(value, "type"),
+            base_url=_optional_string(value, "base_url"),
+            api_key_env=_optional_string(value, "api_key_env"),
+            dsn_env=_optional_string(value, "dsn_env"),
+            timeout_seconds=_optional_float(value, "timeout_seconds"),
+        )
+    return services
 
-def _load_openai_settings(config: dict[str, Any]) -> OpenAISettings:
-    return OpenAISettings(
-        model=_require_string(config, "model"),
-        api_key_env=_require_string(config, "api_key_env"),
-        timeout_seconds=_require_float(config, "timeout_seconds"),
-        fallback_response=_require_string(config, "fallback_response"),
-    )
+
+def _load_models(config: dict[str, Any]) -> dict[str, ModelSettings]:
+    models: dict[str, ModelSettings] = {}
+    for key, value in config.items():
+        if not isinstance(value, dict):
+            raise RuntimeError(f"models.{key} は object 形式で指定してください。")
+        models[key] = ModelSettings(
+            service=_require_string(value, "service"),
+            name=_require_string(value, "name"),
+            dimension=_optional_int(value, "dimension"),
+        )
+    return models
+
+
+def _load_topic_classifier_settings(config: dict[str, Any]) -> TopicClassifierSettings:
+    return TopicClassifierSettings(model=_require_string(config, "model"))
 
 
 # Memory settings loader functions
@@ -198,31 +198,9 @@ def _load_memory_settings(config: dict[str, Any]) -> MemorySettings:
 def _load_topic_memory_settings(config: dict[str, Any]) -> TopicMemorySettings:
     return TopicMemorySettings(
         enabled=_require_bool(config, "enabled"),
-        database=_load_topic_memory_database_settings(_require_dict(config, "database")),
-        embedding=_load_topic_memory_embedding_settings(_require_dict(config, "embedding")),
+        database_service=_require_string(config, "database_service"),
+        embedding_model=_require_string(config, "embedding_model"),
         summary=_load_topic_memory_summary_settings(_require_dict(config, "summary")),
-    )
-
-
-def _load_topic_memory_database_settings(
-    config: dict[str, Any],
-) -> TopicMemoryDatabaseSettings:
-    return TopicMemoryDatabaseSettings(
-        type=_require_string(config, "type"),
-        dsn_env=_require_string(config, "dsn_env"),
-    )
-
-
-
-def _load_topic_memory_embedding_settings(
-    config: dict[str, Any],
-) -> TopicMemoryEmbeddingSettings:
-    return TopicMemoryEmbeddingSettings(
-        type=_require_string(config, "type"),
-        model=_require_string(config, "model"),
-        dimension=_require_int(config, "dimension"),
-        api_key_env=_require_string(config, "api_key_env"),
-        timeout_seconds=_require_float(config, "timeout_seconds"),
     )
 
 
@@ -231,6 +209,7 @@ def _load_topic_memory_summary_settings(
 ) -> TopicMemorySummarySettings:
     return TopicMemorySummarySettings(
         type=_require_string(config, "type"),
+        model=_require_string(config, "model"),
         fallback_max_length=_require_int(config, "fallback_max_length"),
     )
 
@@ -330,6 +309,33 @@ def _require_optional_int(config: dict[str, Any], setting_path: str) -> int | No
     if not isinstance(value, int):
         raise RuntimeError(f"{setting_path} は整数または null で指定してください。")
 
+    return value
+
+
+def _optional_string(config: dict[str, Any], key: str) -> str | None:
+    value = config.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise RuntimeError(f"{key} は空でない文字列で指定してください。")
+    return value
+
+
+def _optional_float(config: dict[str, Any], key: str) -> float | None:
+    value = config.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int | float):
+        raise RuntimeError(f"{key} は数値で指定してください。")
+    return float(value)
+
+
+def _optional_int(config: dict[str, Any], key: str) -> int | None:
+    value = config.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int):
+        raise RuntimeError(f"{key} は整数で指定してください。")
     return value
 
 

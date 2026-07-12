@@ -5,20 +5,16 @@ import json
 import os
 import urllib.error
 import urllib.request
-
 from typing import Any
-
-from app.utils.trace import TraceLogger
 
 from app.adapters.prompt import SimplePromptBuilder
 from app.domain.activities import Activity
 from app.domain.character import CharacterProfile
+from app.utils.trace import TraceLogger
 
 
 class OpenAIResponseGenerator:
     """OpenAI Responses API を使う ResponseGenerator Adapter。"""
-
-    _API_URL = "https://api.openai.com/v1/responses"
 
     def __init__(
         self,
@@ -28,6 +24,7 @@ class OpenAIResponseGenerator:
         fallback_response: str,
         character_profile: CharacterProfile,
         prompt_builder: SimplePromptBuilder,
+        base_url: str = "https://api.openai.com/v1",
     ) -> None:
         self._model = model
         self._api_key_env = api_key_env
@@ -35,6 +32,7 @@ class OpenAIResponseGenerator:
         self._fallback_response = fallback_response
         self._character_profile = character_profile
         self._prompt_builder = prompt_builder
+        self._base_url = base_url
         self._trace_logger = TraceLogger()
 
     async def generate_response(self, activity: Activity) -> str:
@@ -107,7 +105,7 @@ class OpenAIResponseGenerator:
         ).encode("utf-8")
 
         request = urllib.request.Request(
-            self._API_URL,
+            f"{self._base_url.rstrip('/')}/responses",
             data=request_body,
             headers={
                 "Authorization": f"Bearer {api_key}",

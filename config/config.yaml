@@ -4,35 +4,51 @@ app:
   name: ai-liver
   mode: console
 
-response_generator:
-  type: ollama
-  ollama:
-    model: local-agent:qwen7b-prompt-test
-    api_url: http://localhost:11434/api/generate
-    timeout_seconds: 60.0
-    fallback_response: うまく言葉が出てこなかったみたい。もう一度話しかけてね。
+# 外部サービスの接続情報はここで一元管理する。
+# APIキーやDSNの値自体は記載せず、環境変数名だけを指定する。
+services:
   openai:
-    model: gpt-4.1-mini
+    type: openai
+    base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
     timeout_seconds: 60.0
-    fallback_response: うまく言葉が出てこなかったみたい。もう一度話しかけてね。
-  dummy:
-    enabled: false
+  ollama:
+    type: ollama
+    base_url: http://localhost:11434
+    timeout_seconds: 60.0
+  topic_memory_database:
+    type: postgres
+    dsn_env: AI_LIVER_DATABASE_URL
+
+# 利用可能なモデルを登録し、各機能からキー名で参照する。
+models:
+  openai_chat:
+    service: openai
+    name: gpt-4.1-mini
+  ollama_chat:
+    service: ollama
+    name: local-agent:qwen7b-prompt-test
+  openai_embedding:
+    service: openai
+    name: text-embedding-3-small
+    dimension: 1536
+
+response_generator:
+  type: llm
+  model: openai_chat
+  fallback_response: うまく言葉が出てこなかったみたい。もう一度話しかけてね。
+
+topic_classifier:
+  model: openai_chat
 
 memory:
   topic_memory:
     enabled: true
-    database:
-      type: postgres
-      dsn_env: AI_LIVER_DATABASE_URL
-    embedding:
-      type: openai
-      model: text-embedding-3-small
-      dimension: 1536
-      api_key_env: OPENAI_API_KEY
-      timeout_seconds: 30.0
+    database_service: topic_memory_database
+    embedding_model: openai_embedding
     summary:
       type: llm
+      model: openai_chat
       fallback_max_length: 120
 
 character:

@@ -1,9 +1,10 @@
 from dataclasses import replace
+
 import pytest
 
-from app.adapters.topic.llm_topic_classifier import LlmTopicClassifier
 from app.adapters.embedding.openai_embedding_generator import OpenAIEmbeddingGenerator
 from app.adapters.storage.postgres_topic_memory_store import PostgresTopicMemoryStore
+from app.adapters.topic.llm_topic_classifier import LlmTopicClassifier
 from app.config.app_config import load_app_config
 from app.runtime import RuntimeCoordinator, create_runtime_coordinator
 from app.runtime.runtime_factory import (
@@ -33,11 +34,11 @@ def test_create_topic_classifier_returns_none_when_response_generator_is_dummy()
     assert topic_classifier is None
 
 
-def test_create_topic_classifier_returns_llm_topic_classifier_when_response_generator_is_ollama() -> None:
+def test_create_topic_classifier_uses_ollama_model() -> None:
     config = load_app_config()
     config = replace(
         config,
-        response_generator=replace(config.response_generator, type="ollama"),
+        topic_classifier=replace(config.topic_classifier, model="ollama_chat"),
     )
 
     topic_classifier = create_topic_classifier(config)
@@ -51,9 +52,9 @@ def test_create_topic_classifier_returns_none_when_openai_api_key_is_not_set(
     config = load_app_config()
     config = replace(
         config,
-        response_generator=replace(config.response_generator, type="openai"),
+        topic_classifier=replace(config.topic_classifier, model="openai_chat"),
     )
-    monkeypatch.delenv(config.response_generator.openai.api_key_env, raising=False)
+    monkeypatch.delenv(config.services["openai"].api_key_env, raising=False)
 
     topic_classifier = create_topic_classifier(config)
 
@@ -66,9 +67,9 @@ def test_create_topic_classifier_returns_llm_topic_classifier_when_response_gene
     config = load_app_config()
     config = replace(
         config,
-        response_generator=replace(config.response_generator, type="openai"),
+        topic_classifier=replace(config.topic_classifier, model="openai_chat"),
     )
-    monkeypatch.setenv(config.response_generator.openai.api_key_env, "test-api-key")
+    monkeypatch.setenv(config.services["openai"].api_key_env, "test-api-key")
 
     topic_classifier = create_topic_classifier(config)
 
@@ -86,35 +87,22 @@ def _replace_topic_memory_enabled(config, enabled: bool):
     )
 
 
-def _replace_topic_memory_embedding_type(config, embedding_type: str):
+def _replace_topic_memory_embedding_service(config, service: str):
+    model_key = config.memory.topic_memory.embedding_model
     return replace(
         config,
-        memory=replace(
-            config.memory,
-            topic_memory=replace(
-                config.memory.topic_memory,
-                embedding=replace(
-                    config.memory.topic_memory.embedding,
-                    type=embedding_type,
-                ),
-            ),
-        ),
+        models={**config.models, model_key: replace(config.models[model_key], service=service)},
     )
 
 
 def _replace_topic_memory_database_type(config, database_type: str):
+    service_key = config.memory.topic_memory.database_service
     return replace(
         config,
-        memory=replace(
-            config.memory,
-            topic_memory=replace(
-                config.memory.topic_memory,
-                database=replace(
-                    config.memory.topic_memory.database,
-                    type=database_type,
-                ),
-            ),
-        ),
+        services={
+            **config.services,
+            service_key: replace(config.services[service_key], type=database_type),
+        },
     )
 
 
@@ -130,7 +118,7 @@ def test_create_embedding_generator_returns_none_when_topic_memory_is_disabled()
 def test_create_embedding_generator_returns_none_when_embedding_type_is_unsupported() -> None:
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=True)
-    config = _replace_topic_memory_embedding_type(config, embedding_type="unsupported")
+    config = _replace_topic_memory_embedding_service(config, service="topic_memory_database")
 
     embedding_generator = create_embedding_generator(config)
 
@@ -142,7 +130,7 @@ def test_create_embedding_generator_returns_none_when_openai_api_key_is_not_set(
 ) -> None:
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=True)
-    monkeypatch.delenv(config.memory.topic_memory.embedding.api_key_env, raising=False)
+    monkeypatch.delenv(config.services["openai"].api_key_env, raising=False)
 
     embedding_generator = create_embedding_generator(config)
 
@@ -154,7 +142,7 @@ def test_create_embedding_generator_returns_openai_embedding_generator_when_enab
 ) -> None:
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=True)
-    monkeypatch.setenv(config.memory.topic_memory.embedding.api_key_env, "test-api-key")
+    monkeypatch.setenv(config.services["openai"].api_key_env, "test-api-key")
 
     embedding_generator = create_embedding_generator(config)
 
@@ -185,7 +173,8 @@ def test_create_topic_memory_store_returns_none_when_database_dsn_is_not_set(
 ) -> None:
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=True)
-    monkeypatch.delenv(config.memory.topic_memory.database.dsn_env, raising=False)
+    database_service = config.services[config.memory.topic_memory.database_service]
+    monkeypatch.delenv(database_service.dsn_env, raising=False)
 
     topic_memory_store = create_topic_memory_store(config)
 
@@ -198,10 +187,57 @@ def test_create_topic_memory_store_returns_postgres_topic_memory_store_when_enab
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=True)
     monkeypatch.setenv(
-        config.memory.topic_memory.database.dsn_env,
+        config.services[config.memory.topic_memory.database_service].dsn_env,
         "postgresql://user:password@localhost:5432/ai_liver_test",
     )
 
     topic_memory_store = create_topic_memory_store(config)
 
     assert isinstance(topic_memory_store, PostgresTopicMemoryStore)
+
+
+def _replace_topic_memory_summary_type(config, summary_type: str):
+    return replace(
+        config,
+        memory=replace(
+            config.memory,
+            topic_memory=replace(
+                config.memory.topic_memory,
+                summary=replace(
+                    config.memory.topic_memory.summary,
+                    type=summary_type,
+                ),
+            ),
+        ),
+    )
+
+
+def test_create_memory_summary_generator_returns_none_when_openai_api_key_is_not_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.runtime.runtime_factory import create_memory_summary_generator
+
+    config = load_app_config()
+    config = _replace_topic_memory_enabled(config, enabled=True)
+    config = _replace_topic_memory_summary_type(config, summary_type="llm")
+    monkeypatch.delenv(config.services["openai"].api_key_env, raising=False)
+
+    memory_summary_generator = create_memory_summary_generator(config)
+
+    assert memory_summary_generator is None
+
+
+def test_create_memory_summary_generator_returns_llm_generator_when_response_generator_is_openai(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.adapters.memory.llm_memory_summary_generator import LlmMemorySummaryGenerator
+    from app.runtime.runtime_factory import create_memory_summary_generator
+
+    config = load_app_config()
+    config = _replace_topic_memory_enabled(config, enabled=True)
+    config = _replace_topic_memory_summary_type(config, summary_type="llm")
+    monkeypatch.setenv(config.services["openai"].api_key_env, "test-api-key")
+
+    memory_summary_generator = create_memory_summary_generator(config)
+
+    assert isinstance(memory_summary_generator, LlmMemorySummaryGenerator)
