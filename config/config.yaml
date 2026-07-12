@@ -4,6 +4,17 @@ app:
   name: ai-liver
   mode: console
 
+trace:
+  # DEBUG, INFO, WARNING, ERROR, OFF
+  level: INFO
+  # textは人向け、jsonlは機械処理向け
+  format: text
+  file_path: logs/runtime_trace.log
+  # ファイルがこのサイズを超えるとローテーションする（5 MiB）
+  max_bytes: 5242880
+  # runtime_trace.log.1 から指定数まで保持する
+  backup_count: 5
+
 # 外部サービスの接続情報はここで一元管理する。
 # APIキーやDSNの値自体は記載せず、環境変数名だけを指定する。
 services:

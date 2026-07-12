@@ -16,6 +16,15 @@ class AppSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class TraceSettings:
+    level: str
+    format: str
+    file_path: str
+    max_bytes: int
+    backup_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class ServiceSettings:
     type: str
     base_url: str | None = None
@@ -97,6 +106,7 @@ class InputReceiverSettings:
 @dataclass(frozen=True, slots=True)
 class AppConfig:
     app: AppSettings
+    trace: TraceSettings
     services: dict[str, ServiceSettings]
     models: dict[str, ModelSettings]
     response_generator: ResponseGeneratorSettings
@@ -111,6 +121,7 @@ def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
 
     return AppConfig(
         app=_load_app_settings(_require_dict(raw_config, "app")),
+        trace=_load_trace_settings(_require_dict(raw_config, "trace")),
         services=_load_services(_require_dict(raw_config, "services")),
         models=_load_models(_require_dict(raw_config, "models")),
         response_generator=_load_response_generator_settings(
@@ -145,6 +156,22 @@ def _load_app_settings(config: dict[str, Any]) -> AppSettings:
     return AppSettings(
         name=_require_string(config, "name"),
         mode=_require_string(config, "mode"),
+    )
+
+
+def _load_trace_settings(config: dict[str, Any]) -> TraceSettings:
+    level = _require_string(config, "level").upper()
+    if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "OFF"}:
+        raise RuntimeError("trace.level は DEBUG, INFO, WARNING, ERROR, OFF から選択してください。")
+    output_format = _require_string(config, "format").lower()
+    if output_format not in {"text", "jsonl"}:
+        raise RuntimeError("trace.format は text または jsonl を指定してください。")
+    return TraceSettings(
+        level=level,
+        format=output_format,
+        file_path=_require_string(config, "file_path"),
+        max_bytes=_require_positive_int(config, "max_bytes"),
+        backup_count=_require_non_negative_int(config, "backup_count"),
     )
 
 
@@ -297,6 +324,20 @@ def _require_int(config: dict[str, Any], setting_path: str) -> int:
     if not isinstance(value, int):
         raise RuntimeError(f"{setting_path} は整数で指定してください。")
 
+    return value
+
+
+def _require_positive_int(config: dict[str, Any], setting_path: str) -> int:
+    value = _require_int(config, setting_path)
+    if value <= 0:
+        raise RuntimeError(f"{setting_path} は1以上で指定してください。")
+    return value
+
+
+def _require_non_negative_int(config: dict[str, Any], setting_path: str) -> int:
+    value = _require_int(config, setting_path)
+    if value < 0:
+        raise RuntimeError(f"{setting_path} は0以上で指定してください。")
     return value
 
 

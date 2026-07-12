@@ -55,6 +55,7 @@ class OpenAIResponseGenerator:
         response_text = await asyncio.to_thread(self._generate_sync, prompt)
         self._trace_logger.write(
             "openai_response_generator:generate_response:finished",
+            level="DEBUG" if response_text == self._fallback_response else "INFO",
             activity_id=activity.activity_id,
             activity_type=activity.activity_type.value,
             response_length=len(response_text),
@@ -159,7 +160,7 @@ class OpenAIResponseGenerator:
             )
             return self._fallback_response
 
-        self._trace_logger.write(
+        self._trace_logger.info(
             "openai_response_generator:generate_sync:success",
             generated_text_length=len(generated_text.strip()),
         )

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -6,12 +5,11 @@ import json
 from typing import Any
 from urllib import error, request
 
-from app.utils.trace import TraceLogger
-
 from app.domain.activities import Activity
 from app.domain.character import CharacterProfile
 from app.ports.prompt_builder import PromptBuilder
 from app.ports.response_generator import ResponseGenerator
+from app.utils.trace import TraceLogger
 
 
 class OllamaResponseGenerator(ResponseGenerator):
@@ -90,7 +88,7 @@ class OllamaResponseGenerator(ResponseGenerator):
             )
             return self._fallback_response
 
-        self._trace_logger.write(
+        self._trace_logger.info(
             "ollama_response_generator:generate_response:success",
             activity_id=activity.activity_id,
             activity_type=activity.activity_type.value,

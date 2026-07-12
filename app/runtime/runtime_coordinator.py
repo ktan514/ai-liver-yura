@@ -1,23 +1,21 @@
 from __future__ import annotations
 
-
 import asyncio
 from queue import Queue
-
-from app.utils.trace import TraceLogger
 
 from app.domain.actions import ActionPlanGroup
 from app.domain.events import AgentEvent, AgentEventType
 from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler
-from app.runtime.activity_manager import ActivityManager
 from app.runtime.activity_executor_thread import ActivityExecutorThread
+from app.runtime.activity_manager import ActivityManager
 from app.runtime.activity_planner_thread import ActivityPlannerThread, ActivityPlanningRequest
 from app.runtime.agent_life_service import AgentLifeService
 from app.runtime.event_buffer import EventBuffer
 from app.runtime.event_filter import DefaultEventFilter, EventFilter
 from app.runtime.event_prioritizer import DefaultEventPrioritizer, EventPrioritizer
 from app.runtime.event_queue import EventQueue
+from app.utils.trace import TraceLogger
 
 
 class RuntimeCoordinator:
@@ -113,6 +111,9 @@ class RuntimeCoordinator:
         event = await self._event_queue.get()
         self._trace_logger.write(
             "runtime_coordinator:run_once:queue_get",
+            level="DEBUG"
+            if self._is_agent_state_only_event(event) or event.discardable
+            else "INFO",
             event_type=event.event_type.value,
             event_id=event.event_id,
             priority=event.priority,
@@ -123,7 +124,7 @@ class RuntimeCoordinator:
 
     async def run(self) -> None:
         self._running = True
-        self._trace_logger.write("runtime_coordinator:run:start")
+        self._trace_logger.info("runtime_coordinator:run:start")
 
         self._start_threads()
 
@@ -134,7 +135,7 @@ class RuntimeCoordinator:
                 await asyncio.sleep(0.01)
 
     def stop(self) -> None:
-        self._trace_logger.write("runtime_coordinator:stop")
+        self._trace_logger.info("runtime_coordinator:stop")
         self._running = False
         self._stop_threads()
 
@@ -147,7 +148,7 @@ class RuntimeCoordinator:
         if not self._activity_executor_thread.is_alive():
             self._activity_executor_thread.start()
 
-        self._trace_logger.write(
+        self._trace_logger.info(
             "runtime_coordinator:threads:start",
             activity_planner_thread_alive=self._activity_planner_thread.is_alive(),
             activity_executor_thread_alive=self._activity_executor_thread.is_alive(),
@@ -165,7 +166,7 @@ class RuntimeCoordinator:
         if self._activity_executor_thread.is_alive():
             self._activity_executor_thread.join(timeout=self._thread_join_timeout_seconds)
 
-        self._trace_logger.write(
+        self._trace_logger.info(
             "runtime_coordinator:threads:stopped",
             activity_planner_thread_alive=self._activity_planner_thread.is_alive(),
             activity_executor_thread_alive=self._activity_executor_thread.is_alive(),
@@ -212,8 +213,7 @@ class RuntimeCoordinator:
             "runtime_coordinator:handle_event:actions_planned",
             activity_type=activity.activity_type.value,
             action_types=[
-                action_plan.action_type.value
-                for action_plan in action_plan_group.action_plans
+                action_plan.action_type.value for action_plan in action_plan_group.action_plans
             ],
         )
         self._trace_logger.write("runtime_coordinator:handle_event:actions_execute_start")
@@ -224,8 +224,12 @@ class RuntimeCoordinator:
             "runtime_coordinator:handle_event:foreground_activity_completed",
             completed=completed_activity is not None,
             activity_id=completed_activity.activity_id if completed_activity is not None else None,
-            activity_type=completed_activity.activity_type.value if completed_activity is not None else None,
-            activity_status=completed_activity.status.value if completed_activity is not None else None,
+            activity_type=completed_activity.activity_type.value
+            if completed_activity is not None
+            else None,
+            activity_status=completed_activity.status.value
+            if completed_activity is not None
+            else None,
         )
         self._agent_life_service.sync_from_activity_manager()
         self._trace_logger.write(

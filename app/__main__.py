@@ -4,23 +4,30 @@ import asyncio
 
 from app.adapters.input import ConsoleInputReceiver
 from app.config.app_config import load_app_config
-from app.utils.trace import TraceLogger
 from app.domain.events import AgentEvent, AgentEventType
 from app.runtime import create_runtime_coordinator
+from app.utils.trace import TraceLogger
 
 
 async def async_main() -> None:
-    trace_logger = TraceLogger()
-    trace_logger.write("app:start")
     config = load_app_config()
-    trace_logger.write(
+    TraceLogger.configure(
+        level=config.trace.level,
+        trace_file_path=config.trace.file_path,
+        output_format=config.trace.format,
+        max_bytes=config.trace.max_bytes,
+        backup_count=config.trace.backup_count,
+    )
+    trace_logger = TraceLogger()
+    trace_logger.info("app:start")
+    trace_logger.info(
         "app:config_loaded",
         app_name=config.app.name,
         app_mode=config.app.mode,
         response_generator_type=config.response_generator.type,
     )
     runtime = create_runtime_coordinator(config)
-    trace_logger.write("app:runtime_created")
+    trace_logger.info("app:runtime_created")
     console_receiver = ConsoleInputReceiver()
     trace_logger.write("app:console_receiver_created")
 
@@ -47,7 +54,7 @@ async def async_main() -> None:
     runtime.stop()
     await runtime_task
     trace_logger.write("app:runtime_task_finished")
-    trace_logger.write("app:finished")
+    trace_logger.info("app:finished")
     print("終了しました。")
 
 
