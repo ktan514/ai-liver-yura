@@ -12,19 +12,13 @@ from app.adapters.llm import (
     OllamaResponseGenerator,
     OpenAIResponseGenerator,
 )
-from app.adapters.memory.llm_memory_summary_generator import (
+from app.adapters.memory import (
     LlmMemorySummaryGenerator,
     LlmMemorySummaryGeneratorConfig,
-)
-from app.adapters.memory.ollama_memory_summary_model import (
     OllamaMemorySummaryModel,
     OllamaMemorySummaryModelConfig,
-)
-from app.adapters.memory.openai_memory_summary_model import (
     OpenAIMemorySummaryModel,
     OpenAIMemorySummaryModelConfig,
-)
-from app.adapters.memory.simple_memory_summary_generator import (
     SimpleMemorySummaryGenerator,
     SimpleMemorySummaryGeneratorConfig,
 )
@@ -33,14 +27,22 @@ from app.adapters.storage.postgres_topic_memory_store import (
     PostgresTopicMemoryStore,
     PostgresTopicMemoryStoreConfig,
 )
-from app.adapters.topic.llm_topic_classifier import LlmTopicClassifier, TopicClassificationModel
-from app.adapters.topic.ollama_topic_classification_model import (
+from app.adapters.topic import ( 
+    LlmTopicClassifier, 
+    TopicClassificationModel,
     OllamaTopicClassificationConfig,
     OllamaTopicClassificationModel,
-)
-from app.adapters.topic.openai_topic_classification_model import (
     OpenAITopicClassificationConfig,
     OpenAITopicClassificationModel,
+)
+from app.adapters.tts import (
+    SystemAudioPlayer,
+    VoiceVoxSpeechSynthesizer,
+    VoiceVoxSpeechSynthesizerConfig,
+    VoiceVoxSpeechProfile,
+    NoOpAudioQueryCorrector,
+    PronunciationCorrector,
+    PronunciationDictionary,
 )
 from app.config.app_config import AppConfig, ModelSettings, ServiceSettings
 from app.domain.character import CharacterProfile
@@ -48,9 +50,11 @@ from app.domain.drives import DriveState
 from app.domain.short_term_memory import ShortTermMemory
 from app.domain.topic import TopicHistory
 from app.domain.topic_classifier import TopicClassifier
+from app.ports.audio_player import AudioPlayer
 from app.ports.embedding_generator import EmbeddingGenerator
 from app.ports.memory_summary_generator import MemorySummaryGenerator
 from app.ports.memory_summary_model import MemorySummaryModel
+from app.ports.speech_synthesizer import SpeechSynthesizer
 from app.ports.topic_memory_store import TopicMemoryStore
 from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler
@@ -107,6 +111,44 @@ def _embedding_dimension(config: AppConfig) -> int:
             f"models.{config.memory.topic_memory.embedding_model}.dimension が必要です。"
         )
     return model.dimension
+
+
+def create_speech_synthesizer(config: AppConfig) -> SpeechSynthesizer | None:
+    if not config.speech.enabled:
+        return None
+    service = _resolve_service(config, config.speech.service)
+    if service.type != "voicevox":
+        raise RuntimeError(f"未対応の音声合成サービスです: {service.type}")
+    pronunciation_dictionary = PronunciationDictionary.load(
+        config.speech.pronunciation_dictionary_path
+    )
+    return VoiceVoxSpeechSynthesizer(
+        VoiceVoxSpeechSynthesizerConfig(
+            base_url=_require_service_value(service.base_url, "base_url", config.speech.service),
+            speaker_id=config.speech.speaker_id,
+            timeout_seconds=_service_timeout(service),
+            default_profile=config.speech.default_profile,
+            emotion_profiles={
+                name: VoiceVoxSpeechProfile(
+                    speed_scale=profile.speed_scale,
+                    pitch_scale=profile.pitch_scale,
+                    intonation_scale=profile.intonation_scale,
+                    volume_scale=profile.volume_scale,
+                )
+                for name, profile in config.speech.emotion_profiles.items()
+            },
+        ),
+        pronunciation_corrector=PronunciationCorrector(pronunciation_dictionary),
+        audio_query_corrector=NoOpAudioQueryCorrector(),
+    )
+
+
+def create_audio_player(config: AppConfig) -> AudioPlayer | None:
+    if not config.speech.enabled:
+        return None
+    if config.speech.player.type != "system":
+        raise RuntimeError(f"未対応の音声再生方式です: {config.speech.player.type}")
+    return SystemAudioPlayer(command=config.speech.player.command)
 
 
 def create_character_profile(config: AppConfig) -> CharacterProfile:
@@ -540,6 +582,8 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
     embedding_generator = create_embedding_generator(config)
     topic_memory_store = create_topic_memory_store(config)
     memory_summary_generator = create_memory_summary_generator(config)
+    speech_synthesizer = create_speech_synthesizer(config)
+    audio_player = create_audio_player(config)
     enrich_activity_with_topic_memory_usecase = EnrichActivityWithTopicMemoryUsecase(
         embedding_generator=embedding_generator,
         topic_memory_store=topic_memory_store,
@@ -553,6 +597,9 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         embedding_generator=embedding_generator,
         topic_memory_store=topic_memory_store,
         memory_summary_generator=memory_summary_generator,
+        speech_synthesizer=speech_synthesizer,
+        audio_player=audio_player,
+        emotion_provider=lambda: agent_life_service.agent_state.current_emotion,
     )
 
     planned_activity_queue = PlannedActivityQueue()

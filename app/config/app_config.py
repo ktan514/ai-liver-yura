@@ -48,6 +48,31 @@ class ResponseGeneratorSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class SpeechPlayerSettings:
+    type: str
+    command: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechVoiceProfileSettings:
+    speed_scale: float
+    pitch_scale: float
+    intonation_scale: float
+    volume_scale: float
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechSettings:
+    enabled: bool
+    service: str
+    pronunciation_dictionary_path: str
+    speaker_id: int
+    default_profile: str
+    emotion_profiles: dict[str, SpeechVoiceProfileSettings]
+    player: SpeechPlayerSettings
+
+
+@dataclass(frozen=True, slots=True)
 class TopicClassifierSettings:
     model: str
 
@@ -110,6 +135,7 @@ class AppConfig:
     services: dict[str, ServiceSettings]
     models: dict[str, ModelSettings]
     response_generator: ResponseGeneratorSettings
+    speech: SpeechSettings
     topic_classifier: TopicClassifierSettings
     memory: MemorySettings
     character: CharacterSettings
@@ -127,6 +153,7 @@ def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
         response_generator=_load_response_generator_settings(
             _require_dict(raw_config, "response_generator")
         ),
+        speech=_load_speech_settings(_require_dict(raw_config, "speech")),
         topic_classifier=_load_topic_classifier_settings(
             _require_dict(raw_config, "topic_classifier")
         ),
@@ -180,6 +207,49 @@ def _load_response_generator_settings(config: dict[str, Any]) -> ResponseGenerat
         type=_require_string(config, "type"),
         model=_require_string(config, "model"),
         fallback_response=_require_string(config, "fallback_response"),
+    )
+
+
+def _load_speech_settings(config: dict[str, Any]) -> SpeechSettings:
+    player = _require_dict(config, "player")
+    emotion_profiles_config = _require_dict(config, "emotion_profiles")
+    emotion_profiles = {
+        name: _load_speech_voice_profile(profile, name)
+        for name, profile in emotion_profiles_config.items()
+        if isinstance(profile, dict)
+    }
+    if len(emotion_profiles) != len(emotion_profiles_config):
+        raise RuntimeError("speech.emotion_profilesの各値はobject形式で指定してください。")
+    default_profile = _require_string(config, "default_profile")
+    if default_profile not in emotion_profiles:
+        raise RuntimeError("speech.default_profileがemotion_profilesに定義されていません。")
+    return SpeechSettings(
+        enabled=_require_bool(config, "enabled"),
+        service=_require_string(config, "service"),
+        pronunciation_dictionary_path=_require_string(config, "pronunciation_dictionary_path"),
+        speaker_id=_require_non_negative_int(config, "speaker_id"),
+        default_profile=default_profile,
+        emotion_profiles=emotion_profiles,
+        player=SpeechPlayerSettings(
+            type=_require_string(player, "type"),
+            command=_optional_string(player, "command"),
+        ),
+    )
+
+
+def _load_speech_voice_profile(config: dict[str, Any], name: str) -> SpeechVoiceProfileSettings:
+    try:
+        speed_scale = _require_positive_float(config, "speed_scale")
+        pitch_scale = _require_float(config, "pitch_scale")
+        intonation_scale = _require_positive_float(config, "intonation_scale")
+        volume_scale = _require_positive_float(config, "volume_scale")
+    except RuntimeError as error:
+        raise RuntimeError(f"speech.emotion_profiles.{name}: {error}") from error
+    return SpeechVoiceProfileSettings(
+        speed_scale=speed_scale,
+        pitch_scale=pitch_scale,
+        intonation_scale=intonation_scale,
+        volume_scale=volume_scale,
     )
 
 
@@ -316,6 +386,13 @@ def _require_float(config: dict[str, Any], setting_path: str) -> float:
         raise RuntimeError(f"{setting_path} は数値で指定してください。")
 
     return float(value)
+
+
+def _require_positive_float(config: dict[str, Any], setting_path: str) -> float:
+    value = _require_float(config, setting_path)
+    if value <= 0:
+        raise RuntimeError(f"{setting_path} は0より大きい値で指定してください。")
+    return value
 
 
 def _require_int(config: dict[str, Any], setting_path: str) -> int:

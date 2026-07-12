@@ -1,10 +1,9 @@
-
-
 from __future__ import annotations
 
 import asyncio
 import json
 from dataclasses import dataclass
+from typing import Any
 from urllib import request
 
 from app.ports.embedding_generator import EmbeddingGenerator
@@ -51,7 +50,7 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
         data = json.loads(response_body)
         return self._extract_embedding(data)
 
-    def _extract_embedding(self, data: dict) -> list[float]:
+    def _extract_embedding(self, data: dict[str, Any]) -> list[float]:
         data_items = data.get("data")
         if not isinstance(data_items, list) or not data_items:
             return []

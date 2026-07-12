@@ -1,10 +1,9 @@
-
-
 from __future__ import annotations
 
 import asyncio
 import json
 from dataclasses import dataclass
+from typing import Any
 from urllib import request
 
 
@@ -51,7 +50,7 @@ class OpenAITopicClassificationModel:
         classification = self._extract_text(data)
         return classification.strip()
 
-    def _extract_text(self, data: dict) -> str:
+    def _extract_text(self, data: dict[str, Any]) -> str:
         output_text = data.get("output_text")
         if isinstance(output_text, str):
             return output_text

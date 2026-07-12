@@ -3,13 +3,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-import asyncpg
 
-from app.utils.trace import TraceLogger
+import asyncpg  # type: ignore[import-untyped]
 
 from app.domain.topic import TopicCategory
 from app.domain.topic_memory import SimilarTopicMemory, TopicMemoryEntry
 from app.ports.topic_memory_store import TopicMemoryStore
+from app.utils.trace import TraceLogger
 
 
 @dataclass(frozen=True)
@@ -53,7 +53,7 @@ class _PostgresDatabaseClient:
     ) -> str:
         connection = await self._connect(operation_name)
         try:
-            return await connection.execute(sql, *args)
+            return str(await connection.execute(sql, *args))
         except Exception as error:
             self._log_error(
                 operation_name=operation_name,
@@ -145,7 +145,6 @@ class _PostgresDatabaseClient:
             dsn=context.dsn,
             sql=context.sql,
         )
-
 
     @staticmethod
     def _mask_dsn(dsn: str) -> str:

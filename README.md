@@ -11,3 +11,11 @@ docker run --name postgres-m4 \
   -v ai_liver_postgres_data:/var/lib/postgresql/data \
   -d pgvector/pgvector:pg16
 ```
+
+## VoiceVox
+`VoiceVox Engine`を起動して使用する。
+```bash
+cd VoiceVoxEngineのパス
+./run
+```
+

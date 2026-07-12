@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from app.utils.trace import TraceLogger
 
 from app.domain.drives import DriveState
 from app.domain.events import AgentEvent, AgentEventType
+from app.utils.trace import TraceLogger
 
 
 class DriveStateUpdater:
@@ -155,7 +155,7 @@ class DriveStateUpdater:
         after_drive: DriveState,
         **values: object,
     ) -> None:
-        self._trace_logger.write(
+        self._trace_logger.debug(
             label,
             **values,
             before_curiosity=before_drive.curiosity,

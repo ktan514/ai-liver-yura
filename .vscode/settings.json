@@ -1,5 +1,7 @@
 {
     "cSpell.words": [
+        "afplay",
+        "aplay",
         "asyncio",
         "BIGSERIAL",
         "capsys",
@@ -15,7 +17,9 @@
         "pytest",
         "qwen",
         "TIMESTAMPTZ",
-        "usecases"
+        "usecases",
+        "voicevox",
+        "Voidoll"
     ],
     "python-envs.defaultEnvManager": "ms-python.python:pipenv"
 }

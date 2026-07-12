@@ -2,12 +2,13 @@ import pytest
 
 from app.domain.actions import ActionPlan, ActionType
 from app.domain.events import AgentEvent, AgentEventType
+from app.domain.emotions import EmotionState, MoodType
 from app.domain.topic import TopicCategory, TopicHistory
 from app.domain.topic_memory import SimilarTopicMemory, TopicMemoryEntry
+from app.domain.short_term_memory import ShortTermMemory
 
 from app.usecases import ExecuteActionUsecase
 from app.ports.memory_summary_generator import MemorySummaryGenerator
-
 
 
 class FakeEventPublisher:
@@ -16,6 +17,31 @@ class FakeEventPublisher:
 
     async def publish(self, event: AgentEvent) -> None:
         self.published_events.append(event)
+
+
+class FakeSpeechSynthesizer:
+    def __init__(self, audio_data: bytes = b"RIFF-test-wav") -> None:
+        self.audio_data = audio_data
+        self.received_texts: list[str] = []
+        self.received_emotion: EmotionState | None = None
+
+    async def synthesize(self, text: str, emotion: EmotionState | None = None) -> bytes:
+        self.received_texts.append(text)
+        self.received_emotion = emotion
+        return self.audio_data
+
+
+class FakeAudioPlayer:
+    def __init__(self) -> None:
+        self.received_audio: list[bytes] = []
+
+    async def play(self, audio_data: bytes) -> None:
+        self.received_audio.append(audio_data)
+
+
+class FailingSpeechSynthesizer:
+    async def synthesize(self, text: str, emotion: EmotionState | None = None) -> bytes:
+        raise RuntimeError("VOICEVOX unavailable")
 
 
 # FakeTopicClassifier for testing topic classification and history recording
@@ -30,6 +56,7 @@ class FakeTopicClassifier:
 
 
 # FakeEmbeddingGenerator and FakeTopicMemoryStore for topic memory tests
+
 
 class FakeEmbeddingGenerator:
     def __init__(self, embedding: list[float]) -> None:
@@ -108,6 +135,59 @@ async def test_speak_action_without_event_publisher_does_not_raise_error() -> No
     await usecase.execute(action_plan)
 
 
+@pytest.mark.asyncio
+async def test_speak_action_synthesizes_and_plays_audio() -> None:
+    synthesizer = FakeSpeechSynthesizer()
+    player = FakeAudioPlayer()
+    usecase = ExecuteActionUsecase(
+        speech_synthesizer=synthesizer,
+        audio_player=player,
+        emotion_provider=lambda: EmotionState(mood=MoodType.EXCITED),
+    )
+    action_plan = ActionPlan(action_type=ActionType.SPEAK, text="こんにちは")
+
+    await usecase.execute(action_plan)
+
+    assert synthesizer.received_texts == ["こんにちは"]
+    assert synthesizer.received_emotion == EmotionState(mood=MoodType.EXCITED)
+    assert player.received_audio == [b"RIFF-test-wav"]
+
+
+@pytest.mark.asyncio
+async def test_speak_keeps_original_text_for_display_and_memory(capsys) -> None:
+    synthesizer = FakeSpeechSynthesizer()
+    memory = ShortTermMemory()
+    usecase = ExecuteActionUsecase(
+        short_term_memory=memory,
+        speech_synthesizer=synthesizer,
+        audio_player=FakeAudioPlayer(),
+    )
+
+    await usecase.execute(ActionPlan(action_type=ActionType.SPEAK, text="どんな風に話せばいいかな"))
+
+    assert "[speak] どんな風に話せばいいかな" in capsys.readouterr().out
+    assert synthesizer.received_texts == ["どんな風に話せばいいかな"]
+    assert memory.recent_speeches()[0].text == "どんな風に話せばいいかな"
+
+
+@pytest.mark.asyncio
+async def test_speak_action_falls_back_when_synthesis_fails(monkeypatch) -> None:
+    sleep_durations: list[float] = []
+
+    async def fake_sleep(duration: float) -> None:
+        sleep_durations.append(duration)
+
+    monkeypatch.setattr("app.usecases.execute_action_usecase.asyncio.sleep", fake_sleep)
+    usecase = ExecuteActionUsecase(
+        speech_synthesizer=FailingSpeechSynthesizer(),
+        audio_player=FakeAudioPlayer(),
+    )
+
+    await usecase.execute(ActionPlan(action_type=ActionType.SPEAK, text="こんにちは"))
+
+    assert sleep_durations == [1.0]
+
+
 # Test: SPEAK action records topic history when classifier is set
 @pytest.mark.asyncio
 async def test_speak_action_records_topic_history_when_classifier_is_set() -> None:
@@ -126,9 +206,7 @@ async def test_speak_action_records_topic_history_when_classifier_is_set() -> No
     await usecase.execute(action_plan)
 
     entries = topic_history.recent_entries()
-    assert topic_classifier.classified_texts == [
-        "透明な体でゆらゆら漂う生き物って不思議だよね。"
-    ]
+    assert topic_classifier.classified_texts == ["透明な体でゆらゆら漂う生き物って不思議だよね。"]
     assert len(entries) == 1
     assert entries[0].category == TopicCategory.SEA_LIFE
     assert entries[0].summary == "透明な体でゆらゆら漂う生き物って不思議だよね。"
@@ -157,9 +235,7 @@ async def test_speak_action_records_topic_memory_when_embedding_and_store_are_se
 
     await usecase.execute(action_plan)
 
-    assert embedding_generator.received_texts == [
-        "海の色は時間や天気で変わるのが面白いよね。"
-    ]
+    assert embedding_generator.received_texts == ["海の色は時間や天気で変わるのが面白いよね。"]
     assert len(topic_memory_store.saved_entries) == 1
     saved_entry = topic_memory_store.saved_entries[0]
     assert saved_entry.category == TopicCategory.NATURE
@@ -172,7 +248,9 @@ async def test_speak_action_records_topic_memory_when_embedding_and_store_are_se
 
 # Test: SPEAK action does not record topic memory when embedding generator is not set
 @pytest.mark.asyncio
-async def test_speak_action_does_not_record_topic_memory_when_embedding_generator_is_not_set() -> None:
+async def test_speak_action_does_not_record_topic_memory_when_embedding_generator_is_not_set() -> (
+    None
+):
     topic_history = TopicHistory()
     topic_classifier = FakeTopicClassifier(category=TopicCategory.NATURE)
     topic_memory_store = FakeTopicMemoryStore()
@@ -232,15 +310,14 @@ async def test_speak_action_does_not_record_topic_history_when_classifier_is_not
 
 # Test: SPEAK action records topic memory with generated summary
 
+
 @pytest.mark.asyncio
 async def test_speak_action_records_topic_memory_with_generated_summary() -> None:
     topic_history = TopicHistory()
     topic_classifier = FakeTopicClassifier(category=TopicCategory.SEA_LIFE)
     embedding_generator = FakeEmbeddingGenerator(embedding=[0.1, 0.2, 0.3])
     topic_memory_store = FakeTopicMemoryStore()
-    memory_summary_generator = FakeMemorySummaryGenerator(
-        summary="クラゲ展示がきれいだった記憶"
-    )
+    memory_summary_generator = FakeMemorySummaryGenerator(summary="クラゲ展示がきれいだった記憶")
     usecase = ExecuteActionUsecase(
         topic_history=topic_history,
         topic_classifier=topic_classifier,

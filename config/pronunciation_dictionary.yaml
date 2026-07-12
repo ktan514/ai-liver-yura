@@ -1,0 +1,8 @@
+rules:
+  - surface: "どんな風に"
+    reading: "どんなふうに"
+    priority: 100
+    enabled: true
+    match_type: literal
+    description: "風を様態の意味で使用する表現"
+

@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 
-from app.utils.trace import TraceLogger
 from app.domain.actions import ActionPlan, ActionType
+from app.domain.emotions import EmotionState
 from app.domain.events import AgentEvent, AgentEventType
+from app.domain.short_term_memory import ShortTermMemory
 from app.domain.topic import TopicCategory, TopicHistory
 from app.domain.topic_classifier import TopicClassifier
 from app.domain.topic_memory import TopicMemoryEntry
+from app.ports.audio_player import AudioPlayer
 from app.ports.embedding_generator import EmbeddingGenerator
-from app.ports.memory_summary_generator import MemorySummaryGenerator
 from app.ports.event_publisher import EventPublisher
+from app.ports.memory_summary_generator import MemorySummaryGenerator
+from app.ports.speech_synthesizer import SpeechSynthesizer
 from app.ports.topic_memory_store import TopicMemoryStore
-from app.domain.short_term_memory import ShortTermMemory
+from app.utils.trace import TraceLogger
 
 
 class ExecuteActionUsecase:
@@ -31,6 +35,9 @@ class ExecuteActionUsecase:
         embedding_generator: EmbeddingGenerator | None = None,
         topic_memory_store: TopicMemoryStore | None = None,
         memory_summary_generator: MemorySummaryGenerator | None = None,
+        speech_synthesizer: SpeechSynthesizer | None = None,
+        audio_player: AudioPlayer | None = None,
+        emotion_provider: Callable[[], EmotionState] | None = None,
     ) -> None:
         self._event_publisher = event_publisher
         self._short_term_memory = short_term_memory or ShortTermMemory()
@@ -39,6 +46,9 @@ class ExecuteActionUsecase:
         self._embedding_generator = embedding_generator
         self._topic_memory_store = topic_memory_store
         self._memory_summary_generator = memory_summary_generator
+        self._speech_synthesizer = speech_synthesizer
+        self._audio_player = audio_player
+        self._emotion_provider = emotion_provider
         self._trace_logger = TraceLogger()
 
     async def execute(self, action_plan: ActionPlan) -> None:
@@ -48,9 +58,7 @@ class ExecuteActionUsecase:
             action_type=action_plan.action_type.value,
             source_activity_id=action_plan.source_activity_id,
             text_length=len(action_plan.text),
-            required_resources=[
-                resource.value for resource in action_plan.required_resources
-            ],
+            required_resources=[resource.value for resource in action_plan.required_resources],
         )
         if action_plan.action_type == ActionType.SPEAK:
             self._trace_logger.write(
@@ -65,18 +73,8 @@ class ExecuteActionUsecase:
                 action_id=action_plan.action_id,
                 source_activity_id=action_plan.source_activity_id,
             )
-            estimated_duration_seconds = self._estimate_speech_duration_seconds(
-                action_plan.text
-            )
-            self._trace_logger.write(
-                "execute_action_usecase:speak:estimated_duration",
-                action_id=action_plan.action_id,
-                source_activity_id=action_plan.source_activity_id,
-                text_length=len(action_plan.text),
-                estimated_duration_seconds=estimated_duration_seconds,
-            )
             print(f"[{action_plan.action_type.value}] {action_plan.text}")
-            await asyncio.sleep(estimated_duration_seconds)
+            await self._play_speech(action_plan)
             await self._publish_speech_event(AgentEventType.SPEECH_FINISHED, action_plan)
             self._trace_logger.write(
                 "execute_action_usecase:speak:speech_finished_published",
@@ -154,6 +152,38 @@ class ExecuteActionUsecase:
         maximum_seconds = 20.0
         estimated_seconds = len(text) / chars_per_second
         return max(minimum_seconds, min(maximum_seconds, estimated_seconds))
+
+    async def _play_speech(self, action_plan: ActionPlan) -> None:
+        if self._speech_synthesizer is not None and self._audio_player is not None:
+            try:
+                emotion = self._emotion_provider() if self._emotion_provider is not None else None
+                audio_data = await self._speech_synthesizer.synthesize(
+                    action_plan.text, emotion=emotion
+                )
+                await self._audio_player.play(audio_data)
+                self._trace_logger.info(
+                    "execute_action_usecase:speak:audio_played",
+                    action_id=action_plan.action_id,
+                    audio_bytes=len(audio_data),
+                )
+                return
+            except Exception as error:
+                self._trace_logger.warning(
+                    "execute_action_usecase:speak:audio_fallback",
+                    action_id=action_plan.action_id,
+                    error_type=type(error).__name__,
+                    error_message=str(error),
+                )
+
+        estimated_duration_seconds = self._estimate_speech_duration_seconds(action_plan.text)
+        self._trace_logger.write(
+            "execute_action_usecase:speak:estimated_duration",
+            action_id=action_plan.action_id,
+            source_activity_id=action_plan.source_activity_id,
+            text_length=len(action_plan.text),
+            estimated_duration_seconds=estimated_duration_seconds,
+        )
+        await asyncio.sleep(estimated_duration_seconds)
 
     async def _record_topic_history(self, action_plan: ActionPlan) -> None:
         if self._topic_history is None or self._topic_classifier is None:
