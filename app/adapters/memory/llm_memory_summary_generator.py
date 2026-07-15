@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -50,7 +48,8 @@ class LlmMemorySummaryGenerator(MemorySummaryGenerator):
                 "- 会話口調を避ける",
                 "- 「〜だよね」「〜かな」「〜したいな」などは使わない",
                 "- キャラクターの関心・話題・印象が分かる文にする",
-                "- 文末は「〜に関心を示した」「〜に興味を持った」「〜について話題にした」などの記憶文にする",
+                "- 文末は「〜に関心を示した」「〜に興味を持った」"
+                "「〜について話題にした」などの記憶文にする",
                 "- 新しい事実を追加しない",
                 "- 出力は要約文1文のみとし、前置きや説明を付けない",
                 "",

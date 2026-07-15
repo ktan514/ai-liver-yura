@@ -16,7 +16,7 @@ class FakeHttpResponse:
     def __init__(self, body: str) -> None:
         self._body = body.encode("utf-8")
 
-    def __enter__(self) -> "FakeHttpResponse":
+    def __enter__(self) -> FakeHttpResponse:
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:

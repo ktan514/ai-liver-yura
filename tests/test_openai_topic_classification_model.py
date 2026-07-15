@@ -17,7 +17,7 @@ class FakeHttpResponse:
     def __init__(self, body: dict[str, Any]) -> None:
         self._body = body
 
-    def __enter__(self) -> "FakeHttpResponse":
+    def __enter__(self) -> FakeHttpResponse:
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
@@ -46,7 +46,9 @@ def _decode_request_body(http_request: Any) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_openai_topic_classification_model_returns_output_text(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_openai_topic_classification_model_returns_output_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     fake_urlopen = FakeUrlOpen(body={"output_text": "sea_life"})
     monkeypatch.setattr(
         "app.adapters.topic.openai_topic_classification_model.request.urlopen",

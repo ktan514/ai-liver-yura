@@ -15,11 +15,6 @@ from app.adapters.tts.voicevox_speech_synthesizer import (
     VoiceVoxSpeechSynthesizerConfig,
 )
 
-from app.adapters.tts.audio_query_corrector import NoOpAudioQueryCorrector
-from app.adapters.tts.pronunciation_corrector import PronunciationCorrector
-from app.adapters.tts.pronunciation_dictionary import PronunciationDictionary
-from app.adapters.tts.voicevox_speech_synthesizer import VoiceVoxSpeechProfile
-
 __all__ = [
     "SystemAudioPlayer",
     "AppliedPronunciationRule",

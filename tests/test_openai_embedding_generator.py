@@ -17,7 +17,7 @@ class FakeHttpResponse:
     def __init__(self, body: dict[str, Any]) -> None:
         self._body = body
 
-    def __enter__(self) -> "FakeHttpResponse":
+    def __enter__(self) -> FakeHttpResponse:
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:

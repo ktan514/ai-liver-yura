@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
-from datetime import datetime, timezone
-from enum import IntEnum
+from dataclasses import asdict, is_dataclass
+from datetime import datetime
+from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +38,37 @@ class TraceLogger:
     _format = "text"
     _max_bytes = 5 * 1024 * 1024
     _backup_count = 5
+    _timezone = "local"
+    _debug_file_enabled = False
+    _debug_file_path = Path("logs/runtime_debug.log")
+    _log_llm_prompts = False
+    _log_llm_responses = False
+    _log_user_input = False
+    _sensitive_key = re.compile(
+        r"^(?:[a-z0-9]+[_-])*(?:api[_-]?key|authorization|password|passwd|token|"
+        r"access[_-]?token|"
+        r"refresh[_-]?token|auth[_-]?token|bearer[_-]?token|secret|client[_-]?secret|"
+        r"dsn|db[_-]?url|database[_-]?url|credentials?)$",
+        re.IGNORECASE,
+    )
+    _sensitive_env_key = re.compile(
+        r"(?:api[_-]?key|authorization|password|passwd|(?:^|[_-])token(?:$|[_-])|"
+        r"secret|dsn|credential)",
+        re.IGNORECASE,
+    )
+    _inline_secret_patterns = (
+        re.compile(r"(?i)(bearer\s+)[^\s\"']+"),
+        re.compile(r"(?i)\bsk-[a-z0-9_-]{8,}\b"),
+        re.compile(r"(?i)(://[^:/\s]+:)[^@/\s]+(@)"),
+        re.compile(
+            r"(?i)\b(?:postgres(?:ql)?|mysql|mariadb|mongodb(?:\+srv)?|redis)://"
+            r"[^\s\"']+"
+        ),
+        re.compile(
+            r"(?i)((?:api[_-]?key|authorization|password|passwd|token|secret|dsn)"
+            r"\s*[:=]\s*)[^\s,;\"']+"
+        ),
+    )
 
     def __init__(self, trace_file_path: str | Path | None = None) -> None:
         self._instance_trace_file_path = (
@@ -50,6 +84,12 @@ class TraceLogger:
         output_format: str = "text",
         max_bytes: int = 5 * 1024 * 1024,
         backup_count: int = 5,
+        timezone_name: str = "local",
+        debug_file_enabled: bool = False,
+        debug_file_path: str | Path = "logs/runtime_debug.log",
+        log_llm_prompts: bool = False,
+        log_llm_responses: bool = False,
+        log_user_input: bool = False,
     ) -> None:
         normalized_format = output_format.lower()
         if normalized_format not in {"text", "jsonl"}:
@@ -58,11 +98,19 @@ class TraceLogger:
             raise ValueError("max_bytes は1以上で指定してください。")
         if backup_count < 0:
             raise ValueError("backup_count は0以上で指定してください。")
+        if timezone_name.lower() != "local":
+            raise ValueError("trace.timezone は local を指定してください。")
         cls._minimum_level = TraceLevel.parse(level)
         cls._trace_file_path = Path(trace_file_path)
         cls._format = normalized_format
         cls._max_bytes = max_bytes
         cls._backup_count = backup_count
+        cls._timezone = timezone_name.lower()
+        cls._debug_file_enabled = debug_file_enabled
+        cls._debug_file_path = Path(debug_file_path)
+        cls._log_llm_prompts = log_llm_prompts
+        cls._log_llm_responses = log_llm_responses
+        cls._log_user_input = log_user_input
 
     def debug(self, label: str, **values: object) -> None:
         self._write(TraceLevel.DEBUG, label, values)
@@ -75,6 +123,78 @@ class TraceLogger:
 
     def error(self, label: str, **values: object) -> None:
         self._write(TraceLevel.ERROR, label, values)
+
+    def llm_request(
+        self,
+        *,
+        purpose: str,
+        provider: str,
+        model: str,
+        activity_id: str | None,
+        event_id: str | None,
+        session_id: str | None,
+        request: object,
+        user_input: object = None,
+        available_capabilities: object = None,
+        planner_state: object = None,
+        constraints: object = None,
+    ) -> None:
+        if not self._log_llm_prompts:
+            return
+        self.debug(
+            "llm_request",
+            purpose=purpose,
+            provider=provider,
+            model=model,
+            activity_id=activity_id,
+            event_id=event_id,
+            session_id=session_id,
+            request=request,
+            user_input=user_input,
+            available_capabilities=available_capabilities,
+            planner_state=planner_state,
+            constraints=constraints,
+        )
+
+    def llm_response(
+        self,
+        *,
+        purpose: str,
+        provider: str,
+        model: str,
+        activity_id: str | None,
+        raw_response: object,
+        parsed_response: object = None,
+        adopted_text: str | None = None,
+        fallback_used: bool = False,
+        stage: str = "completed",
+    ) -> None:
+        if not self._log_llm_responses:
+            return
+        self.debug(
+            "llm_response",
+            purpose=purpose,
+            provider=provider,
+            model=model,
+            activity_id=activity_id,
+            stage=stage,
+            raw_response=raw_response,
+            parsed_response=parsed_response,
+            adopted_text=adopted_text,
+            fallback_used=fallback_used,
+        )
+
+    def user_input(self, *, source: str, event_id: str, text: str, normalized: bool = True) -> None:
+        if not self._log_user_input:
+            return
+        self.debug(
+            "user_input_received",
+            source=source,
+            event_id=event_id,
+            text=text,
+            normalized=normalized,
+            text_length=len(text),
+        )
 
     def write(
         self,
@@ -91,24 +211,67 @@ class TraceLogger:
     def _write(self, record_level: TraceLevel, label: str, values: dict[str, object]) -> None:
         """設定レベル以上のTraceを1行で出力する。"""
 
-        if record_level < self._minimum_level or self._minimum_level is TraceLevel.OFF:
+        primary_enabled = (
+            self._minimum_level is not TraceLevel.OFF and record_level >= self._minimum_level
+        )
+        debug_enabled = self._debug_file_enabled and self._minimum_level is not TraceLevel.OFF
+        if not primary_enabled and not debug_enabled:
             return
 
-        timestamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+        timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        masked_values = self._mask(values)
+        if not isinstance(masked_values, dict):
+            masked_values = {}
         record: dict[str, Any] = {
             "timestamp": timestamp,
             "level": record_level.name,
             "label": label,
-            **values,
+            **masked_values,
         }
         line = self._format_record(record)
         trace_file_path = self._instance_trace_file_path or self._trace_file_path
 
         with self._lock:
-            trace_file_path.parent.mkdir(parents=True, exist_ok=True)
-            self._rotate_if_needed(trace_file_path, line)
-            with trace_file_path.open("a", encoding="utf-8") as trace_file:
-                trace_file.write(line + "\n")
+            if primary_enabled:
+                self._append(trace_file_path, line)
+            if debug_enabled and self._debug_file_path != trace_file_path:
+                self._append(self._debug_file_path, line)
+
+    @classmethod
+    def _append(cls, path: Path, line: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        cls._rotate_if_needed(path, line)
+        with path.open("a", encoding="utf-8") as trace_file:
+            trace_file.write(line + "\n")
+
+    @classmethod
+    def _mask(cls, value: object, key: str | None = None) -> object:
+        if key is not None and cls._sensitive_key.search(key):
+            return "***MASKED***"
+        if isinstance(value, dict):
+            return {
+                str(item_key): cls._mask(item, str(item_key)) for item_key, item in value.items()
+            }
+        if is_dataclass(value) and not isinstance(value, type):
+            return cls._mask(asdict(value))
+        if isinstance(value, Enum):
+            return cls._mask(value.value)
+        if isinstance(value, (list, tuple, set, frozenset)):
+            return [cls._mask(item) for item in value]
+        if isinstance(value, str):
+            masked = value
+            for env_key, env_value in os.environ.items():
+                if env_value and len(env_value) >= 4 and cls._sensitive_env_key.search(env_key):
+                    masked = masked.replace(env_value, "***MASKED***")
+            for pattern in cls._inline_secret_patterns:
+                if pattern.groups == 1:
+                    masked = pattern.sub(r"\1***MASKED***", masked)
+                elif pattern.groups == 2:
+                    masked = pattern.sub(r"\1***MASKED***\2", masked)
+                else:
+                    masked = pattern.sub("***MASKED***", masked)
+            return masked
+        return value
 
     @classmethod
     def _rotate_if_needed(cls, trace_file_path: Path, line: str) -> None:
@@ -177,6 +340,15 @@ class NullTraceLogger:
         pass
 
     def error(self, label: str, **values: object) -> None:
+        pass
+
+    def llm_request(self, **values: object) -> None:
+        pass
+
+    def llm_response(self, **values: object) -> None:
+        pass
+
+    def user_input(self, **values: object) -> None:
         pass
 
     def write(

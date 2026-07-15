@@ -9,6 +9,7 @@ from app.domain.activities import Activity
 from app.domain.character import CharacterProfile
 from app.ports.prompt_builder import PromptBuilder
 from app.ports.response_generator import ResponseGenerator
+from app.utils.llm_trace import build_llm_trace_context
 from app.utils.trace import TraceLogger
 
 
@@ -23,6 +24,7 @@ class OllamaResponseGenerator(ResponseGenerator):
         api_url: str = "http://localhost:11434/api/generate",
         timeout_seconds: float = 60.0,
         fallback_response: str = "うまく言葉が出てこなかったみたい。もう一度話しかけてね。",
+        temperature: float | None = None,
     ) -> None:
         self._character_profile = character_profile
         self._prompt_builder = prompt_builder
@@ -30,6 +32,7 @@ class OllamaResponseGenerator(ResponseGenerator):
         self._api_url = api_url
         self._timeout_seconds = timeout_seconds
         self._fallback_response = fallback_response
+        self._temperature = temperature
         self.latest_prompt: str | None = None
         self._trace_logger = TraceLogger()
 
@@ -60,6 +63,22 @@ class OllamaResponseGenerator(ResponseGenerator):
             "prompt": self.latest_prompt,
             "stream": False,
         }
+        if self._temperature is not None:
+            payload["options"] = {"temperature": self._temperature}
+        trace_context = build_llm_trace_context(activity)
+        self._trace_logger.llm_request(
+            purpose=trace_context.purpose,
+            provider="ollama",
+            model=self._model,
+            activity_id=trace_context.activity_id,
+            event_id=trace_context.event_id,
+            session_id=trace_context.session_id,
+            request=payload,
+            user_input=trace_context.user_input,
+            available_capabilities=trace_context.available_capabilities,
+            planner_state=trace_context.planner_state,
+            constraints=trace_context.constraints,
+        )
 
         self._trace_logger.write(
             "ollama_response_generator:generate_response:request_start",
@@ -77,6 +96,17 @@ class OllamaResponseGenerator(ResponseGenerator):
             response_keys=list(response_data.keys()),
         )
         response_text = str(response_data.get("response", "")).strip()
+        self._trace_logger.llm_response(
+            purpose=trace_context.purpose,
+            provider="ollama",
+            model=self._model,
+            activity_id=trace_context.activity_id,
+            raw_response=response_data,
+            parsed_response={"response": response_text},
+            adopted_text=response_text or self._fallback_response,
+            fallback_used=not bool(response_text),
+            stage="adopted",
+        )
 
         if not response_text:
             self._trace_logger.write(

@@ -32,7 +32,10 @@ async def test_generate_summary_uses_model_response() -> None:
     assert "あなたはAIキャラクターの長期記憶を作る要約器です。" in model.received_prompts[0]
     assert "# 条件" in model.received_prompts[0]
     assert "# 発話" in model.received_prompts[0]
-    assert "海で見たイルカのジャンプを思い出してたんだ。あの軽やかさって、何度見ても飽きないなあ。" in model.received_prompts[0]
+    assert (
+        "海で見たイルカのジャンプを思い出してたんだ。"
+        "あの軽やかさって、何度見ても飽きないなあ。" in model.received_prompts[0]
+    )
 
 
 @pytest.mark.asyncio
@@ -49,7 +52,8 @@ async def test_generate_summary_normalizes_input_and_model_response_whitespace()
 
 
 @pytest.mark.asyncio
-async def test_generate_summary_returns_empty_string_without_calling_model_when_text_is_blank() -> None:
+async def test_generate_summary_returns_empty_string_without_calling_model_when_text_is_blank(
+) -> None:
     model = FakeMemorySummaryModel(summary="呼ばれない")
     generator = LlmMemorySummaryGenerator(model=model)
 

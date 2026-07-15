@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import pytest
@@ -10,6 +11,7 @@ from app.adapters.llm import OllamaResponseGenerator
 from app.adapters.prompt import SimplePromptBuilder
 from app.domain.activities import Activity, ActivityType
 from app.domain.character import CharacterProfile
+from app.utils.trace import TraceLogger
 
 
 class FakeOllamaResponseGenerator(OllamaResponseGenerator):
@@ -92,6 +94,47 @@ async def test_ollama_response_generator_sends_expected_payload() -> None:
     assert generator.sent_payload["model"] == "test-model"
     assert generator.sent_payload["prompt"] == generator.latest_prompt
     assert generator.sent_payload["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_ollama_response_generator_logs_actual_request_and_response_to_debug(
+    tmp_path,
+) -> None:
+    debug_file = tmp_path / "runtime_debug.log"
+    TraceLogger.configure(
+        level="INFO",
+        trace_file_path=tmp_path / "runtime_trace.log",
+        output_format="jsonl",
+        debug_file_enabled=True,
+        debug_file_path=debug_file,
+        log_llm_prompts=True,
+        log_llm_responses=True,
+    )
+    generator = FakeOllamaResponseGenerator(response_data={"response": "採用された返答全文"})
+    try:
+        await generator.generate_response(_create_conversation_activity())
+
+        records = [
+            json.loads(line)
+            for line in debug_file.read_text(encoding="utf-8").splitlines()
+        ]
+        request_record = next(record for record in records if record["label"] == "llm_request")
+        response_record = next(
+            record for record in records if record["label"] == "llm_response"
+        )
+        assert request_record["purpose"] == "conversation_generation"
+        assert request_record["provider"] == "ollama"
+        assert request_record["model"] == "test-model"
+        assert request_record["request"] == generator.sent_payload
+        assert "こんにちは" in request_record["request"]["prompt"]
+        assert response_record["raw_response"] == {"response": "採用された返答全文"}
+        assert response_record["parsed_response"] == {"response": "採用された返答全文"}
+        assert response_record["adopted_text"] == "採用された返答全文"
+    finally:
+        TraceLogger.configure(
+            level="INFO",
+            trace_file_path=tmp_path / "restored.log",
+        )
 
 
 @pytest.mark.asyncio
