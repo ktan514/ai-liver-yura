@@ -22,6 +22,12 @@ class TraceSettings:
     file_path: str
     max_bytes: int
     backup_count: int
+    timezone: str = "local"
+    debug_file_enabled: bool = False
+    debug_file_path: str = "logs/runtime_debug.log"
+    log_llm_prompts: bool = False
+    log_llm_responses: bool = False
+    log_user_input: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +51,21 @@ class ResponseGeneratorSettings:
     type: str
     model: str
     fallback_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class LlmRoleSettings:
+    model: str
+    temperature: float
+    timeout_seconds: float
+    fallback_response: str
+
+
+@dataclass(frozen=True, slots=True)
+class LlmRolesSettings:
+    situation_evaluator: LlmRoleSettings
+    character: LlmRoleSettings
+    response_validator: LlmRoleSettings
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,17 +150,54 @@ class InputReceiverSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ConfirmationSettings:
+    timeout_seconds: float
+    max_attempts: int
+
+
+@dataclass(frozen=True, slots=True)
+class GameIntentInterpreterSettings:
+    enabled: bool = True
+    model: str | None = None
+    confidence_threshold: float = 0.85
+    max_attempts: int = 2
+
+
+@dataclass(frozen=True, slots=True)
+class ShiritoriPluginSettings:
+    enabled: bool = True
+    max_generation_retries: int = 3
+
+
+@dataclass(frozen=True, slots=True)
+class GamesPluginSettings:
+    enabled: bool = True
+    intent_interpreter: GameIntentInterpreterSettings = field(
+        default_factory=GameIntentInterpreterSettings
+    )
+    shiritori: ShiritoriPluginSettings = field(default_factory=ShiritoriPluginSettings)
+
+
+@dataclass(frozen=True, slots=True)
+class PluginSettings:
+    games: GamesPluginSettings = field(default_factory=GamesPluginSettings)
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     app: AppSettings
     trace: TraceSettings
     services: dict[str, ServiceSettings]
     models: dict[str, ModelSettings]
     response_generator: ResponseGeneratorSettings
+    llm_roles: LlmRolesSettings
     speech: SpeechSettings
     topic_classifier: TopicClassifierSettings
     memory: MemorySettings
     character: CharacterSettings
     input_receivers: InputReceiverSettings
+    confirmation: ConfirmationSettings
+    plugins: PluginSettings = field(default_factory=PluginSettings)
 
 
 def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
@@ -153,6 +211,7 @@ def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
         response_generator=_load_response_generator_settings(
             _require_dict(raw_config, "response_generator")
         ),
+        llm_roles=_load_llm_roles_settings(_require_dict(raw_config, "llm_roles")),
         speech=_load_speech_settings(_require_dict(raw_config, "speech")),
         topic_classifier=_load_topic_classifier_settings(
             _require_dict(raw_config, "topic_classifier")
@@ -160,6 +219,49 @@ def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
         memory=_load_memory_settings(_require_dict(raw_config, "memory")),
         character=_load_character_settings(_require_dict(raw_config, "character")),
         input_receivers=_load_input_receiver_settings(_require_dict(raw_config, "input_receivers")),
+        confirmation=_load_confirmation_settings(_require_dict(raw_config, "confirmation")),
+        plugins=_load_plugin_settings(raw_config.get("plugins")),
+    )
+
+
+def _load_plugin_settings(value: object) -> PluginSettings:
+    if value is None:
+        return PluginSettings()
+    if not isinstance(value, dict):
+        raise RuntimeError("plugins はobject形式で指定してください。")
+    games = value.get("games", {})
+    if not isinstance(games, dict):
+        raise RuntimeError("plugins.games はobject形式で指定してください。")
+    interpreter = games.get("intent_interpreter", {})
+    shiritori = games.get("shiritori", {})
+    if not isinstance(interpreter, dict) or not isinstance(shiritori, dict):
+        raise RuntimeError("plugins.games配下はobject形式で指定してください。")
+    threshold = interpreter.get("confidence_threshold", 0.85)
+    if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+        raise RuntimeError("confidence_threshold は数値で指定してください。")
+    return PluginSettings(
+        games=GamesPluginSettings(
+            enabled=bool(games.get("enabled", True)),
+            intent_interpreter=GameIntentInterpreterSettings(
+                enabled=bool(interpreter.get("enabled", True)),
+                model=interpreter.get("model")
+                if isinstance(interpreter.get("model"), str)
+                else None,
+                confidence_threshold=float(threshold),
+                max_attempts=int(interpreter.get("max_attempts", 2)),
+            ),
+            shiritori=ShiritoriPluginSettings(
+                enabled=bool(shiritori.get("enabled", True)),
+                max_generation_retries=int(shiritori.get("max_generation_retries", 3)),
+            ),
+        )
+    )
+
+
+def _load_confirmation_settings(config: dict[str, Any]) -> ConfirmationSettings:
+    return ConfirmationSettings(
+        timeout_seconds=_require_positive_float(config, "timeout_seconds"),
+        max_attempts=_require_positive_int(config, "max_attempts"),
     )
 
 
@@ -193,12 +295,22 @@ def _load_trace_settings(config: dict[str, Any]) -> TraceSettings:
     output_format = _require_string(config, "format").lower()
     if output_format not in {"text", "jsonl"}:
         raise RuntimeError("trace.format は text または jsonl を指定してください。")
+    timezone_name = str(config.get("timezone", "local")).lower()
+    if timezone_name != "local":
+        raise RuntimeError("trace.timezone は local を指定してください。")
+    debug_file_path = _optional_string(config, "debug_file_path")
     return TraceSettings(
         level=level,
         format=output_format,
         file_path=_require_string(config, "file_path"),
         max_bytes=_require_positive_int(config, "max_bytes"),
         backup_count=_require_non_negative_int(config, "backup_count"),
+        timezone=timezone_name,
+        debug_file_enabled=_optional_bool(config, "debug_file_enabled", False),
+        debug_file_path=debug_file_path or "logs/runtime_debug.log",
+        log_llm_prompts=_optional_bool(config, "log_llm_prompts", False),
+        log_llm_responses=_optional_bool(config, "log_llm_responses", False),
+        log_user_input=_optional_bool(config, "log_user_input", False),
     )
 
 
@@ -206,6 +318,31 @@ def _load_response_generator_settings(config: dict[str, Any]) -> ResponseGenerat
     return ResponseGeneratorSettings(
         type=_require_string(config, "type"),
         model=_require_string(config, "model"),
+        fallback_response=_require_string(config, "fallback_response"),
+    )
+
+
+def _load_llm_roles_settings(config: dict[str, Any]) -> LlmRolesSettings:
+    return LlmRolesSettings(
+        situation_evaluator=_load_llm_role_settings(
+            _require_dict(config, "situation_evaluator"), "situation_evaluator"
+        ),
+        character=_load_llm_role_settings(_require_dict(config, "character"), "character"),
+        response_validator=_load_llm_role_settings(
+            _require_dict(config, "response_validator"), "response_validator"
+        ),
+    )
+
+
+def _load_llm_role_settings(config: dict[str, Any], role: str) -> LlmRoleSettings:
+    temperature = _require_float(config, "temperature")
+    if not 0.0 <= temperature <= 2.0:
+        raise RuntimeError(f"llm_roles.{role}.temperature は0.0以上2.0以下にしてください。")
+    timeout = _require_positive_float(config, "timeout_seconds")
+    return LlmRoleSettings(
+        model=_require_string(config, "model"),
+        temperature=temperature,
+        timeout_seconds=timeout,
         fallback_response=_require_string(config, "fallback_response"),
     )
 
@@ -454,6 +591,13 @@ def _optional_int(config: dict[str, Any], key: str) -> int | None:
         return None
     if not isinstance(value, int):
         raise RuntimeError(f"{key} は整数で指定してください。")
+    return value
+
+
+def _optional_bool(config: dict[str, Any], key: str, default: bool) -> bool:
+    value = config.get(key, default)
+    if not isinstance(value, bool):
+        raise RuntimeError(f"{key} は true または false で指定してください。")
     return value
 
 

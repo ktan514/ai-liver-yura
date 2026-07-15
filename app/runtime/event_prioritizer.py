@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from dataclasses import replace
@@ -11,8 +9,7 @@ from app.domain.events import AgentEvent, AgentEventType
 class EventPrioritizer(Protocol):
     """EventQueue投入前にイベント優先度を補正するPort。"""
 
-    def prioritize(self, event: AgentEvent) -> AgentEvent:
-        ...
+    def prioritize(self, event: AgentEvent) -> AgentEvent: ...
 
 
 class DefaultEventPrioritizer:

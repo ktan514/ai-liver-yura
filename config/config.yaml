@@ -10,6 +10,15 @@ trace:
   # textは人向け、jsonlは機械処理向け
   format: text
   file_path: logs/runtime_trace.log
+  # ログ表示は実行環境のローカルタイムゾーンを使用する
+  timezone: local
+  # INFO概要とは別に、DEBUGを含む詳細ログを出力する
+  debug_file_enabled: true
+  debug_file_path: logs/runtime_debug.log
+  # 機密情報は共通マスク処理を通してDEBUGファイルへ記録する
+  log_llm_prompts: true
+  log_llm_responses: true
+  log_user_input: true
   # ファイルがこのサイズを超えるとローテーションする（5 MiB）
   max_bytes: 5242880
   # runtime_trace.log.1 から指定数まで保持する
@@ -52,6 +61,25 @@ response_generator:
   type: llm
   model: openai_chat
   fallback_response: うまく言葉が出てこなかったみたい。もう一度話しかけてね。
+
+# LLMの責務ごとにモデルと失敗時の扱いを明示する。
+# modelは上のmodelsキーを参照し、Providerはmodels.<key>.serviceから解決する。
+llm_roles:
+  situation_evaluator:
+    model: openai_chat
+    temperature: 0.1
+    timeout_seconds: 30.0
+    fallback_response: '{"activity_type":"conversation","operation":"discuss","goal":"通常会話で応答する","constraints":{},"speech_act":"statement","negated":false,"hypothetical":false,"past_reference":false,"knowledge_question":false,"confidence":0.0,"reason":"evaluation_failed"}'
+  character:
+    model: openai_chat
+    temperature: 0.7
+    timeout_seconds: 60.0
+    fallback_response: '{"speech":"うまく言葉にできなかったみたい。もう一度話しかけてね。","expression":"soft_smile","gesture":null,"claims":["conversation_only"]}'
+  response_validator:
+    model: openai_chat
+    temperature: 0.0
+    timeout_seconds: 30.0
+    fallback_response: '{"accepted":false,"reason":"validation_failed"}'
 
 speech:
   enabled: true
@@ -144,3 +172,20 @@ input_receivers:
     enabled: false
     interval_seconds: 30.0
     max_events: null
+
+# 曖昧な行動判断を実行せず、次のユーザー入力で解決する確認待ち設定。
+confirmation:
+  timeout_seconds: 30.0
+  max_attempts: 2
+
+plugins:
+  games:
+    enabled: false
+    intent_interpreter:
+      enabled: true
+      model: openai_chat
+      confidence_threshold: 0.85
+      max_attempts: 2
+    shiritori:
+      enabled: true
+      max_generation_retries: 3

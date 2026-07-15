@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from dataclasses import replace
@@ -11,8 +9,7 @@ from app.domain.events import AgentEvent, AgentEventType
 class EventFilter(Protocol):
     """EventQueue投入前にイベントを正規化・破棄判定するPort。"""
 
-    def filter(self, event: AgentEvent) -> AgentEvent | None:
-        ...
+    def filter(self, event: AgentEvent) -> AgentEvent | None: ...
 
 
 class DefaultEventFilter:

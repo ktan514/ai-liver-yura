@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from queue import Queue
 
 from app.adapters.embedding.openai_embedding_generator import (
@@ -9,6 +10,7 @@ from app.adapters.embedding.openai_embedding_generator import (
 )
 from app.adapters.llm import (
     DummyResponseGenerator,
+    LegacyCharacterModelAdapter,
     OllamaResponseGenerator,
     OpenAIResponseGenerator,
 )
@@ -22,36 +24,51 @@ from app.adapters.memory import (
     SimpleMemorySummaryGenerator,
     SimpleMemorySummaryGeneratorConfig,
 )
-from app.adapters.prompt import SimplePromptBuilder
+from app.adapters.prompt import (
+    CharacterPromptBuilder,
+    ResponseValidatorPromptBuilder,
+    SimplePromptBuilder,
+    SituationEvaluatorPromptBuilder,
+)
 from app.adapters.storage.postgres_topic_memory_store import (
     PostgresTopicMemoryStore,
     PostgresTopicMemoryStoreConfig,
 )
-from app.adapters.topic import ( 
-    LlmTopicClassifier, 
-    TopicClassificationModel,
+from app.adapters.topic import (
+    LlmTopicClassifier,
     OllamaTopicClassificationConfig,
     OllamaTopicClassificationModel,
     OpenAITopicClassificationConfig,
     OpenAITopicClassificationModel,
+    TopicClassificationModel,
 )
 from app.adapters.tts import (
-    SystemAudioPlayer,
-    VoiceVoxSpeechSynthesizer,
-    VoiceVoxSpeechSynthesizerConfig,
-    VoiceVoxSpeechProfile,
     NoOpAudioQueryCorrector,
     PronunciationCorrector,
     PronunciationDictionary,
+    SystemAudioPlayer,
+    VoiceVoxSpeechProfile,
+    VoiceVoxSpeechSynthesizer,
+    VoiceVoxSpeechSynthesizerConfig,
 )
-from app.config.app_config import AppConfig, ModelSettings, ServiceSettings
+from app.config.app_config import (
+    AppConfig,
+    LlmRoleSettings,
+    ModelSettings,
+    ResponseGeneratorSettings,
+    ServiceSettings,
+)
+from app.core.plugins import PluginContext, PluginManager, SystemClock
+from app.domain.activities import Activity, ActivityStatus
 from app.domain.character import CharacterProfile
 from app.domain.drives import DriveState
 from app.domain.short_term_memory import ShortTermMemory
 from app.domain.topic import TopicHistory
 from app.domain.topic_classifier import TopicClassifier
+from app.plugins.games import GamesPlugin
 from app.ports.audio_player import AudioPlayer
 from app.ports.embedding_generator import EmbeddingGenerator
+from app.ports.llm_roles import ResponseGeneratorRoleAdapter
 from app.ports.memory_summary_generator import MemorySummaryGenerator
 from app.ports.memory_summary_model import MemorySummaryModel
 from app.ports.speech_synthesizer import SpeechSynthesizer
@@ -65,11 +82,21 @@ from app.runtime.activity_planner_thread import (
     ActivityPlanningRequest,
     ActivityPlanningService,
 )
+from app.runtime.activity_registry import ActivityRegistry
 from app.runtime.agent_life_service import AgentLifeService
+from app.runtime.behavior_planner import ActivityPlanValidator, BehaviorPlanner
+from app.runtime.character_response_pipeline import (
+    CharacterLlmService,
+    CharacterResponsePipeline,
+    ResponseContextBuilder,
+    ResponseValidator,
+)
 from app.runtime.event_bus import EventBus
 from app.runtime.event_queue import EventQueue
+from app.runtime.pending_confirmation import ConfirmationResolver, PendingConfirmationManager
 from app.runtime.planned_activity_queue import PlannedActivityQueue
 from app.runtime.runtime_coordinator import RuntimeCoordinator
+from app.runtime.situation_evaluator import SituationEvaluator
 from app.usecases import ExecuteActionUsecase
 from app.usecases.enrich_activity_with_topic_memory_usecase import (
     EnrichActivityWithTopicMemoryUsecase,
@@ -169,6 +196,8 @@ def create_response_generator(
     config: AppConfig,
     character_profile: CharacterProfile,
     prompt_builder: SimplePromptBuilder,
+    *,
+    temperature: float | None = None,
 ) -> DummyResponseGenerator | OllamaResponseGenerator | OpenAIResponseGenerator:
     response_generator: DummyResponseGenerator | OllamaResponseGenerator | OpenAIResponseGenerator
     response_generator_config = config.response_generator
@@ -210,6 +239,7 @@ def create_response_generator(
             api_url=f"{base_url.rstrip('/')}/api/generate",
             timeout_seconds=_service_timeout(service_config),
             fallback_response=response_generator_config.fallback_response,
+            temperature=temperature,
         )
         trace_logger.write(
             "runtime_factory:create_response_generator:finished",
@@ -233,6 +263,7 @@ def create_response_generator(
             fallback_response=response_generator_config.fallback_response,
             character_profile=character_profile,
             prompt_builder=prompt_builder,
+            temperature=temperature,
         )
         trace_logger.write(
             "runtime_factory:create_response_generator:finished",
@@ -250,6 +281,34 @@ def create_response_generator(
         service_type=service_config.type,
     )
     raise RuntimeError(f"未対応のモデルサービスです: {service_config.type}")
+
+
+def create_llm_role_generator(
+    config: AppConfig,
+    settings: LlmRoleSettings,
+    character_profile: CharacterProfile,
+    prompt_builder: SimplePromptBuilder,
+) -> DummyResponseGenerator | OllamaResponseGenerator | OpenAIResponseGenerator:
+    """役割ごとに独立したAdapterを生成する。旧設定への暗黙フォールバックはしない。"""
+
+    model, service = _resolve_model(config, settings.model)
+    services = dict(config.services)
+    services[model.service] = replace(service, timeout_seconds=settings.timeout_seconds)
+    role_config = replace(
+        config,
+        services=services,
+        response_generator=ResponseGeneratorSettings(
+            type=config.response_generator.type,
+            model=settings.model,
+            fallback_response=settings.fallback_response,
+        ),
+    )
+    return create_response_generator(
+        config=role_config,
+        character_profile=character_profile,
+        prompt_builder=prompt_builder,
+        temperature=settings.temperature,
+    )
 
 
 def create_topic_classifier(config: AppConfig) -> TopicClassifier | None:
@@ -557,7 +616,14 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
     event_queue = EventQueue()
     event_bus = EventBus(event_queue)
     activity_manager = ActivityManager()
-    agent_life_service = AgentLifeService(activity_manager)
+    pending_confirmation_manager = PendingConfirmationManager(
+        timeout_seconds=config.confirmation.timeout_seconds,
+        max_attempts=config.confirmation.max_attempts,
+    )
+    agent_life_service = AgentLifeService(
+        activity_manager,
+        pending_confirmation_provider=pending_confirmation_manager.has_pending,
+    )
     agent_life_service.update_drive(
         DriveState(
             curiosity=0.72,
@@ -578,6 +644,74 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         character_profile=character_profile,
         prompt_builder=prompt_builder,
     )
+    situation_generator = response_generator
+    if config.response_generator.type == "dummy":
+        character_response_pipeline = CharacterResponsePipeline(
+            ResponseContextBuilder(),
+            CharacterLlmService(
+                LegacyCharacterModelAdapter(response_generator),
+                character_profile,
+                CharacterPromptBuilder(),
+            ),
+            ResponseValidator(prompt_builder=ResponseValidatorPromptBuilder()),
+        )
+    else:
+        situation_generator = create_llm_role_generator(
+            config,
+            config.llm_roles.situation_evaluator,
+            character_profile,
+            prompt_builder,
+        )
+        character_generator = create_llm_role_generator(
+            config,
+            config.llm_roles.character,
+            character_profile,
+            prompt_builder,
+        )
+        validator_generator = create_llm_role_generator(
+            config,
+            config.llm_roles.response_validator,
+            character_profile,
+            prompt_builder,
+        )
+        character_response_pipeline = CharacterResponsePipeline(
+            ResponseContextBuilder(),
+            CharacterLlmService(
+                ResponseGeneratorRoleAdapter(character_generator),
+                character_profile,
+                CharacterPromptBuilder(),
+            ),
+            ResponseValidator(
+                ResponseGeneratorRoleAdapter(validator_generator),
+                ResponseValidatorPromptBuilder(),
+            ),
+        )
+    plugin_manager = PluginManager()
+    plugin_manager.register(GamesPlugin())
+    game_model = config.plugins.games.intent_interpreter.model or config.response_generator.model
+    plugin_manager.initialize_enabled_plugins(
+        PluginContext(
+            llm_gateway=response_generator,
+            activity_gateway=_ActivityManagerPluginGateway(activity_manager),
+            clock=SystemClock(),
+            configuration={
+                "intent_interpreter": {
+                    "enabled": config.plugins.games.intent_interpreter.enabled,
+                    "model": game_model,
+                    "confidence_threshold": (
+                        config.plugins.games.intent_interpreter.confidence_threshold
+                    ),
+                    "max_attempts": config.plugins.games.intent_interpreter.max_attempts,
+                },
+                "shiritori": {
+                    "enabled": config.plugins.games.shiritori.enabled,
+                    "max_generation_retries": config.plugins.games.shiritori.max_generation_retries,
+                },
+                "llm_available": _is_model_provider_available(config, game_model),
+            },
+        ),
+        {"games": config.plugins.games.enabled},
+    )
     topic_classifier = create_topic_classifier(config)
     embedding_generator = create_embedding_generator(config)
     topic_memory_store = create_topic_memory_store(config)
@@ -588,7 +722,27 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         embedding_generator=embedding_generator,
         topic_memory_store=topic_memory_store,
     )
-    action_planner = ActionPlanner(response_generator=response_generator)
+
+    def activity_is_active(activity_id: str) -> bool:
+        current = activity_manager.get_activity(activity_id)
+        return current is not None and current.status == ActivityStatus.ACTIVE
+
+    action_planner = ActionPlanner(
+        response_generator=response_generator,
+        character_response_pipeline=character_response_pipeline,
+        activity_is_active=activity_is_active,
+    )
+    behavior_planner = BehaviorPlanner(
+        situation_evaluator=SituationEvaluator(
+            ResponseGeneratorRoleAdapter(situation_generator),
+            prompt_builder=SituationEvaluatorPromptBuilder(),
+        )
+    )
+    activity_registry = ActivityRegistry(plugin_manager.list_activity_definitions)
+    activity_plan_validator = ActivityPlanValidator(
+        plugin_manager.is_capability_available,
+        activity_registry.list_definitions,
+    )
     execute_action_usecase = ExecuteActionUsecase(
         event_publisher=event_bus,
         short_term_memory=short_term_memory,
@@ -608,6 +762,10 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         agent_life_service=agent_life_service,
         activity_manager=activity_manager,
         enrich_activity_with_topic_memory_usecase=enrich_activity_with_topic_memory_usecase,
+        behavior_planner=behavior_planner,
+        short_term_memory=short_term_memory,
+        topic_history=topic_history,
+        available_activity_definitions=activity_registry.list_definitions,
     )
     activity_planner_thread = ActivityPlannerThread(
         request_queue=activity_planning_request_queue,
@@ -632,6 +790,12 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         activity_planning_request_queue=activity_planning_request_queue,
         activity_planner_thread=activity_planner_thread,
         activity_executor_thread=activity_executor_thread,
+        plugin_manager=plugin_manager,
+        behavior_planner=behavior_planner,
+        activity_plan_validator=activity_plan_validator,
+        activity_registry=activity_registry,
+        pending_confirmation_manager=pending_confirmation_manager,
+        confirmation_resolver=ConfirmationResolver(),
     )
     trace_logger.write(
         "runtime_factory:create_runtime_coordinator:finished",
@@ -658,3 +822,25 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         activity_executor_thread_class=type(activity_executor_thread).__name__,
     )
     return runtime_coordinator
+
+
+class _ActivityManagerPluginGateway:
+    def __init__(self, activity_manager: ActivityManager) -> None:
+        self._activity_manager = activity_manager
+
+    def register(self, activity: Activity) -> Activity:
+        return self._activity_manager.register_plugin_activity(activity)
+
+
+def _is_model_provider_available(config: AppConfig, model_key: str) -> bool:
+    if config.response_generator.type == "dummy":
+        return True
+    model = config.models.get(model_key)
+    if model is None:
+        return False
+    service = config.services.get(model.service)
+    if service is None:
+        return False
+    if service.type == "openai":
+        return bool(service.api_key_env and os.getenv(service.api_key_env))
+    return True
