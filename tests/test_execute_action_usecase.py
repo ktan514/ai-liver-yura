@@ -175,12 +175,18 @@ async def test_speak_keeps_original_text_for_display_and_memory(capsys) -> None:
 @pytest.mark.asyncio
 async def test_speak_action_falls_back_when_synthesis_fails(monkeypatch) -> None:
     sleep_durations: list[float] = []
+    memory = ShortTermMemory()
+    topic_history = TopicHistory()
+    classifier = FakeTopicClassifier(category=TopicCategory.SEA_LIFE)
 
     async def fake_sleep(duration: float) -> None:
         sleep_durations.append(duration)
 
     monkeypatch.setattr("app.usecases.execute_action_usecase.asyncio.sleep", fake_sleep)
     usecase = ExecuteActionUsecase(
+        short_term_memory=memory,
+        topic_history=topic_history,
+        topic_classifier=classifier,
         speech_synthesizer=FailingSpeechSynthesizer(),
         audio_player=FakeAudioPlayer(),
     )
@@ -188,6 +194,9 @@ async def test_speak_action_falls_back_when_synthesis_fails(monkeypatch) -> None
     await usecase.execute(ActionPlan(action_type=ActionType.SPEAK, text="こんにちは"))
 
     assert sleep_durations == [1.0]
+    assert memory.recent_speeches() == []
+    assert topic_history.recent_entries() == []
+    assert classifier.classified_texts == []
 
 
 # Test: SPEAK action records topic history when classifier is set
@@ -214,6 +223,35 @@ async def test_speak_action_records_topic_history_when_classifier_is_set() -> No
     assert entries[0].summary == "透明な体でゆらゆら漂う生き物って不思議だよね。"
     assert entries[0].source_text == "透明な体でゆらゆら漂う生き物って不思議だよね。"
     assert entries[0].activity_type == ActionType.SPEAK.value
+
+
+@pytest.mark.asyncio
+async def test_game_speech_does_not_record_topic_history_or_memory() -> None:
+    topic_history = TopicHistory()
+    classifier = FakeTopicClassifier(TopicCategory.OTHER)
+    embedding_generator = FakeEmbeddingGenerator([0.1])
+    store = FakeTopicMemoryStore()
+    usecase = ExecuteActionUsecase(
+        topic_history=topic_history,
+        topic_classifier=classifier,
+        embedding_generator=embedding_generator,
+        topic_memory_store=store,
+        speech_synthesizer=FakeSpeechSynthesizer(),
+        audio_player=FakeAudioPlayer(),
+    )
+
+    await usecase.execute(
+        ActionPlan(
+            action_type=ActionType.SPEAK,
+            text="『たこ』！",
+            metadata={"skip_topic_memory": True},
+        )
+    )
+
+    assert classifier.classified_texts == []
+    assert topic_history.recent_entries() == []
+    assert embedding_generator.received_texts == []
+    assert store.saved_entries == []
 
 
 # Test: SPEAK action records topic memory when embedding and store are set

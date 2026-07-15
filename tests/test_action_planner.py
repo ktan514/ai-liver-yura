@@ -4,12 +4,50 @@ import pytest
 
 from app.domain.actions import ActionResource, ActionType
 from app.domain.activities import Activity, ActivityType
+from app.domain.activity_turn_result import (
+    CharacterGenerationResult,
+    CharacterGenerationStatus,
+)
+from app.domain.character_response import CharacterResponse
 from app.runtime.action_planner import ActionPlanner
 
 
 class FakeResponseGenerator:
     async def generate_response(self, activity: Activity) -> str:
         return f"generated: {activity.goal}"
+
+
+class FailingResponseGenerator:
+    async def generate_response(self, activity: Activity) -> str:
+        raise RuntimeError("provider unavailable")
+
+
+class ForbiddenAutonomousResponseGenerator:
+    def __init__(self) -> None:
+        self.call_count = 0
+
+    async def generate_response(self, activity: Activity) -> str:
+        self.call_count += 1
+        raise AssertionError("自律本文を旧ResponseGeneratorで生成してはいけません。")
+
+
+class FakeCharacterResponsePipeline:
+    def __init__(self) -> None:
+        self.activities: list[Activity] = []
+
+    async def generate_with_result(
+        self, activity: Activity
+    ) -> tuple[CharacterResponse, CharacterGenerationResult]:
+        self.activities.append(activity)
+        return (
+            CharacterResponse(speech="Characterが生成した自律発話", expression="happy"),
+            CharacterGenerationResult(
+                status=CharacterGenerationStatus.VALIDATED,
+                activity_turn_id=activity.activity_id,
+                source_event_id=activity.source_event_id,
+                adopted_text="Characterが生成した自律発話",
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -38,6 +76,21 @@ async def test_action_planner_uses_response_generator_for_conversation() -> None
     assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
     assert action_plan_group.action_plans[2].text == "smile"
     assert action_plan_group.action_plans[2].required_resources == {ActionResource.FACE}
+
+
+@pytest.mark.asyncio
+async def test_action_planner_uses_safe_fallback_only_after_generation_failure() -> None:
+    fallback = "今はそれを一緒にできないんだ。別のお話をしよう。"
+    activity = Activity(
+        activity_type=ActivityType.CONVERSATION_WITH_USER,
+        goal="実行できない要求へ自然に応答する",
+        context={"event_payload": {"safe_conversation_fallback": fallback}},
+    )
+    planner = ActionPlanner(response_generator=FailingResponseGenerator())
+
+    action_plan_group = await planner.plan(activity)
+
+    assert action_plan_group.action_plans[0].text == fallback
 
 
 # Additional tests for startup, stream opening, and stream closing greetings
@@ -115,12 +168,17 @@ async def test_action_planner_uses_response_generator_for_stream_closing_greetin
 
 
 @pytest.mark.asyncio
-async def test_action_planner_uses_response_generator_for_autonomous_talk() -> None:
+async def test_action_planner_uses_character_pipeline_for_autonomous_talk() -> None:
     activity = Activity(
         activity_type=ActivityType.AUTONOMOUS_TALK,
         goal="自律的に話題を出して話す",
     )
-    planner = ActionPlanner(response_generator=FakeResponseGenerator())
+    response_generator = ForbiddenAutonomousResponseGenerator()
+    character_pipeline = FakeCharacterResponsePipeline()
+    planner = ActionPlanner(
+        response_generator=response_generator,
+        character_response_pipeline=character_pipeline,  # type: ignore[arg-type]
+    )
 
     action_plan_group = await planner.plan(activity)
 
@@ -129,11 +187,35 @@ async def test_action_planner_uses_response_generator_for_autonomous_talk() -> N
     assert [plan.action_type for plan in action_plan_group.action_plans] == [
         ActionType.SPEAK,
         ActionType.UPDATE_SUBTITLE,
+        ActionType.CHANGE_EXPRESSION,
     ]
-    assert action_plan_group.action_plans[0].text == "generated: 自律的に話題を出して話す"
+    assert action_plan_group.action_plans[0].text == "Characterが生成した自律発話"
     assert action_plan_group.action_plans[0].required_resources == {ActionResource.MOUTH}
-    assert action_plan_group.action_plans[1].text == "generated: 自律的に話題を出して話す"
+    assert action_plan_group.action_plans[1].text == "Characterが生成した自律発話"
     assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
+    assert action_plan_group.action_plans[2].text == "happy"
+    assert response_generator.call_count == 0
+    assert character_pipeline.activities == [activity]
+
+
+@pytest.mark.asyncio
+async def test_action_planner_uses_existing_output_path_for_game_activity() -> None:
+    activity = Activity(
+        activity_type=ActivityType.GAME_WITH_USER,
+        goal="ゲーム状態を表現する",
+        context={"game_session_id": "session-1", "game_type": "fake_game"},
+    )
+    planner = ActionPlanner(response_generator=FakeResponseGenerator())
+
+    action_plan_group = await planner.plan(activity)
+
+    assert [plan.action_type for plan in action_plan_group.action_plans] == [
+        ActionType.SPEAK,
+        ActionType.UPDATE_SUBTITLE,
+        ActionType.CHANGE_EXPRESSION,
+    ]
+    assert action_plan_group.action_plans[0].text == "generated: ゲーム状態を表現する"
+    assert action_plan_group.output_priority == 100
 
 
 @pytest.mark.asyncio

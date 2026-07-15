@@ -70,7 +70,8 @@ def test_topic_history_prompt_section_includes_rotation_hint_when_topic_is_stagn
     assert "- 同じ大テーマの細部だけを掘り続けない" in lines
 
 
-def test_topic_history_prompt_section_does_not_include_rotation_hint_when_topic_is_not_stagnating() -> None:
+def test_topic_history_prompt_section_does_not_include_rotation_hint_when_topic_is_not_stagnating(
+) -> None:
     topic_history = TopicHistory()
     topic_history.add(category=TopicCategory.SEA_LIFE, summary="海")
     topic_history.add(category=TopicCategory.GAME, summary="ゲーム")

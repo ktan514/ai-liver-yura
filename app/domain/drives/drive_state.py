@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -23,9 +22,7 @@ class DriveState:
         """内的動機として自律発話を始める強さがあるかを判定する。"""
 
         return (
-            self.curiosity >= 0.7
-            or self.engagement >= 0.75
-            or self.boredom >= 0.8
+            self.curiosity >= 0.7 or self.engagement >= 0.75 or self.boredom >= 0.8
         ) and self.energy >= 0.3
 
     def strongest_drive_name(self) -> str:

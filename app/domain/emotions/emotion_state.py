@@ -28,7 +28,9 @@ class EmotionState:
         self._validate_range("talkativeness", self.talkativeness, 0.0, 1.0)
 
     def should_reduce_speech(self) -> bool:
-        return self.mood in (MoodType.ANGRY, MoodType.SAD, MoodType.TIRED) or self.talkativeness < 0.3
+        return (
+            self.mood in (MoodType.ANGRY, MoodType.SAD, MoodType.TIRED) or self.talkativeness < 0.3
+        )
 
     def should_increase_reaction(self) -> bool:
         return self.mood in (MoodType.HAPPY, MoodType.EXCITED) or self.arousal > 0.7

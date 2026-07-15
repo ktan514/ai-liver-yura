@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.domain.activities import ActivityStatus, ActivityType
+from app.domain.activities import ActivityResult, ActivityStatus, ActivityType
 from app.domain.events import AgentEvent, AgentEventType
 from app.runtime.activity_manager import ActivityManager
 
@@ -21,6 +21,101 @@ def test_user_text_becomes_foreground_activity() -> None:
     assert manager.foreground_activity == foreground
     assert manager.pending_activities() == []
     assert manager.suspended_activities() == []
+
+
+def test_ongoing_activity_is_carried_to_next_user_input_and_updated() -> None:
+    manager = ActivityManager()
+    ongoing = manager.start_ongoing_activity(
+        activity_type="shiritori",
+        goal="ユーザーとしりとりを続ける",
+        expected_input="直前の単語につながる単語",
+        end_condition="ユーザーが終了を希望するか、んで終わる",
+        context={"last_word": "りんご"},
+    )
+
+    first_turn = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "ごりら"})
+    )
+
+    assert first_turn.context["is_ongoing_activity_input"] is True
+    assert first_turn.context["ongoing_activity_id"] == ongoing.ongoing_activity_id
+    carried_first = first_turn.context["ongoing_activity"]
+    assert carried_first.ongoing_activity_id == ongoing.ongoing_activity_id
+    assert carried_first.turns[-1] == first_turn.context["activity_turn"]
+    assert carried_first.turns[-1].input_text == "ごりら"
+    assert first_turn.goal == "複数ターン活動「shiritori」を継続する"
+
+    manager.complete_processed_activity(
+        first_turn.activity_id,
+        result=ActivityResult(
+            result_type="speech_output",
+            summary="らっぱ！ 次は『ぱ』だよ。",
+        ),
+    )
+    second_turn = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "ぱんだ"})
+    )
+    carried = second_turn.context["ongoing_activity"]
+
+    assert carried.ongoing_activity_id == ongoing.ongoing_activity_id
+    assert carried.last_result.result_type == "speech_output"
+    assert carried.last_result.summary == "らっぱ！ 次は『ぱ』だよ。"
+    assert carried.expected_input == "直前の単語につながる単語"
+    assert carried.end_condition == "ユーザーが終了を希望するか、んで終わる"
+    assert len(carried.turns) == 2
+    assert carried.turns[0].status == ActivityStatus.COMPLETED
+    assert carried.turns[0].result is not None
+    assert carried.turns[1].status == ActivityStatus.ACTIVE
+
+
+def test_conversation_activity_can_continue_across_multiple_turns() -> None:
+    manager = ActivityManager()
+    conversation = manager.start_ongoing_activity(
+        activity_type="conversation",
+        goal="ユーザーとの会話を続ける",
+        expected_input="次のユーザー入力",
+        end_condition="会話終了またはタイムアウト",
+    )
+
+    first = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"})
+    )
+    manager.complete_processed_activity(
+        first.activity_id,
+        result=ActivityResult(result_type="speech_output", summary="こんにちは！"),
+    )
+    second = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "元気？"})
+    )
+
+    current = manager.ongoing_activity
+    assert current is not None
+    assert current.ongoing_activity_id == conversation.ongoing_activity_id
+    assert len(current.turns) == 2
+    assert current.turns[0].status == ActivityStatus.COMPLETED
+    assert current.turns[1] == second.context["activity_turn"]
+
+
+def test_ending_ongoing_activity_returns_next_input_to_normal_conversation() -> None:
+    manager = ActivityManager()
+    manager.start_ongoing_activity(
+        activity_type="shiritori",
+        goal="ユーザーとしりとりを続ける",
+        expected_input="単語",
+        end_condition="終了の意思表示",
+    )
+
+    completed = manager.end_ongoing_activity(reason="user_requested_end")
+    conversation = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "別の話をしよう"})
+    )
+
+    assert completed is not None
+    assert completed.status == ActivityStatus.COMPLETED
+    assert manager.ongoing_activity is None
+    assert conversation.goal == "ユーザー入力に応答する"
+    assert conversation.context["is_ongoing_activity_input"] is False
+    assert "ongoing_activity" not in conversation.context
 
 
 def test_app_started_becomes_startup_reaction_activity() -> None:
@@ -170,6 +265,24 @@ def test_cancel_activity_marks_suspended_autonomous_as_canceled() -> None:
     assert canceled not in manager.suspended_activities()
 
 
+def test_discard_deferred_autonomous_does_not_resume_stale_topic() -> None:
+    manager = ActivityManager()
+    autonomous = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, priority=8)
+    )
+    manager.prepare_user_input(
+        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "入力"})
+    )
+
+    discarded = manager.discard_deferred_autonomous(reason="user_conversation_started")
+
+    assert [activity.activity_id for activity in discarded] == [autonomous.activity_id]
+    stored = manager.get_activity(autonomous.activity_id)
+    assert stored is not None
+    assert stored.status == ActivityStatus.CANCELED
+    assert manager.suspended_activities() == []
+
+
 def test_conversation_is_not_interrupted_by_silence_timeout_observation() -> None:
     manager = ActivityManager()
 
@@ -249,7 +362,7 @@ def test_complete_activity_marks_activity_completed() -> None:
     assert manager.foreground_activity is None
 
 
-def test_complete_foreground_activity_resumes_pending_activity() -> None:
+def test_complete_conversation_discards_pending_autonomous_activity() -> None:
     manager = ActivityManager()
 
     conversation = manager.handle_event(
@@ -273,9 +386,10 @@ def test_complete_foreground_activity_resumes_pending_activity() -> None:
     assert completed is not None
     assert completed.activity_id == conversation.activity_id
     assert completed.status == ActivityStatus.COMPLETED
-    assert manager.foreground_activity is not None
-    assert manager.foreground_activity.activity_id == pending_autonomous.activity_id
-    assert manager.foreground_activity.status == ActivityStatus.ACTIVE
+    assert manager.foreground_activity is None
+    stored_autonomous = manager.get_activity(pending_autonomous.activity_id)
+    assert stored_autonomous is not None
+    assert stored_autonomous.status == ActivityStatus.CANCELED
     assert manager.pending_activities() == []
 
 

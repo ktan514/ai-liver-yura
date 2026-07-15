@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from app.domain.topic_memory import SimilarTopicMemory

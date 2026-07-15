@@ -8,7 +8,14 @@ from app.domain.activities import ActivityStatus, ActivityType
 from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler
 from app.runtime.activity_manager import ActivityManager
+from app.runtime.activity_result_builder import build_activity_result
+from app.runtime.activity_turn_result_factory import (
+    action_planning_failure_group,
+    canceled_output_group,
+)
 from app.runtime.agent_life_service import AgentLifeService
+from app.runtime.autonomous_activity_execution import prepare_autonomous_execution
+from app.runtime.autonomous_output import completed_speech_text
 from app.runtime.planned_activity_queue import PlannedActivity, PlannedActivityQueue
 from app.utils.trace import TraceLogger
 
@@ -62,7 +69,7 @@ class ActivityExecutorThread(threading.Thread):
             planned_activity.activity.activity_id
         )
         if current_activity is not None and current_activity.status != ActivityStatus.ACTIVE:
-            self._trace_logger.info(
+            self._trace_logger.debug(
                 "activity_executor_thread:run_once:activity_skipped",
                 planned_activity_id=planned_activity.planned_activity_id,
                 activity_id=current_activity.activity_id,
@@ -72,7 +79,35 @@ class ActivityExecutorThread(threading.Thread):
             )
             return None
 
-        action_plan_group = await self._action_planner.plan(planned_activity.activity)
+        execution_result = prepare_autonomous_execution(planned_activity.activity)
+        if execution_result is not None:
+            self._trace_logger.info(
+                "activity_executor_thread:autonomous_execution_prepared",
+                activity_id=planned_activity.activity.activity_id,
+                activity_turn_id=execution_result.activity_turn_id,
+                activity_execution_result_id=execution_result.result_id,
+                selected_topic=execution_result.payload.get("selected_topic"),
+                planning_reason=execution_result.payload.get("planning_reason"),
+            )
+
+        try:
+            action_plan_group = await self._action_planner.plan(planned_activity.activity)
+        except Exception as error:
+            action_plan_group = action_planning_failure_group(planned_activity.activity, error)
+            if action_plan_group.activity_turn_result is not None:
+                self._activity_manager.record_turn_result(action_plan_group.activity_turn_result)
+            self._activity_manager.complete_processed_activity(
+                planned_activity.activity.activity_id
+            )
+            self._agent_life_service.sync_from_activity_manager()
+            self._trace_logger.warning(
+                "activity_executor_thread:action_planning:failed",
+                planned_activity_id=planned_activity.planned_activity_id,
+                activity_id=planned_activity.activity.activity_id,
+                failure_stage="action_planning",
+                error_type=type(error).__name__,
+            )
+            return action_plan_group
         self._trace_logger.write(
             "activity_executor_thread:run_once:actions_planned",
             planned_activity_id=planned_activity.planned_activity_id,
@@ -98,9 +133,50 @@ class ActivityExecutorThread(threading.Thread):
                 ],
                 reason="activity_not_active_before_action_execution",
             )
-            return ActionPlanGroup(source_activity_id=current_activity.activity_id)
+            canceled_group = canceled_output_group(
+                action_plan_group,
+                reason="activity_not_active_before_action_execution",
+            )
+            if canceled_group.activity_turn_result is not None:
+                self._activity_manager.record_turn_result(canceled_group.activity_turn_result)
+            return canceled_group
 
-        await self._action_scheduler.execute(action_plan_group)
+        output_result = await self._action_scheduler.execute(action_plan_group)
+        if output_result is not None and action_plan_group.activity_turn_result is not None:
+            self._activity_manager.record_output_result(
+                action_plan_group.activity_turn_result, output_result
+            )
+        autonomous_output_saved = False
+        if planned_activity.activity.activity_type == ActivityType.AUTONOMOUS_TALK:
+            speech_text = (
+                completed_speech_text(action_plan_group, output_result)
+                if output_result is not None
+                else None
+            )
+            if speech_text is not None:
+                self._agent_life_service.record_autonomous_output(
+                    activity_id=planned_activity.activity.activity_id,
+                    text=speech_text,
+                    context=planned_activity.activity.context,
+                )
+                autonomous_output_saved = True
+                self._trace_logger.info(
+                    "activity_executor_thread:autonomous_memory_saved",
+                    activity_id=planned_activity.activity.activity_id,
+                    output_unit_id=output_result.output_unit_id
+                    if output_result is not None
+                    else action_plan_group.group_id,
+                    reason="speak_completed",
+                )
+            else:
+                self._trace_logger.info(
+                    "activity_executor_thread:autonomous_memory_not_saved",
+                    activity_id=planned_activity.activity.activity_id,
+                    output_unit_id=output_result.output_unit_id
+                    if output_result is not None
+                    else action_plan_group.group_id,
+                    reason="speak_not_completed",
+                )
         self._trace_logger.write(
             "activity_executor_thread:run_once:actions_executed",
             planned_activity_id=planned_activity.planned_activity_id,
@@ -109,8 +185,16 @@ class ActivityExecutorThread(threading.Thread):
         )
 
         completed_activity = self._activity_manager.complete_processed_activity(
-            planned_activity.activity.activity_id
+            planned_activity.activity.activity_id,
+            result=build_activity_result(action_plan_group, output_result),
         )
+        if (
+            planned_activity.activity.activity_type == ActivityType.AUTONOMOUS_TALK
+            and autonomous_output_saved
+        ):
+            self._agent_life_service.complete_autonomous_topic(
+                activity_id=planned_activity.activity.activity_id
+            )
         self._agent_life_service.sync_from_activity_manager()
         self._trace_logger.write(
             "activity_executor_thread:run_once:activity_completed",

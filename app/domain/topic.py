@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -14,6 +14,78 @@ class TopicCategory(str, Enum):
     MOOD = "mood"
     VIEWER_QUESTION = "viewer_question"
     OTHER = "other"
+
+
+class TopicLifecycleStatus(str, Enum):
+    ACTIVE = "active"
+    INTERRUPTED = "interrupted"
+    SUSPENDED = "suspended"
+    COMPLETED = "completed"
+    ABANDONED = "abandoned"
+    EXPIRED = "expired"
+
+
+class TopicContinuationDecision(str, Enum):
+    RESUME_ORIGINAL = "resume_original"
+    RESUME_WITH_REFRAMING = "resume_with_reframing"
+    BRANCH_FROM_ORIGINAL = "branch_from_original"
+    BRANCH_FROM_INTERRUPTION = "branch_from_interruption"
+    START_NEW_TOPIC = "start_new_topic"
+    SUSPEND_ORIGINAL = "suspend_original"
+    ABANDON_ORIGINAL = "abandon_original"
+    WAIT = "wait"
+
+
+@dataclass(frozen=True, slots=True)
+class InterruptedTopic:
+    topic_id: str
+    source_activity_id: str
+    original_text: str
+    category: TopicCategory = TopicCategory.OTHER
+    status: TopicLifecycleStatus = TopicLifecycleStatus.ACTIVE
+    importance: float = 0.5
+    interest: float = 0.5
+    incompleteness: float = 0.5
+    exhaustion: float = 0.0
+    interrupted_at: datetime | None = None
+    interruption_turns: int = 0
+    interruption_topics: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ("importance", "interest", "incompleteness", "exhaustion"):
+            value = getattr(self, name)
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} は0.0以上1.0以下で指定してください。")
+
+    def with_status(
+        self,
+        status: TopicLifecycleStatus,
+        *,
+        interrupted_at: datetime | None = None,
+    ) -> InterruptedTopic:
+        return replace(
+            self,
+            status=status,
+            interrupted_at=interrupted_at or self.interrupted_at,
+        )
+
+    def add_interruption_topic(self, text: str) -> InterruptedTopic:
+        normalized = text.strip()
+        if not normalized:
+            return self
+        return replace(
+            self,
+            interruption_turns=self.interruption_turns + 1,
+            interruption_topics=(*self.interruption_topics, normalized),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class TopicContinuationResult:
+    decision: TopicContinuationDecision
+    reasons: tuple[str, ...]
+    reintroduction_required: bool = False
+    selected_topic: str | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +169,5 @@ class TopicHistory:
             return None
 
         return (
-            f"直近で {latest_category.value} 系の話題が続いているため、"
-            "次は別カテゴリへ自然に広げる"
+            f"直近で {latest_category.value} 系の話題が続いているため、次は別カテゴリへ自然に広げる"
         )

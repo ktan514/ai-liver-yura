@@ -1,18 +1,43 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import datetime, timezone
 from uuid import uuid4
 
+from app.core.plugins import MemoryPolicy
 from app.domain.actions import ActionPlan, ActionPlanGroup, ActionResource, ActionType
 from app.domain.activities import Activity, ActivityType
+from app.domain.activity_turn_result import (
+    ActivityOutputResult,
+    ActivityOutputStatus,
+    ActivityTurnResult,
+    CharacterGenerationResult,
+    CharacterGenerationStatus,
+)
+from app.domain.character_response import (
+    ActivityExecutionResult,
+)
 from app.ports.response_generator import ResponseGenerator
+from app.runtime.character_response_pipeline import CharacterResponsePipeline
+from app.runtime.shiritori_game_service import ShiritoriGameService
+from app.utils.llm_trace import build_llm_trace_context
 from app.utils.trace import TraceLogger
 
 
 class ActionPlanner:
     """Activity から最小 ActionPlanGroup を作る。"""
 
-    def __init__(self, response_generator: ResponseGenerator) -> None:
+    def __init__(
+        self,
+        response_generator: ResponseGenerator,
+        shiritori_game_service: ShiritoriGameService | None = None,
+        character_response_pipeline: CharacterResponsePipeline | None = None,
+        activity_is_active: Callable[[str], bool] | None = None,
+    ) -> None:
         self._response_generator = response_generator
+        self._shiritori_game_service = shiritori_game_service
+        self._character_response_pipeline = character_response_pipeline
+        self._activity_is_active = activity_is_active
         self._trace_logger = TraceLogger()
 
     async def plan(self, activity: Activity) -> ActionPlanGroup:
@@ -25,11 +50,95 @@ class ActionPlanner:
         )
         if activity.activity_type in {
             ActivityType.CONVERSATION_WITH_USER,
+            ActivityType.GAME_WITH_USER,
             ActivityType.STARTUP_REACTION,
             ActivityType.STREAM_OPENING_GREETING,
             ActivityType.STREAM_CLOSING_GREETING,
         }:
-            response_text = await self._response_generator.generate_response(activity)
+            prepared_response = activity.context.get("prepared_response_text")
+            character_response = None
+            character_generation_result = None
+            safe_rejection_response = self._safe_rejection_response(activity)
+            if self._character_response_pipeline is not None:
+                (
+                    character_response,
+                    character_generation_result,
+                ) = await self._character_response_pipeline.generate_with_result(activity)
+                response_text = character_response.speech
+                response_source = "validated_character_response"
+            elif safe_rejection_response is not None:
+                response_text = safe_rejection_response
+                response_source = "safety_replacement"
+                self._trace_logger.warning(
+                    "action_planner:unsafe_execution_claim_prevented",
+                    activity_id=activity.activity_id,
+                    replacement_used=True,
+                )
+            elif isinstance(prepared_response, str):
+                response_text = prepared_response
+                response_source = "prepared_response"
+            elif (
+                activity.activity_type == ActivityType.GAME_WITH_USER
+                and activity.context.get("game_type") == "shiritori"
+                and activity.context.get("shiritori_action") == "generate_ai_word"
+                and self._shiritori_game_service is not None
+            ):
+                response_text = await self._shiritori_game_service.generate_ai_turn(
+                    activity,
+                    self._response_generator,
+                )
+                response_source = "game_generation"
+            else:
+                response_text, fallback_used = await self._generate_response_with_safe_fallback(
+                    activity
+                )
+                response_source = "conversation_fallback" if fallback_used else "llm_generation"
+            if character_generation_result is None:
+                character_generation_result = self._generation_result(
+                    activity,
+                    response_text,
+                    fallback_used=response_source
+                    in {"safety_replacement", "conversation_fallback"},
+                )
+            self._trace_logger.info(
+                "action_planner:character_result",
+                activity_id=activity.activity_id,
+                activity_turn_id=character_generation_result.activity_turn_id,
+                character_generation_result_id=character_generation_result.result_id,
+                character_status=character_generation_result.status.value,
+            )
+            activity.context["character_generation_result"] = character_generation_result
+            self._trace_logger.debug(
+                "action_planner:response_adopted",
+                activity_id=activity.activity_id,
+                activity_type=activity.activity_type.value,
+                response_source=response_source,
+                response_length=len(response_text),
+            )
+            trace_context = build_llm_trace_context(activity)
+            self._trace_logger.llm_response(
+                purpose=trace_context.purpose,
+                provider="action_planner",
+                model=response_source,
+                activity_id=activity.activity_id,
+                raw_response=None,
+                adopted_text=response_text,
+                fallback_used=response_source in {"safety_replacement", "conversation_fallback"},
+                stage="final_output",
+            )
+            response_label = (
+                "game_generated_response"
+                if activity.activity_type == ActivityType.GAME_WITH_USER
+                else "conversation_generated_response"
+            )
+            self._trace_logger.info(
+                response_label,
+                source_activity_type=activity.activity_type.value,
+                activity_id=activity.activity_id,
+                session_id=activity.context.get("game_session_id"),
+                game_type=activity.context.get("game_type"),
+                response_length=len(response_text),
+            )
             output_unit_id = str(uuid4())
             self._trace_logger.write(
                 "action_planner:plan:response_generated",
@@ -43,6 +152,9 @@ class ActionPlanner:
                 required_resources={ActionResource.MOUTH},
                 source_activity_id=activity.activity_id,
                 output_unit_id=output_unit_id,
+                metadata={"skip_topic_memory": True}
+                if self._should_skip_topic_memory(activity)
+                else {},
             )
             subtitle_plan = ActionPlan(
                 action_type=ActionType.UPDATE_SUBTITLE,
@@ -51,7 +163,9 @@ class ActionPlanner:
                 source_activity_id=activity.activity_id,
                 output_unit_id=output_unit_id,
             )
-            expression_text = "smile"
+            expression_text = (
+                character_response.expression if character_response is not None else "smile"
+            )
             if activity.activity_type == ActivityType.STREAM_CLOSING_GREETING:
                 expression_text = "soft_smile"
 
@@ -62,11 +176,25 @@ class ActionPlanner:
                 source_activity_id=activity.activity_id,
                 output_unit_id=output_unit_id,
             )
+            action_plans = [speak_plan, subtitle_plan, expression_plan]
+            if character_response is not None and character_response.gesture:
+                action_plans.append(
+                    ActionPlan(
+                        action_type=ActionType.MOVE,
+                        text=character_response.gesture,
+                        required_resources={ActionResource.BODY},
+                        source_activity_id=activity.activity_id,
+                        output_unit_id=output_unit_id,
+                    )
+                )
             action_plan_group = ActionPlanGroup(
-                action_plans=[speak_plan, subtitle_plan, expression_plan],
+                action_plans=action_plans,
                 source_activity_id=activity.activity_id,
                 output_priority=self._output_priority(activity.activity_type),
                 group_id=output_unit_id,
+                activity_turn_result=self._turn_result(
+                    activity, character_generation_result, output_unit_id=output_unit_id
+                ),
             )
             self._trace_logger.write(
                 "action_planner:plan:actions_created",
@@ -81,7 +209,31 @@ class ActionPlanner:
             return action_plan_group
 
         if activity.activity_type == ActivityType.AUTONOMOUS_TALK:
-            response_text = await self._response_generator.generate_response(activity)
+            if not self._is_activity_active(activity.activity_id):
+                return self._checkpoint_group(activity, None)
+            if self._character_response_pipeline is None:
+                raise RuntimeError("AUTONOMOUS_TALKにはCharacterResponsePipelineが必要です。")
+            (
+                character_response,
+                character_generation_result,
+            ) = await self._character_response_pipeline.generate_with_result(activity)
+            response_text = character_response.speech
+            self._trace_logger.info(
+                "action_planner:character_result",
+                activity_id=activity.activity_id,
+                activity_turn_id=character_generation_result.activity_turn_id,
+                character_generation_result_id=character_generation_result.result_id,
+                character_status=character_generation_result.status.value,
+            )
+            activity.context["character_generation_result"] = character_generation_result
+            if not self._is_activity_active(activity.activity_id):
+                self._trace_logger.info(
+                    "action_planner:autonomous_canceled_after_character",
+                    activity_id=activity.activity_id,
+                    activity_turn_id=character_generation_result.activity_turn_id,
+                    character_generation_result_id=character_generation_result.result_id,
+                )
+                return self._checkpoint_group(activity, character_generation_result)
             output_unit_id = str(uuid4())
             self._trace_logger.write(
                 "action_planner:plan:response_generated",
@@ -103,11 +255,35 @@ class ActionPlanner:
                 source_activity_id=activity.activity_id,
                 output_unit_id=output_unit_id,
             )
+            action_plans = [speak_plan, subtitle_plan]
+            if character_response is not None:
+                action_plans.append(
+                    ActionPlan(
+                        action_type=ActionType.CHANGE_EXPRESSION,
+                        text=character_response.expression,
+                        required_resources={ActionResource.FACE},
+                        source_activity_id=activity.activity_id,
+                        output_unit_id=output_unit_id,
+                    )
+                )
+                if character_response.gesture:
+                    action_plans.append(
+                        ActionPlan(
+                            action_type=ActionType.MOVE,
+                            text=character_response.gesture,
+                            required_resources={ActionResource.BODY},
+                            source_activity_id=activity.activity_id,
+                            output_unit_id=output_unit_id,
+                        )
+                    )
             action_plan_group = ActionPlanGroup(
-                action_plans=[speak_plan, subtitle_plan],
+                action_plans=action_plans,
                 source_activity_id=activity.activity_id,
                 output_priority=self._output_priority(activity.activity_type),
                 group_id=output_unit_id,
+                activity_turn_result=self._turn_result(
+                    activity, character_generation_result, output_unit_id=output_unit_id
+                ),
             )
             self._trace_logger.write(
                 "action_planner:plan:actions_created",
@@ -121,15 +297,19 @@ class ActionPlanner:
             )
             return action_plan_group
 
+        output_unit_id = str(uuid4())
         observe_plan = ActionPlan(
             action_type=ActionType.OBSERVE,
             text="",
             required_resources={ActionResource.EYES},
             source_activity_id=activity.activity_id,
+            output_unit_id=output_unit_id,
         )
         action_plan_group = ActionPlanGroup(
             action_plans=[observe_plan],
             source_activity_id=activity.activity_id,
+            group_id=output_unit_id,
+            activity_turn_result=self._turn_result(activity, None, output_unit_id=output_unit_id),
         )
         self._trace_logger.write(
             "action_planner:plan:actions_created",
@@ -142,12 +322,166 @@ class ActionPlanner:
         )
         return action_plan_group
 
+    async def _generate_response_with_safe_fallback(self, activity: Activity) -> tuple[str, bool]:
+        try:
+            return await self._response_generator.generate_response(activity), False
+        except Exception as error:
+            payload = activity.context.get("event_payload")
+            fallback = (
+                payload.get("safe_conversation_fallback") if isinstance(payload, dict) else None
+            )
+            if not isinstance(fallback, str) or not fallback.strip():
+                raise
+            self._trace_logger.warning(
+                "action_planner:conversation_generation_fallback",
+                activity_id=activity.activity_id,
+                error_type=type(error).__name__,
+            )
+            return fallback, True
+
+    @staticmethod
+    def _safe_rejection_response(activity: Activity) -> str | None:
+        payload = activity.context.get("event_payload")
+        if not isinstance(payload, dict) or not payload.get("execution_request_unmatched"):
+            return None
+        fallback = payload.get("safe_conversation_fallback")
+        return fallback if isinstance(fallback, str) and fallback.strip() else None
+
+    @staticmethod
+    def _should_skip_topic_memory(activity: Activity) -> bool:
+        plugin_policy = activity.context.get("plugin_memory_policy")
+        if isinstance(plugin_policy, MemoryPolicy):
+            return plugin_policy.skip_topic_memory
+        if activity.activity_type == ActivityType.GAME_WITH_USER:
+            return True
+        payload = activity.context.get("event_payload")
+        if not isinstance(payload, dict):
+            return False
+        classification = payload.get("game_input_classification")
+        classification_value = getattr(classification, "classification", None)
+        value = getattr(classification_value, "value", classification_value)
+        return value in {"game_start_request", "unsupported_game_request"}
+
     @staticmethod
     def _output_priority(activity_type: ActivityType) -> int:
         """音声出力ではユーザー応答を優先し、同一優先度内は到着順を維持する。"""
 
-        if activity_type == ActivityType.CONVERSATION_WITH_USER:
+        if activity_type in {
+            ActivityType.CONVERSATION_WITH_USER,
+            ActivityType.GAME_WITH_USER,
+        }:
             return 100
         if activity_type == ActivityType.AUTONOMOUS_TALK:
             return 10
         return 50
+
+    def _is_activity_active(self, activity_id: str) -> bool:
+        return self._activity_is_active is None or self._activity_is_active(activity_id)
+
+    def _checkpoint_group(
+        self,
+        activity: Activity,
+        character_result: CharacterGenerationResult | None,
+    ) -> ActionPlanGroup:
+        output_unit_id = str(uuid4())
+        return ActionPlanGroup(
+            source_activity_id=activity.activity_id,
+            output_priority=self._output_priority(activity.activity_type),
+            group_id=output_unit_id,
+            activity_turn_result=self._turn_result(
+                activity,
+                character_result,
+                output_unit_id=output_unit_id,
+            ),
+        )
+
+    @staticmethod
+    def _correlation_ids(activity: Activity) -> tuple[str, str | None]:
+        turn = activity.context.get("activity_turn")
+        turn_id = getattr(turn, "turn_id", None)
+        ongoing = activity.context.get("ongoing_activity")
+        ongoing_id = getattr(ongoing, "ongoing_activity_id", None)
+        return (
+            str(turn_id or activity.context.get("activity_turn_id") or activity.activity_id),
+            str(ongoing_id) if ongoing_id is not None else None,
+        )
+
+    @classmethod
+    def _generation_result(
+        cls, activity: Activity, text: str, *, fallback_used: bool
+    ) -> CharacterGenerationResult:
+        turn_id, ongoing_id = cls._correlation_ids(activity)
+        now = datetime.now(timezone.utc)
+        return CharacterGenerationResult(
+            status=CharacterGenerationStatus.FALLBACK_USED
+            if fallback_used
+            else CharacterGenerationStatus.VALIDATED,
+            activity_turn_id=turn_id,
+            ongoing_activity_id=ongoing_id,
+            source_event_id=activity.source_event_id,
+            adopted_text=text,
+            attempts=1,
+            started_at=now,
+            finished_at=now,
+        )
+
+    @classmethod
+    def _turn_result(
+        cls,
+        activity: Activity,
+        character_result: CharacterGenerationResult | None,
+        *,
+        output_unit_id: str | None = None,
+    ) -> ActivityTurnResult:
+        turn_id, ongoing_id = cls._correlation_ids(activity)
+        execution_value = activity.context.get("activity_execution_result")
+        payload = activity.context.get("event_payload")
+        if not isinstance(execution_value, ActivityExecutionResult) and isinstance(payload, dict):
+            execution_value = payload.get("activity_execution_result")
+        execution_result = (
+            execution_value if isinstance(execution_value, ActivityExecutionResult) else None
+        )
+        confirmation_value = (
+            payload.get("pending_confirmation") if isinstance(payload, dict) else None
+        )
+        confirmation = confirmation_value if isinstance(confirmation_value, dict) else {}
+        aggregate = ActivityTurnResult(
+            activity_turn_id=turn_id,
+            activity_type=execution_result.activity_type
+            if execution_result is not None
+            else activity.activity_type.value,
+            source_event_id=activity.source_event_id,
+            ongoing_activity_id=ongoing_id,
+            operation=execution_result.operation if execution_result is not None else None,
+            confirmation_id=cls._optional_context_value(confirmation, "confirmation_id"),
+            confirmation_source_event_id=cls._optional_context_value(
+                confirmation, "source_event_id"
+            ),
+            resolution_event_id=cls._optional_context_value(confirmation, "resolution_event_id"),
+            candidate_activity_type=cls._optional_context_value(
+                confirmation, "candidate_activity_type"
+            ),
+            candidate_operation=cls._optional_context_value(confirmation, "candidate_operation"),
+            confirmation_resolution=cls._optional_context_value(confirmation, "resolution"),
+            final_behavior_plan_id=cls._optional_context_value(
+                confirmation, "final_behavior_plan_id"
+            ),
+            execution_result=execution_result,
+            character_result=character_result,
+        )
+        if output_unit_id is None:
+            return aggregate
+        return aggregate.with_output(
+            ActivityOutputResult(
+                status=ActivityOutputStatus.PLANNED,
+                output_unit_id=output_unit_id,
+                activity_turn_id=turn_id,
+                ongoing_activity_id=ongoing_id,
+                source_event_id=activity.source_event_id,
+            )
+        )
+
+    @staticmethod
+    def _optional_context_value(context: dict[object, object], key: str) -> str | None:
+        value = context.get(key)
+        return str(value) if value is not None else None

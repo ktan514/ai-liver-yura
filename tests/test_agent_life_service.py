@@ -1,10 +1,13 @@
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 from app.domain.activities import ActivityStatus
 from app.domain.drives import DriveState
 from app.domain.emotions import EmotionState, MoodType
 from app.domain.events import AgentEvent, AgentEventType
 from app.runtime import ActivityManager, AgentLifeService
+from app.runtime.agent_state import AgentState
+from app.utils.trace import TraceLogger
 
 
 def test_agent_life_service_has_default_agent_state() -> None:
@@ -25,6 +28,38 @@ def test_agent_life_service_marks_user_input_received() -> None:
     )
 
     assert agent_state.last_user_input_at is not None
+
+
+def test_idle_timeout_skip_is_debug_only(tmp_path) -> None:
+    now = datetime(2026, 7, 14, 11, 0, tzinfo=timezone.utc)
+    info_file = tmp_path / "runtime_trace.log"
+    debug_file = tmp_path / "runtime_debug.log"
+    TraceLogger.configure(
+        level="INFO",
+        trace_file_path=info_file,
+        debug_file_enabled=True,
+        debug_file_path=debug_file,
+    )
+    service = AgentLifeService(
+        ActivityManager(),
+        initial_state=AgentState(last_user_input_at=now),
+        now=now,
+        conversation_idle_timeout_seconds=30.0,
+    )
+
+    try:
+        result = service.plan_next_event(now=now + timedelta(seconds=1))
+
+        assert result is None
+        assert not info_file.exists()
+        assert "conversation_idle_timeout_not_reached" in debug_file.read_text(
+            encoding="utf-8"
+        )
+    finally:
+        TraceLogger.configure(
+            level="INFO",
+            trace_file_path=tmp_path / "restored.log",
+        )
 
 
 def test_agent_life_service_marks_youtube_comment_as_user_input() -> None:
@@ -127,9 +162,7 @@ def test_agent_life_service_syncs_pending_activity_from_activity_manager() -> No
     activity_manager.handle_event(
         AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"})
     )
-    activity_manager.handle_event(
-        AgentEvent(event_type=AgentEventType.SILENCE_TIMEOUT)
-    )
+    activity_manager.handle_event(AgentEvent(event_type=AgentEventType.SILENCE_TIMEOUT))
 
     agent_state = agent_life_service.sync_from_activity_manager()
 
@@ -141,9 +174,7 @@ def test_agent_life_service_syncs_suspended_activity_from_activity_manager() -> 
     activity_manager = ActivityManager()
     agent_life_service = AgentLifeService(activity_manager)
 
-    activity_manager.handle_event(
-        AgentEvent(event_type=AgentEventType.SILENCE_TIMEOUT)
-    )
+    activity_manager.handle_event(AgentEvent(event_type=AgentEventType.SILENCE_TIMEOUT))
     activity_manager.handle_event(
         AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"})
     )
@@ -154,7 +185,8 @@ def test_agent_life_service_syncs_suspended_activity_from_activity_manager() -> 
     assert agent_state.suspended_activities[0].status == ActivityStatus.SUSPENDED
 
 
-def test_agent_life_service_plan_next_event_returns_curiosity_peak_when_internal_drive_is_strong() -> None:
+def test_agent_life_service_plan_next_event_returns_curiosity_peak_when_internal_drive_is_strong(
+) -> None:
     activity_manager = ActivityManager()
     now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
     agent_life_service = AgentLifeService(activity_manager, now=now)
@@ -177,7 +209,8 @@ def test_agent_life_service_plan_next_event_returns_none_when_internal_drive_is_
     assert agent_life_service.plan_next_event(now=now) is None
 
 
-def test_agent_life_service_plan_next_event_returns_curiosity_peak_after_elapsed_time_updates_drive() -> None:
+def test_agent_life_service_plan_next_event_returns_curiosity_peak_after_elapsed_time_updates_drive(
+) -> None:
     activity_manager = ActivityManager()
     initial_time = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
     agent_life_service = AgentLifeService(activity_manager, now=initial_time)
@@ -203,7 +236,9 @@ def test_agent_life_service_plan_next_event_returns_none_when_active_activity_ex
     assert agent_life_service.plan_next_event(now=now) is None
 
 
-def test_agent_life_service_plan_next_event_returns_none_immediately_after_speech_finished() -> None:
+def test_agent_life_service_plan_next_event_returns_none_immediately_after_speech_finished() -> (
+    None
+):
     activity_manager = ActivityManager()
     agent_life_service = AgentLifeService(activity_manager)
     agent_life_service.update_drive(DriveState(curiosity=0.9))
@@ -225,6 +260,101 @@ def test_agent_life_service_plan_next_event_returns_none_immediately_after_user_
     now = datetime.now(timezone.utc)
 
     assert agent_life_service.plan_next_event(now=now) is None
+
+
+def test_autonomous_talk_waits_for_conversation_idle_timeout() -> None:
+    activity_manager = ActivityManager()
+    user_input_at = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
+    initial_state = replace(
+        AgentState(current_drive=DriveState(curiosity=0.9)),
+        last_user_input_at=user_input_at,
+    )
+    service = AgentLifeService(
+        activity_manager,
+        initial_state=initial_state,
+        now=user_input_at,
+        conversation_idle_timeout_seconds=30.0,
+    )
+
+    before_timeout = service.plan_next_event(now=user_input_at + timedelta(seconds=29))
+    after_timeout = service.plan_next_event(now=user_input_at + timedelta(seconds=30))
+
+    assert before_timeout is None
+    assert after_timeout is not None
+    assert after_timeout.payload["resume_reason"] == "conversation_idle_timeout"
+
+
+def test_ongoing_activity_suppresses_autonomous_talk_until_activity_ends() -> None:
+    activity_manager = ActivityManager()
+    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
+    ongoing = activity_manager.start_ongoing_activity(
+        activity_type="shiritori",
+        goal="しりとりを続ける",
+        expected_input="単語",
+        end_condition="終了希望",
+    )
+    service = AgentLifeService(activity_manager, now=now)
+    service.update_drive(DriveState(curiosity=0.9))
+
+    while_active = service.plan_next_event(now=now + timedelta(minutes=10))
+    activity_manager.end_ongoing_activity(reason="user_requested_end")
+    after_end = service.plan_next_event(now=now + timedelta(minutes=10, seconds=1))
+
+    assert while_active is None
+    assert after_end is not None
+    assert after_end.payload["resume_reason"] == (
+        f"ongoing_activity_completed:{ongoing.ongoing_activity_id}"
+    )
+
+
+def test_explicit_conversation_end_allows_autonomous_talk_and_records_reason() -> None:
+    activity_manager = ActivityManager()
+    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
+    initial_state = replace(
+        AgentState(current_drive=DriveState(curiosity=0.9)),
+        last_user_input_at=now,
+    )
+    service = AgentLifeService(activity_manager, initial_state=initial_state, now=now)
+
+    service.end_conversation(reason="user_said_goodbye")
+    event = service.plan_next_event(now=now + timedelta(seconds=1))
+
+    assert event is not None
+    assert event.payload["resume_reason"] == "conversation_ended:user_said_goodbye"
+
+
+def test_interrupted_important_topic_is_evaluated_and_added_to_event() -> None:
+    activity_manager = ActivityManager()
+    now = datetime.now(timezone.utc)
+    service = AgentLifeService(activity_manager, now=now)
+    service.update_drive(DriveState(curiosity=0.9, engagement=0.8))
+    service.record_autonomous_output(
+        activity_id="autonomous-1",
+        text="将来の配信でやってみたいことが三つあって、まず一つ目は……",
+        context={
+            "topic_metrics": {
+                "importance": 0.9,
+                "interest": 0.9,
+                "incompleteness": 0.95,
+            }
+        },
+    )
+    service.interrupt_autonomous_topic(
+        activity_id="autonomous-1",
+        fallback_text="自律トーク",
+        now=now,
+    )
+    service.handle_event(
+        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "続きも聞きたい"})
+    )
+
+    event = service.plan_next_event(now=now + timedelta(seconds=31))
+
+    assert event is not None
+    assert event.payload["continuation_decision"] == "resume_original"
+    assert event.payload["reintroduction_required"] is True
+    assert event.payload["interrupted_topic"].startswith("将来の配信")
+    assert "resume_score_high" in event.payload["continuation_reasons"]
 
 
 def test_agent_life_service_plan_next_event_returns_none_when_emotion_reduces_speech() -> None:

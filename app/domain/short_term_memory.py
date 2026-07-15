@@ -1,11 +1,8 @@
-
-
 from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Deque
 
 from app.utils.trace import TraceLogger
 
@@ -23,7 +20,7 @@ class ShortTermMemory:
     """直近の発話をメモリ上に保持する短期記憶。"""
 
     def __init__(self, max_speech_items: int = 5) -> None:
-        self._speech_items: Deque[SpeechMemoryItem] = deque(maxlen=max_speech_items)
+        self._speech_items: deque[SpeechMemoryItem] = deque(maxlen=max_speech_items)
         self._trace_logger = TraceLogger()
 
     def add_speech(
@@ -81,10 +78,7 @@ class ShortTermMemory:
             )
             return ""
 
-        summary = "\n".join(
-            f"- {speech_item.text}"
-            for speech_item in speech_items
-        )
+        summary = "\n".join(f"- {speech_item.text}" for speech_item in speech_items)
         self._trace_logger.write(
             "short_term_memory:build_recent_speech_summary:built",
             requested_limit=limit,

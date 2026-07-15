@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from queue import Queue
 
