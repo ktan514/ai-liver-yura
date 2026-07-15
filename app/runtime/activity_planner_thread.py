@@ -13,6 +13,7 @@ from app.domain.behavior import ActivityPlan, BehaviorDecision
 from app.domain.events import AgentEvent, AgentEventType
 from app.domain.short_term_memory import ShortTermMemory
 from app.domain.topic import TopicHistory
+from app.domain.trace_context import TraceContext, trace_context_from
 from app.runtime.activity_manager import ActivityManager
 from app.runtime.agent_life_service import AgentLifeService
 from app.runtime.autonomous_situation_evaluator import AutonomousSituationEvaluator
@@ -136,6 +137,7 @@ class ActivityPlanningService:
             ),
             current_time_context=(now or datetime.now(timezone.utc)).astimezone().isoformat(),
             event_context=dict(event.payload),
+            trace_context=event.trace_context,
         )
         analysis = self._autonomous_situation_evaluator.evaluate(context)
         planner = self._behavior_planner
@@ -158,9 +160,16 @@ class ActivityPlanningService:
                 "autonomous_action": plan.autonomous_action,
                 "constraints": dict(plan.constraints),
                 "planner_constraints": list(plan.planner_constraints),
+                "behavior_plan_id": plan.behavior_plan_id,
             },
         }
-        return replace(event, payload=payload), plan
+        return replace(
+            event,
+            payload=payload,
+            trace_context=event.trace_context.derive(
+                behavior_plan_id=plan.behavior_plan_id
+            ),
+        ), plan
 
     def _create_activity(self, event: AgentEvent) -> Activity:
         """Event から Activity を生成し、AgentState にも同期する。"""
@@ -204,6 +213,7 @@ class ActivityPlannerThread(threading.Thread):
         self._stop_requested = threading.Event()
         self._cancellation_lock = threading.Lock()
         self._autonomous_cancellation_generation = 0
+        self._canceling_trace_context: TraceContext | None = None
         self._trace_logger = TraceLogger()
 
     def run_once(self, request: ActivityPlanningRequest) -> PlannedActivity | None:
@@ -237,12 +247,21 @@ class ActivityPlannerThread(threading.Thread):
             if not canceled_during_planning:
                 self._planned_activity_queue.put(planned_activity)
         if canceled_during_planning:
+            canceled_trace = trace_context_from(planned_activity.activity.context)
             self._planning_service.cancel_planned_activity(
                 planned_activity,
                 reason="user_text_received_during_planning",
             )
             self._trace_logger.info(
                 "activity_planner_thread:autonomous_planning_canceled",
+                canceling_trace_id=(
+                    self._canceling_trace_context.trace_id
+                    if self._canceling_trace_context is not None
+                    else None
+                ),
+                canceled_trace_id=(
+                    canceled_trace.trace_id if canceled_trace is not None else None
+                ),
                 planned_activity_id=planned_activity.planned_activity_id,
                 activity_id=planned_activity.activity.activity_id,
                 reason="user_text_received_during_planning",
@@ -285,14 +304,22 @@ class ActivityPlannerThread(threading.Thread):
         self._stop_requested.set()
         self._trace_logger.write("activity_planner_thread:stop:requested")
 
-    def cancel_inflight_autonomous(self, *, source_event_id: str) -> None:
+    def cancel_inflight_autonomous(
+        self,
+        *,
+        source_event_id: str,
+        trace_context: TraceContext | None = None,
+    ) -> None:
         with self._cancellation_lock:
             self._autonomous_cancellation_generation += 1
             generation = self._autonomous_cancellation_generation
+            self._canceling_trace_context = trace_context
         self._trace_logger.info(
             "activity_planner_thread:autonomous_cancel_checkpoint",
             source_event_id=source_event_id,
             cancellation_generation=generation,
+            canceling_trace_id=trace_context.trace_id if trace_context else None,
+            cancel_reason="user_text_received",
         )
 
     @property

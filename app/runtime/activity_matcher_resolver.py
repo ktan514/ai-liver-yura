@@ -113,6 +113,18 @@ class ActivityMatcherResolver:
         conversation_context: dict[str, object] | None = None,
     ) -> tuple[ActivityDefinition, DeterministicActivityMatch] | None:
         normalized = user_input.strip().rstrip("。！!")
+        correlation = {
+            key: value
+            for key in (
+                "trace_id",
+                "parent_trace_id",
+                "source_event_id",
+                "activity_turn_id",
+                "ongoing_activity_id",
+                "confirmation_id",
+            )
+            if (value := (conversation_context or {}).get(key)) is not None
+        }
         candidates: list[tuple[ActivityDefinition, DeterministicActivityMatch]] = []
         for definition in definitions:
             context = ActivityMatcherContext(
@@ -143,6 +155,7 @@ class ActivityMatcherResolver:
                 )
                 self._trace_logger.debug(
                     "activity_matcher:candidate",
+                    **correlation,
                     matcher_id=normalized_match.matcher_id,
                     matcher_type=normalized_match.matcher_type,
                     priority=normalized_match.priority,
@@ -166,6 +179,7 @@ class ActivityMatcherResolver:
         selected = self._select(candidates)
         self._trace_logger.debug(
             "activity_matcher:resolved",
+            **correlation,
             candidate_count=len(candidates),
             selected_matcher=selected[1].matcher_id if selected is not None else None,
             rejected_candidates=[

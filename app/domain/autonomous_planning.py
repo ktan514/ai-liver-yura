@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.domain.trace_context import TraceContext
+
 
 @dataclass(frozen=True, slots=True)
 class AutonomousSituationContext:
@@ -20,6 +22,7 @@ class AutonomousSituationContext:
     available_activity_definitions: tuple[str, ...]
     current_time_context: str
     event_context: dict[str, object] = field(default_factory=dict)
+    trace_context: TraceContext | None = None
 
 
 @dataclass(frozen=True, slots=True)

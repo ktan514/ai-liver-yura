@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -17,6 +18,7 @@ from app.domain.activity_turn_result import (
 from app.domain.character_response import (
     ActivityExecutionResult,
 )
+from app.domain.trace_context import trace_context_from
 from app.ports.response_generator import ResponseGenerator
 from app.runtime.character_response_pipeline import CharacterResponsePipeline
 from app.runtime.shiritori_game_service import ShiritoriGameService
@@ -125,6 +127,14 @@ class ActionPlanner:
                 adopted_text=response_text,
                 fallback_used=response_source in {"safety_replacement", "conversation_fallback"},
                 stage="final_output",
+                llm_role=trace_context.llm_role,
+                model_key=trace_context.model_key or response_source,
+                service="action_planner",
+                request_id=trace_context.request_id,
+                attempt=trace_context.attempt,
+                **trace_context.trace_context.derive(
+                    character_generation_result_id=character_generation_result.result_id
+                ).as_log_fields(),
             )
             response_label = (
                 "game_generated_response"
@@ -198,13 +208,23 @@ class ActionPlanner:
             )
             self._trace_logger.write(
                 "action_planner:plan:actions_created",
+                **build_llm_trace_context(activity).trace_context.derive(
+                    character_generation_result_id=character_generation_result.result_id,
+                    output_unit_id=output_unit_id,
+                ).as_log_fields(),
                 activity_id=activity.activity_id,
                 activity_type=activity.activity_type.value,
                 action_types=[
                     action_plan.action_type.value for action_plan in action_plan_group.action_plans
                 ],
                 action_count=len(action_plan_group.action_plans),
-                output_unit_id=output_unit_id,
+                required_resources=sorted(
+                    {
+                        resource.value
+                        for action in action_plan_group.action_plans
+                        for resource in action.required_resources
+                    }
+                ),
             )
             return action_plan_group
 
@@ -287,13 +307,23 @@ class ActionPlanner:
             )
             self._trace_logger.write(
                 "action_planner:plan:actions_created",
+                **build_llm_trace_context(activity).trace_context.derive(
+                    character_generation_result_id=character_generation_result.result_id,
+                    output_unit_id=output_unit_id,
+                ).as_log_fields(),
                 activity_id=activity.activity_id,
                 activity_type=activity.activity_type.value,
                 action_types=[
                     action_plan.action_type.value for action_plan in action_plan_group.action_plans
                 ],
                 action_count=len(action_plan_group.action_plans),
-                output_unit_id=output_unit_id,
+                required_resources=sorted(
+                    {
+                        resource.value
+                        for action in action_plan_group.action_plans
+                        for resource in action.required_resources
+                    }
+                ),
             )
             return action_plan_group
 
@@ -313,12 +343,16 @@ class ActionPlanner:
         )
         self._trace_logger.write(
             "action_planner:plan:actions_created",
+            **build_llm_trace_context(activity).trace_context.derive(
+                output_unit_id=output_unit_id
+            ).as_log_fields(),
             activity_id=activity.activity_id,
             activity_type=activity.activity_type.value,
             action_types=[
                 action_plan.action_type.value for action_plan in action_plan_group.action_plans
             ],
             action_count=len(action_plan_group.action_plans),
+            required_resources=[ActionResource.EYES.value],
         )
         return action_plan_group
 
@@ -401,9 +435,20 @@ class ActionPlanner:
         turn_id = getattr(turn, "turn_id", None)
         ongoing = activity.context.get("ongoing_activity")
         ongoing_id = getattr(ongoing, "ongoing_activity_id", None)
+        trace = trace_context_from(activity.context)
         return (
-            str(turn_id or activity.context.get("activity_turn_id") or activity.activity_id),
-            str(ongoing_id) if ongoing_id is not None else None,
+            str(
+                turn_id
+                or activity.context.get("activity_turn_id")
+                or (trace.activity_turn_id if trace is not None else None)
+                or activity.activity_id
+            ),
+            str(
+                ongoing_id
+                or (trace.ongoing_activity_id if trace is not None else None)
+            )
+            if ongoing_id is not None or (trace is not None and trace.ongoing_activity_id)
+            else None,
         )
 
     @classmethod
@@ -412,6 +457,7 @@ class ActionPlanner:
     ) -> CharacterGenerationResult:
         turn_id, ongoing_id = cls._correlation_ids(activity)
         now = datetime.now(timezone.utc)
+        trace = build_llm_trace_context(activity).trace_context
         return CharacterGenerationResult(
             status=CharacterGenerationStatus.FALLBACK_USED
             if fallback_used
@@ -423,6 +469,9 @@ class ActionPlanner:
             attempts=1,
             started_at=now,
             finished_at=now,
+            trace_id=trace.trace_id,
+            parent_trace_id=trace.parent_trace_id,
+            behavior_plan_id=trace.behavior_plan_id,
         )
 
     @classmethod
@@ -441,6 +490,20 @@ class ActionPlanner:
         execution_result = (
             execution_value if isinstance(execution_value, ActivityExecutionResult) else None
         )
+        trace = build_llm_trace_context(activity).trace_context
+        if execution_result is not None and execution_result.trace_id is None:
+            execution_result = replace(
+                execution_result,
+                source_event_id=execution_result.source_event_id or activity.source_event_id,
+                activity_turn_id=execution_result.activity_turn_id or turn_id,
+                ongoing_activity_id=execution_result.ongoing_activity_id or ongoing_id,
+                trace_id=trace.trace_id,
+                parent_trace_id=trace.parent_trace_id,
+                behavior_plan_id=trace.behavior_plan_id,
+            )
+            activity.context["activity_execution_result"] = execution_result
+            if isinstance(payload, dict) and "activity_execution_result" in payload:
+                payload["activity_execution_result"] = execution_result
         confirmation_value = (
             payload.get("pending_confirmation") if isinstance(payload, dict) else None
         )
@@ -468,6 +531,9 @@ class ActionPlanner:
             ),
             execution_result=execution_result,
             character_result=character_result,
+            trace_id=trace.trace_id,
+            parent_trace_id=trace.parent_trace_id,
+            behavior_plan_id=trace.behavior_plan_id,
         )
         if output_unit_id is None:
             return aggregate
@@ -478,6 +544,9 @@ class ActionPlanner:
                 activity_turn_id=turn_id,
                 ongoing_activity_id=ongoing_id,
                 source_event_id=activity.source_event_id,
+                trace_id=trace.trace_id,
+                parent_trace_id=trace.parent_trace_id,
+                behavior_plan_id=trace.behavior_plan_id,
             )
         )
 

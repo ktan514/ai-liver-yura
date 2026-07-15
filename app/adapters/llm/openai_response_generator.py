@@ -5,7 +5,8 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, cast
+from uuid import uuid4
 
 from app.adapters.prompt import SimplePromptBuilder
 from app.domain.activities import Activity
@@ -71,6 +72,12 @@ class OpenAIResponseGenerator:
             available_capabilities=trace_context.available_capabilities,
             planner_state=trace_context.planner_state,
             constraints=trace_context.constraints,
+            llm_role=trace_context.llm_role,
+            model_key=trace_context.model_key or self._model,
+            service=trace_context.service or "openai_responses",
+            request_id=trace_context.request_id,
+            attempt=trace_context.attempt,
+            **trace_context.trace_context.as_log_fields(),
         )
         response_text = await asyncio.to_thread(self._generate_sync, prompt, trace_context)
         self._trace_logger.llm_response(
@@ -82,6 +89,12 @@ class OpenAIResponseGenerator:
             adopted_text=response_text,
             fallback_used=response_text == self._fallback_response,
             stage="adopted",
+            llm_role=trace_context.llm_role,
+            model_key=trace_context.model_key or self._model,
+            service=trace_context.service or "openai_responses",
+            request_id=trace_context.request_id,
+            attempt=trace_context.attempt,
+            **trace_context.trace_context.as_log_fields(),
         )
         self._trace_logger.write(
             "openai_response_generator:generate_response:finished",
@@ -94,6 +107,7 @@ class OpenAIResponseGenerator:
         return response_text
 
     async def generate(self, prompt: str) -> str:
+        request_id = str(uuid4())
         self._trace_logger.write(
             "openai_response_generator:generate:start",
             prompt_length=len(prompt),
@@ -106,6 +120,10 @@ class OpenAIResponseGenerator:
             event_id=None,
             session_id=None,
             request={"model": self._model, "input": prompt},
+            llm_role="direct_generation",
+            model_key=self._model,
+            service="openai_responses",
+            request_id=request_id,
         )
         response_text = await asyncio.to_thread(self._generate_sync, prompt)
         self._trace_logger.llm_response(
@@ -117,6 +135,10 @@ class OpenAIResponseGenerator:
             adopted_text=response_text,
             fallback_used=response_text == self._fallback_response,
             stage="adopted",
+            llm_role="direct_generation",
+            model_key=self._model,
+            service="openai_responses",
+            request_id=request_id,
         )
         self._trace_logger.write(
             "openai_response_generator:generate:finished",
@@ -180,6 +202,15 @@ class OpenAIResponseGenerator:
                     activity_id=trace_context.activity_id if trace_context else None,
                     raw_response=response_body,
                     stage="raw_http",
+                    llm_role=trace_context.llm_role if trace_context else None,
+                    model_key=self._model,
+                    service="openai_responses",
+                    request_id=trace_context.request_id if trace_context else None,
+                    attempt=trace_context.attempt if trace_context else 1,
+                    **cast(
+                        Any,
+                        trace_context.trace_context.as_log_fields() if trace_context else {},
+                    ),
                 )
                 self._trace_logger.write(
                     "openai_response_generator:generate_sync:response_received",
@@ -217,6 +248,12 @@ class OpenAIResponseGenerator:
             adopted_text=generated_text.strip() if generated_text else None,
             fallback_used=not bool(generated_text),
             stage="parsed",
+            llm_role=trace_context.llm_role if trace_context else None,
+            model_key=self._model,
+            service="openai_responses",
+            request_id=trace_context.request_id if trace_context else None,
+            attempt=trace_context.attempt if trace_context else 1,
+            **(trace_context.trace_context.as_log_fields() if trace_context else {}),
         )
         if not generated_text:
             self._trace_logger.write(

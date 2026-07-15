@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.domain.events.agent_event_type import AgentEventType
+from app.domain.trace_context import TraceContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,3 +24,18 @@ class AgentEvent:
     event_id: str = field(default_factory=lambda: str(uuid4()))
     discardable: bool = False
     replace_key: str | None = None
+    trace_context: TraceContext = field(default_factory=TraceContext.new)
+
+    def __post_init__(self) -> None:
+        if (
+            self.trace_context.source_event_id is None
+            or self.trace_context.activity_turn_id is None
+        ):
+            object.__setattr__(
+                self,
+                "trace_context",
+                self.trace_context.derive(
+                    source_event_id=self.trace_context.source_event_id or self.event_id,
+                    activity_turn_id=self.trace_context.activity_turn_id or str(uuid4()),
+                ),
+            )

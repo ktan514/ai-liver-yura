@@ -120,6 +120,10 @@ class BehaviorPlanner:
             topic=analysis.topic_candidate,
             planning_reason=analysis.planning_reason,
             autonomous_action=action,
+            trace_id=(context.trace_context.trace_id if context.trace_context else None),
+            parent_trace_id=(
+                context.trace_context.parent_trace_id if context.trace_context else None
+            ),
         )
         self._trace_logger.info(
             "behavior_planner:autonomous_plan_decided",
@@ -148,10 +152,19 @@ class BehaviorPlanner:
 
         situation = analysis or await self.evaluate_situation(context)
         plan = self.plan_from_analysis(context, situation)
+        if context.trace_context is not None:
+            plan = replace(
+                plan,
+                trace_id=context.trace_context.trace_id,
+                parent_trace_id=context.trace_context.parent_trace_id,
+            )
         self._trace_logger.debug(
             "behavior_planner:final_activity_plan",
             source=situation.evaluator_type,
             plan=plan,
+            trace_id=plan.trace_id,
+            parent_trace_id=plan.parent_trace_id,
+            behavior_plan_id=plan.behavior_plan_id,
         )
         return plan
 
@@ -364,6 +377,8 @@ class ActivityPlanValidator:
                     result_type="activity_plan_accepted",
                     summary="Capabilityを必要としないActivity Planを受理した",
                     data={"activity_type": plan.activity_type},
+                    trace_id=plan.trace_id,
+                    parent_trace_id=plan.parent_trace_id,
                 ),
             )
             self._trace_evaluation(evaluation)
@@ -431,6 +446,8 @@ class ActivityPlanValidator:
                         "required_capability": capability,
                         "operation": operation.value,
                     },
+                    trace_id=plan.trace_id,
+                    parent_trace_id=plan.parent_trace_id,
                 ),
             )
             self._trace_evaluation(evaluation)
@@ -476,6 +493,8 @@ class ActivityPlanValidator:
                     "operation": plan.operation.value if plan.operation else None,
                     "reason": reason,
                 },
+                trace_id=plan.trace_id,
+                parent_trace_id=plan.parent_trace_id,
             ),
         )
         self._trace_evaluation(evaluation)
@@ -484,10 +503,16 @@ class ActivityPlanValidator:
     def _trace_evaluation(self, evaluation: ActivityPlanEvaluation) -> None:
         self._trace_logger.debug(
             "behavior_planner:capability_validation",
+            trace_id=evaluation.plan.trace_id,
+            parent_trace_id=evaluation.plan.parent_trace_id,
+            behavior_plan_id=evaluation.plan.behavior_plan_id,
             activity_type=evaluation.plan.activity_type,
             operation=evaluation.plan.operation.value if evaluation.plan.operation else None,
             required_capability=evaluation.plan.required_capability,
             provider_plugin_id=evaluation.plan.provider_plugin_id,
+            capability=evaluation.plan.required_capability,
+            validation_stage="plan",
+            available=evaluation.accepted,
             accepted=evaluation.accepted,
             reason=evaluation.result.data.get("reason"),
         )

@@ -16,6 +16,7 @@ from app.domain.pending_confirmation import (
     ConfirmationType,
     PendingConfirmation,
 )
+from app.domain.trace_context import TraceContext
 from app.utils.trace import TraceLogger
 
 
@@ -62,6 +63,7 @@ class PendingConfirmationManager:
         source_event_id: str,
         current_ongoing_activity_id: str | None,
         context_snapshot: dict[str, object],
+        trace_context: TraceContext | None = None,
         now: datetime | None = None,
     ) -> PendingConfirmation:
         created_at = now or datetime.now(timezone.utc)
@@ -95,6 +97,10 @@ class PendingConfirmationManager:
                 max_attempts=self._max_attempts,
                 context_snapshot=dict(context_snapshot),
                 candidate_plan=plan,
+                original_trace_id=trace_context.trace_id if trace_context else plan.trace_id,
+                parent_trace_id=(
+                    trace_context.parent_trace_id if trace_context else plan.parent_trace_id
+                ),
             )
             self._current = pending
             self._trace_logger.info(
@@ -117,6 +123,7 @@ class PendingConfirmationManager:
         resolution: ConfirmationResolution,
         *,
         resolution_event_id: str,
+        trace_context: TraceContext | None = None,
     ) -> PendingConfirmation:
         status = {
             ConfirmationResolutionKind.AFFIRMATIVE: ConfirmationStatus.RESOLVED_POSITIVE,
@@ -132,6 +139,7 @@ class PendingConfirmationManager:
                 status=status,
                 resolution_event_id=resolution_event_id,
                 resolution=resolution.kind,
+                resolution_trace_id=trace_context.trace_id if trace_context else None,
             )
             self._replace_and_clear(finished)
             self._trace_logger.info(
@@ -289,7 +297,13 @@ class ConfirmationResolver:
     def __init__(self) -> None:
         self._trace_logger = TraceLogger()
 
-    def resolve(self, text: str, pending: PendingConfirmation) -> ConfirmationResolution:
+    def resolve(
+        self,
+        text: str,
+        pending: PendingConfirmation,
+        *,
+        trace_context: TraceContext | None = None,
+    ) -> ConfirmationResolution:
         normalized = re.sub(r"\s+", "", text.strip())
         if self._quoted_or_non_current.search(normalized):
             result = self._result(
@@ -335,6 +349,11 @@ class ConfirmationResolver:
         self._trace_logger.debug(
             "pending_confirmation:input_classified",
             confirmation_id=pending.confirmation_id,
+            trace_id=trace_context.trace_id if trace_context else pending.resolution_trace_id,
+            parent_trace_id=(
+                trace_context.parent_trace_id if trace_context else pending.original_trace_id
+            ),
+            component_role="confirmation_resolver",
             resolution=result.kind.value,
             confidence=result.confidence,
             reason=result.reason,

@@ -10,6 +10,8 @@ from enum import Enum, IntEnum
 from pathlib import Path
 from typing import Any
 
+from app.domain.trace_context import TraceContext
+
 
 class TraceLevel(IntEnum):
     DEBUG = 10
@@ -124,6 +126,12 @@ class TraceLogger:
     def error(self, label: str, **values: object) -> None:
         self._write(TraceLevel.ERROR, label, values)
 
+    def bind(
+        self, context: TraceContext | None = None, **values: object
+    ) -> TraceContextLogger:
+        bound = context.as_log_fields() if context is not None else {}
+        return TraceContextLogger(self, {**bound, **values})
+
     def llm_request(
         self,
         *,
@@ -138,6 +146,23 @@ class TraceLogger:
         available_capabilities: object = None,
         planner_state: object = None,
         constraints: object = None,
+        llm_role: str | None = None,
+        model_key: str | None = None,
+        service: str | None = None,
+        trace_id: str | None = None,
+        parent_trace_id: str | None = None,
+        source_event_id: str | None = None,
+        activity_turn_id: str | None = None,
+        ongoing_activity_id: str | None = None,
+        confirmation_id: str | None = None,
+        behavior_plan_id: str | None = None,
+        activity_execution_result_id: str | None = None,
+        character_generation_result_id: str | None = None,
+        output_unit_id: str | None = None,
+        activity_result_id: str | None = None,
+        game_session_id: str | None = None,
+        request_id: str | None = None,
+        attempt: int = 1,
     ) -> None:
         if not self._log_llm_prompts:
             return
@@ -154,6 +179,23 @@ class TraceLogger:
             available_capabilities=available_capabilities,
             planner_state=planner_state,
             constraints=constraints,
+            llm_role=llm_role or purpose,
+            model_key=model_key or model,
+            service=service or provider,
+            trace_id=trace_id,
+            parent_trace_id=parent_trace_id,
+            source_event_id=source_event_id or event_id,
+            activity_turn_id=activity_turn_id or activity_id,
+            ongoing_activity_id=ongoing_activity_id,
+            confirmation_id=confirmation_id,
+            behavior_plan_id=behavior_plan_id,
+            activity_execution_result_id=activity_execution_result_id,
+            character_generation_result_id=character_generation_result_id,
+            output_unit_id=output_unit_id,
+            activity_result_id=activity_result_id,
+            game_session_id=game_session_id,
+            request_id=request_id,
+            attempt=attempt,
         )
 
     def llm_response(
@@ -168,6 +210,23 @@ class TraceLogger:
         adopted_text: str | None = None,
         fallback_used: bool = False,
         stage: str = "completed",
+        llm_role: str | None = None,
+        model_key: str | None = None,
+        service: str | None = None,
+        trace_id: str | None = None,
+        parent_trace_id: str | None = None,
+        source_event_id: str | None = None,
+        activity_turn_id: str | None = None,
+        ongoing_activity_id: str | None = None,
+        confirmation_id: str | None = None,
+        behavior_plan_id: str | None = None,
+        activity_execution_result_id: str | None = None,
+        character_generation_result_id: str | None = None,
+        output_unit_id: str | None = None,
+        activity_result_id: str | None = None,
+        game_session_id: str | None = None,
+        request_id: str | None = None,
+        attempt: int = 1,
     ) -> None:
         if not self._log_llm_responses:
             return
@@ -182,9 +241,37 @@ class TraceLogger:
             parsed_response=parsed_response,
             adopted_text=adopted_text,
             fallback_used=fallback_used,
+            llm_role=llm_role or purpose,
+            model_key=model_key or model,
+            service=service or provider,
+            trace_id=trace_id,
+            parent_trace_id=parent_trace_id,
+            source_event_id=source_event_id,
+            activity_turn_id=activity_turn_id or activity_id,
+            ongoing_activity_id=ongoing_activity_id,
+            confirmation_id=confirmation_id,
+            behavior_plan_id=behavior_plan_id,
+            activity_execution_result_id=activity_execution_result_id,
+            character_generation_result_id=character_generation_result_id,
+            output_unit_id=output_unit_id,
+            activity_result_id=activity_result_id,
+            game_session_id=game_session_id,
+            request_id=request_id,
+            attempt=attempt,
         )
 
-    def user_input(self, *, source: str, event_id: str, text: str, normalized: bool = True) -> None:
+    def user_input(
+        self,
+        *,
+        source: str,
+        event_id: str,
+        text: str,
+        normalized: bool = True,
+        trace_id: str | None = None,
+        parent_trace_id: str | None = None,
+        activity_turn_id: str | None = None,
+        confirmation_id: str | None = None,
+    ) -> None:
         if not self._log_user_input:
             return
         self.debug(
@@ -194,6 +281,11 @@ class TraceLogger:
             text=text,
             normalized=normalized,
             text_length=len(text),
+            trace_id=trace_id,
+            parent_trace_id=parent_trace_id,
+            source_event_id=event_id,
+            activity_turn_id=activity_turn_id,
+            confirmation_id=confirmation_id,
         )
 
     def write(
@@ -342,6 +434,11 @@ class NullTraceLogger:
     def error(self, label: str, **values: object) -> None:
         pass
 
+    def bind(
+        self, context: TraceContext | None = None, **values: object
+    ) -> TraceContextLogger:
+        return TraceContextLogger(self, values)
+
     def llm_request(self, **values: object) -> None:
         pass
 
@@ -359,3 +456,35 @@ class NullTraceLogger:
         **values: object,
     ) -> None:
         pass
+
+
+class TraceContextLogger:
+    """TraceContextを各レコードへ一貫して付与するLogger Adapter。"""
+
+    def __init__(self, logger: TraceLogger | NullTraceLogger, values: dict[str, object]) -> None:
+        self._logger = logger
+        self._values = dict(values)
+
+    def bind(self, context: TraceContext | None = None, **values: object) -> TraceContextLogger:
+        contextual = context.as_log_fields() if context is not None else {}
+        return TraceContextLogger(self._logger, {**self._values, **contextual, **values})
+
+    def debug(self, label: str, **values: object) -> None:
+        self._logger.debug(label, **self._merge(values))
+
+    def info(self, label: str, **values: object) -> None:
+        self._logger.info(label, **self._merge(values))
+
+    def warning(self, label: str, **values: object) -> None:
+        self._logger.warning(label, **self._merge(values))
+
+    def error(self, label: str, **values: object) -> None:
+        self._logger.error(label, **self._merge(values))
+
+    def write(
+        self, label: str, *, level: str | TraceLevel | None = None, **values: object
+    ) -> None:
+        self._logger.write(label, level=level, **self._merge(values))
+
+    def _merge(self, values: dict[str, object]) -> dict[str, object]:
+        return {**self._values, **values}

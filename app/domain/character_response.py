@@ -81,6 +81,9 @@ class ActivityExecutionResult:
     source_event_id: str | None = None
     activity_turn_id: str | None = None
     ongoing_activity_id: str | None = None
+    trace_id: str | None = None
+    parent_trace_id: str | None = None
+    behavior_plan_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

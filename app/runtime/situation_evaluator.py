@@ -152,7 +152,10 @@ class SituationEvaluator:
                         "Capabilityの可用性や実行成功を判断しない",
                         "候補外のActivityを生成しない",
                     ],
+                    "trace_context": context.trace_context,
+                    "llm_attempt": attempt + 1,
                 },
+                source_event_id=context.source_event_id,
             )
             try:
                 raw = await self._model.evaluate(activity)
@@ -180,6 +183,17 @@ class SituationEvaluator:
                 ),
                 fallback_used=analysis is None,
                 stage="parsed" if analysis is not None else "schema_validation_failed",
+                llm_role="situation_evaluator",
+                service="situation_evaluator",
+                trace_id=(context.trace_context.trace_id if context.trace_context else None),
+                parent_trace_id=(
+                    context.trace_context.parent_trace_id if context.trace_context else None
+                ),
+                source_event_id=context.source_event_id,
+                activity_turn_id=(
+                    context.trace_context.activity_turn_id if context.trace_context else None
+                ),
+                attempt=attempt + 1,
             )
             if analysis is None:
                 continue
@@ -340,6 +354,7 @@ class SituationEvaluator:
             conversation_context={
                 "source_event_id": context.source_event_id,
                 "ongoing_activity_type": context.ongoing_activity_type,
+                **(context.trace_context.as_log_fields() if context.trace_context else {}),
             },
         )
         if resolved is None:

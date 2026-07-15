@@ -237,10 +237,21 @@ class RuntimeCoordinator:
             if filtered_event is None:
                 continue
             if filtered_event.event_type == AgentEventType.USER_TEXT:
+                self._trace_logger.info(
+                    "runtime_coordinator:event_received",
+                    **filtered_event.trace_context.as_log_fields(),
+                    event_type=filtered_event.event_type.value,
+                    source=str(filtered_event.payload.get("source") or "unknown"),
+                    priority=filtered_event.priority,
+                )
                 self._trace_logger.user_input(
                     source=str(filtered_event.payload.get("source") or "unknown"),
                     event_id=filtered_event.event_id,
                     text=str(filtered_event.payload.get("text") or ""),
+                    trace_id=filtered_event.trace_context.trace_id,
+                    parent_trace_id=filtered_event.trace_context.parent_trace_id,
+                    activity_turn_id=filtered_event.trace_context.activity_turn_id,
+                    confirmation_id=filtered_event.trace_context.confirmation_id,
                 )
                 if self._behavior_planner is not None and self._activity_plan_validator is not None:
                     routed_event = await self._route_behavior(filtered_event)
@@ -269,7 +280,8 @@ class RuntimeCoordinator:
             prepared_activity = self._activity_manager.prepare_user_input(prioritized_event)
             if prioritized_event.event_type == AgentEventType.USER_TEXT:
                 self._activity_planner_thread.cancel_inflight_autonomous(
-                    source_event_id=prioritized_event.event_id
+                    source_event_id=prioritized_event.event_id,
+                    trace_context=prioritized_event.trace_context,
                 )
                 if (
                     foreground_before_input is not None
@@ -357,6 +369,7 @@ class RuntimeCoordinator:
             drive=asdict(agent_state.current_drive),
             emotion=asdict(agent_state.current_emotion),
             last_activity_result=self._activity_manager.last_activity_result,
+            trace_context=event.trace_context,
         )
         situation_payload: dict[str, object]
         confirmation_payload: dict[str, object] = {}
@@ -364,19 +377,33 @@ class RuntimeCoordinator:
         pending_manager = self._pending_confirmation_manager
         pending = pending_manager.current() if pending_manager is not None else None
         if pending is not None:
+            event = replace(
+                event,
+                trace_context=event.trace_context.derive(
+                    parent_trace_id=pending.original_trace_id,
+                    confirmation_id=pending.confirmation_id,
+                ),
+            )
+            planning_context = replace(planning_context, trace_context=event.trace_context)
             assert pending_manager is not None
-            resolution = self._confirmation_resolver.resolve(planning_context.user_text, pending)
+            resolution = self._confirmation_resolver.resolve(
+                planning_context.user_text,
+                pending,
+                trace_context=event.trace_context,
+            )
             if resolution.kind == ConfirmationResolutionKind.NEW_REQUEST:
                 pending_manager.resolve(
                     pending,
                     resolution,
                     resolution_event_id=event.event_id,
+                    trace_context=event.trace_context,
                 )
             elif resolution.kind == ConfirmationResolutionKind.AFFIRMATIVE:
                 resolved = pending_manager.resolve(
                     pending,
                     resolution,
                     resolution_event_id=event.event_id,
+                    trace_context=event.trace_context,
                 )
                 plan = self._confirmed_plan(resolved.candidate_plan)
                 snapshot_analysis = resolved.context_snapshot.get("situation_analysis")
@@ -402,6 +429,7 @@ class RuntimeCoordinator:
                     pending,
                     resolution,
                     resolution_event_id=event.event_id,
+                    trace_context=event.trace_context,
                 )
                 return self._confirmation_response_event(
                     event,
@@ -440,6 +468,7 @@ class RuntimeCoordinator:
                     ongoing.ongoing_activity_id if ongoing is not None else None
                 ),
                 context_snapshot={"situation_analysis": situation_payload},
+                trace_context=event.trace_context,
             )
             return self._confirmation_response_event(
                 event,
@@ -449,10 +478,19 @@ class RuntimeCoordinator:
             )
         evaluation = validator.validate(plan)
         plan = evaluation.plan
+        event = replace(
+            event,
+            trace_context=event.trace_context.derive(
+                behavior_plan_id=plan.behavior_plan_id
+            ),
+        )
         self._last_behavior_evaluation = evaluation
         self._last_behavior_fallback_plan = None
         self._trace_logger.info(
             "behavior_planner:activity_plan_evaluated",
+            **event.trace_context.derive(
+                behavior_plan_id=plan.behavior_plan_id
+            ).as_log_fields(),
             decision=plan.decision.value,
             activity_type=plan.activity_type,
             operation=plan.operation.value if plan.operation else None,
@@ -471,6 +509,9 @@ class RuntimeCoordinator:
                 current_status=ongoing.status.value if ongoing is not None else None,
             ),
             **confirmation_payload,
+            "trace_context": event.trace_context.derive(
+                behavior_plan_id=plan.behavior_plan_id
+            ),
         }
         if not evaluation.accepted:
             behavior_payload["activity_execution_result"] = ActivityExecutionResult(
@@ -482,6 +523,10 @@ class RuntimeCoordinator:
                 payload={"summary": evaluation.result.summary},
                 failure_reason=str(evaluation.result.data.get("reason") or "activity_rejected"),
                 constraints=plan.constraints,
+                source_event_id=event.event_id,
+                trace_id=event.trace_context.trace_id,
+                parent_trace_id=event.trace_context.parent_trace_id,
+                behavior_plan_id=plan.behavior_plan_id,
             )
             fallback_plan = planner.fallback_after_rejection(evaluation)
             self._last_behavior_fallback_plan = fallback_plan
@@ -533,6 +578,10 @@ class RuntimeCoordinator:
                     else None
                 ),
                 constraints=plan.constraints,
+                source_event_id=event.event_id,
+                trace_id=event.trace_context.trace_id,
+                parent_trace_id=event.trace_context.parent_trace_id,
+                behavior_plan_id=plan.behavior_plan_id,
             )
         return replace(routed, payload={**routed.payload, **behavior_payload})
 
@@ -652,6 +701,9 @@ class RuntimeCoordinator:
                     if final_plan is not None and pending.resolution_event_id is not None
                     else None
                 ),
+                "original_trace_id": pending.original_trace_id,
+                "resolution_trace_id": pending.resolution_trace_id,
+                "parent_trace_id": pending.parent_trace_id,
             }
         }
 

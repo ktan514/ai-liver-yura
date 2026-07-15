@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol
+from uuid import uuid4
 
 from app.domain.activities import ActivityResult
 from app.domain.activity_constraints import (
     ConstraintValidationError,
     ValidatedConstraints,
 )
+from app.domain.trace_context import TraceContext
 
 
 class BehaviorDecision(str, Enum):
@@ -183,6 +185,9 @@ class ActivityPlan:
     constraint_errors: tuple[ConstraintValidationError, ...] = ()
     constraints_schema_version: str | None = None
     validated_constraints: ValidatedConstraints | None = None
+    behavior_plan_id: str = field(default_factory=lambda: str(uuid4()))
+    trace_id: str | None = None
+    parent_trace_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,3 +210,4 @@ class BehaviorPlanningContext:
     drive: dict[str, float] = field(default_factory=dict)
     emotion: dict[str, object] = field(default_factory=dict)
     last_activity_result: ActivityResult | None = None
+    trace_context: TraceContext | None = None

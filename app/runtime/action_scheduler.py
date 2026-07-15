@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import heapq
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from typing import Protocol
 from uuid import uuid4
@@ -66,6 +66,9 @@ class ActionScheduler:
                     if turn_result is not None and turn_result.output_result is not None
                     else str(uuid4())
                 ),
+                trace_id=turn_result.trace_id if turn_result else None,
+                parent_trace_id=turn_result.parent_trace_id if turn_result else None,
+                behavior_plan_id=turn_result.behavior_plan_id if turn_result else None,
             )
             self._trace_output_result(output_result)
             return output_result
@@ -132,6 +135,8 @@ class ActionScheduler:
     def _trace_output_result(self, result: ActivityOutputResult) -> None:
         self._trace_logger.info(
             "action_scheduler:output_result",
+            trace_id=result.trace_id,
+            parent_trace_id=result.parent_trace_id,
             activity_turn_id=result.activity_turn_id,
             output_unit_id=result.output_unit_id,
             activity_result_id=result.activity_result_id,
@@ -397,6 +402,16 @@ class ActionScheduler:
             status = ActivityOutputStatus.FAILED
         turn_result = group.activity_turn_result
         planned_output = turn_result.output_result if turn_result is not None else None
+        correlated_actions = tuple(
+            replace(
+                result,
+                trace_id=turn_result.trace_id if turn_result is not None else None,
+                parent_trace_id=(
+                    turn_result.parent_trace_id if turn_result is not None else None
+                ),
+            )
+            for result in action_results
+        )
         return ActivityOutputResult(
             status=status,
             output_unit_id=group.group_id,
@@ -405,7 +420,7 @@ class ActionScheduler:
             ),
             ongoing_activity_id=turn_result.ongoing_activity_id if turn_result else None,
             source_event_id=turn_result.source_event_id if turn_result else None,
-            action_results=tuple(action_results),
+            action_results=correlated_actions,
             failure_stage="action_execution"
             if status
             in {
@@ -420,6 +435,9 @@ class ActionScheduler:
             else str(uuid4()),
             started_at=planned_output.started_at if planned_output is not None else started_at,
             finished_at=datetime.now(timezone.utc),
+            trace_id=turn_result.trace_id if turn_result else None,
+            parent_trace_id=turn_result.parent_trace_id if turn_result else None,
+            behavior_plan_id=turn_result.behavior_plan_id if turn_result else None,
         )
 
 

@@ -14,3 +14,6 @@ class ActivityResult:
     data: dict[str, Any] = field(default_factory=dict)
     succeeded: bool = True
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    trace_id: str | None = None
+    parent_trace_id: str | None = None
+    activity_turn_id: str | None = None

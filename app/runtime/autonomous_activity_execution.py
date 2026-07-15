@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.domain.activities import Activity, ActivityType
 from app.domain.character_response import ActivityExecutionResult, ActivityExecutionStatus
+from app.utils.llm_trace import build_llm_trace_context
 
 
 def prepare_autonomous_execution(activity: Activity) -> ActivityExecutionResult | None:
@@ -20,6 +21,7 @@ def prepare_autonomous_execution(activity: Activity) -> ActivityExecutionResult 
     planning_reason = str(
         plan.get("planning_reason") or event_payload.get("reason") or "internal_drive"
     )
+    trace = build_llm_trace_context(activity).trace_context
     result = ActivityExecutionResult(
         activity_type=ActivityType.AUTONOMOUS_TALK.value,
         operation=str(plan.get("operation") or "start"),
@@ -35,7 +37,10 @@ def prepare_autonomous_execution(activity: Activity) -> ActivityExecutionResult 
         if isinstance(plan.get("constraints"), dict)
         else {},
         source_event_id=activity.source_event_id,
-        activity_turn_id=activity.activity_id,
+        activity_turn_id=trace.activity_turn_id,
+        trace_id=trace.trace_id,
+        parent_trace_id=trace.parent_trace_id,
+        behavior_plan_id=trace.behavior_plan_id,
     )
     activity.context["activity_execution_result"] = result
     if isinstance(event_payload_value, dict):

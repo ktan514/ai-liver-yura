@@ -23,11 +23,13 @@ from app.domain.character_response import (
     ResponseContext,
     ResponseValidationResult,
 )
+from app.domain.trace_context import trace_context_from
 from app.ports.llm_roles import CharacterModel, ResponseValidationModel
 from app.runtime.response_claim_validator import (
     DeterministicFactValidator,
     IndependentClaimExtractor,
 )
+from app.utils.llm_trace import build_llm_trace_context
 from app.utils.trace import TraceLogger
 
 
@@ -376,7 +378,12 @@ class CharacterLlmService:
         self._trace_logger = TraceLogger()
 
     async def generate(
-        self, source: Activity, context: ResponseContext, *, correction: str | None = None
+        self,
+        source: Activity,
+        context: ResponseContext,
+        *,
+        correction: str | None = None,
+        attempt: int = 1,
     ) -> CharacterResponse:
         prompt = self._prompt_builder.build(
             context,
@@ -395,14 +402,26 @@ class CharacterLlmService:
                 "response_context": asdict(context),
                 "event_payload": {"text": context.user_input},
                 "prepared_response_text": source.context.get("prepared_response_text"),
+                "trace_context": source.context.get("trace_context"),
+                "activity_turn_id": source.context.get("activity_turn_id"),
+                "ongoing_activity": source.context.get("ongoing_activity"),
+                "llm_attempt": attempt,
+                "activity_execution_result": source.context.get(
+                    "activity_execution_result"
+                ),
             },
         )
         raw = await self._model.generate_character_response(activity)
         response = self.parse(raw)
         if response is None:
             raise ValueError("Character LLMの構造化応答が不正です。")
+        trace = build_llm_trace_context(activity)
         self._trace_logger.info(
             "character_llm:response_generated",
+            **trace.trace_context.as_log_fields(),
+            llm_role="character",
+            request_id=trace.request_id,
+            attempt=attempt,
             source_activity_id=source.activity_id,
             speech_length=len(response.speech),
             expression=response.expression,
@@ -500,6 +519,8 @@ class ResponseValidator:
         source: Activity,
         context: ResponseContext,
         response: CharacterResponse,
+        *,
+        attempt: int = 1,
     ) -> ResponseValidationResult:
         try:
             extracted_claims = self._claim_extractor.extract(context, response.speech)
@@ -512,6 +533,15 @@ class ResponseValidator:
             )
             self._trace_result(source, result)
             return result
+        trace = build_llm_trace_context(source).trace_context
+        self._trace_logger.debug(
+            "response_claim_extractor:completed",
+            **trace.as_log_fields(),
+            component_role="claim_extractor",
+            self_reported_claims=[claim.value for claim in response.claims],
+            extracted_claim_types=[claim.claim_type.value for claim in extracted_claims],
+            attempt=attempt,
+        )
         deterministic = self._fact_validator.validate(context, response, extracted_claims)
         if not deterministic.accepted:
             self._trace_result(source, deterministic)
@@ -537,6 +567,13 @@ class ResponseValidator:
                 "llm_role": "response_validator",
                 "response_context": asdict(context),
                 "character_response": asdict(response),
+                "trace_context": source.context.get("trace_context"),
+                "activity_turn_id": source.context.get("activity_turn_id"),
+                "ongoing_activity": source.context.get("ongoing_activity"),
+                "llm_attempt": attempt,
+                "activity_execution_result": source.context.get(
+                    "activity_execution_result"
+                ),
             },
         )
         try:
@@ -628,7 +665,11 @@ class ResponseValidator:
         return tuple(claims)
 
     def _trace_result(self, source: Activity, result: ResponseValidationResult) -> None:
+        trace = build_llm_trace_context(source)
         fields = {
+            **trace.trace_context.as_log_fields(),
+            "llm_role": "response_validator" if self._model is not None else None,
+            "component_role": "response_validator",
             "source_activity_id": source.activity_id,
             "accepted": result.accepted,
             "reason": result.reason,
@@ -663,6 +704,7 @@ class CharacterResponsePipeline:
     ) -> tuple[CharacterResponse, CharacterGenerationResult]:
         started_at = datetime.now(timezone.utc)
         activity_turn_id, ongoing_activity_id = self._correlation_ids(activity)
+        trace = build_llm_trace_context(activity).trace_context
         context = self._context_builder.build(activity)
         validation: ResponseValidationResult | None = None
         last_error: str | None = None
@@ -674,8 +716,14 @@ class CharacterResponsePipeline:
                     correction=(
                         self._correction(validation, context) if validation is not None else None
                     ),
+                    attempt=attempt + 1,
                 )
-                validation = await self._validator.validate(activity, context, response)
+                validation = await self._validator.validate(
+                    activity,
+                    context,
+                    response,
+                    attempt=attempt + 1,
+                )
             except Exception as error:
                 last_error = f"{type(error).__name__}: {error}"
                 self._trace_logger.warning(
@@ -700,6 +748,9 @@ class CharacterResponsePipeline:
                     attempts=attempt + 1,
                     started_at=started_at,
                     finished_at=datetime.now(timezone.utc),
+                    trace_id=trace.trace_id,
+                    parent_trace_id=trace.parent_trace_id,
+                    behavior_plan_id=trace.behavior_plan_id,
                 )
             self._trace_logger.warning(
                 "character_response_pipeline:response_rejected",
@@ -734,6 +785,9 @@ class CharacterResponsePipeline:
             attempts=2 if validation is not None else 1,
             started_at=started_at,
             finished_at=datetime.now(timezone.utc),
+            trace_id=trace.trace_id,
+            parent_trace_id=trace.parent_trace_id,
+            behavior_plan_id=trace.behavior_plan_id,
         )
 
     @staticmethod
@@ -743,9 +797,20 @@ class CharacterResponsePipeline:
         ongoing = activity.context.get("ongoing_activity")
         ongoing_id = getattr(ongoing, "ongoing_activity_id", None)
         context_turn_id = activity.context.get("activity_turn_id")
+        trace = trace_context_from(activity.context)
         return (
-            str(turn_id or context_turn_id or activity.activity_id),
-            str(ongoing_id) if ongoing_id is not None else None,
+            str(
+                turn_id
+                or context_turn_id
+                or (trace.activity_turn_id if trace is not None else None)
+                or activity.activity_id
+            ),
+            str(
+                ongoing_id
+                or (trace.ongoing_activity_id if trace is not None else None)
+            )
+            if ongoing_id is not None or (trace is not None and trace.ongoing_activity_id)
+            else None,
         )
 
     @staticmethod

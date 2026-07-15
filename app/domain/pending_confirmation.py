@@ -70,6 +70,9 @@ class PendingConfirmation:
     resolution: ConfirmationResolutionKind | None = None
     activity_turn_id: str | None = None
     final_behavior_plan_id: str | None = None
+    original_trace_id: str | None = None
+    resolution_trace_id: str | None = None
+    parent_trace_id: str | None = None
 
     @property
     def is_pending(self) -> bool:

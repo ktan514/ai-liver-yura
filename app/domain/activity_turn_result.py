@@ -48,6 +48,9 @@ class CharacterGenerationResult:
     result_id: str = field(default_factory=lambda: str(uuid4()))
     started_at: datetime = field(default_factory=_now)
     finished_at: datetime | None = None
+    trace_id: str | None = None
+    parent_trace_id: str | None = None
+    behavior_plan_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +63,8 @@ class ActionExecutionResult:
     error: str | None = None
     started_at: datetime = field(default_factory=_now)
     finished_at: datetime | None = None
+    trace_id: str | None = None
+    parent_trace_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +80,9 @@ class ActivityOutputResult:
     activity_result_id: str = field(default_factory=lambda: str(uuid4()))
     started_at: datetime = field(default_factory=_now)
     finished_at: datetime | None = None
+    trace_id: str | None = None
+    parent_trace_id: str | None = None
+    behavior_plan_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +104,9 @@ class ActivityTurnResult:
     output_result: ActivityOutputResult | None = None
     created_at: datetime = field(default_factory=_now)
     completed_at: datetime | None = None
+    trace_id: str | None = None
+    parent_trace_id: str | None = None
+    behavior_plan_id: str | None = None
 
     @property
     def final_status(self) -> str:

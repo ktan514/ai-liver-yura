@@ -10,6 +10,7 @@ from app.domain.activities.activity_status import ActivityStatus
 from app.domain.activities.activity_turn import ActivityTurn
 from app.domain.activity_turn_result import ActivityOutputResult, CharacterGenerationResult
 from app.domain.character_response import ActivityExecutionResult
+from app.domain.trace_context import TraceContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,13 +57,26 @@ class OngoingActivity:
         *,
         operation: str | None = None,
         constraints_snapshot: dict[str, object] | None = None,
+        trace_context: TraceContext | None = None,
     ) -> OngoingActivity:
+        turn_id = (
+            trace_context.activity_turn_id
+            if trace_context is not None and trace_context.activity_turn_id is not None
+            else str(uuid4())
+        )
         turn = ActivityTurn(
             sequence=len(self.turns) + 1,
             input_text=input_text,
             source_event_id=source_event_id,
             operation=operation,
             constraints_snapshot=dict(constraints_snapshot or {}),
+            trace_context=(
+                trace_context or TraceContext.new(source_event_id=source_event_id)
+            ).derive(
+                ongoing_activity_id=self.ongoing_activity_id,
+                activity_turn_id=turn_id,
+            ),
+            turn_id=turn_id,
         )
         return replace(
             self,

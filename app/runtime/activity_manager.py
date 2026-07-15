@@ -13,6 +13,7 @@ from app.domain.activity_turn_result import ActivityOutputResult, ActivityTurnRe
 from app.domain.character_response import ActivityExecutionResult
 from app.domain.events import AgentEvent, AgentEventType
 from app.domain.games import GameSession
+from app.domain.trace_context import TraceContext
 from app.runtime.game_engine import GameEngine
 from app.utils.trace import TraceLogger
 
@@ -187,6 +188,7 @@ class ActivityManager:
         source_event_id: str | None,
         operation: str | None,
         constraints_snapshot: dict[str, object] | None = None,
+        trace_context: TraceContext | None = None,
     ) -> OngoingActivity | None:
         with self._lock:
             current = self._ongoing_activity
@@ -197,6 +199,7 @@ class ActivityManager:
                 source_event_id,
                 operation=operation,
                 constraints_snapshot=constraints_snapshot,
+                trace_context=trace_context,
             )
             self._ongoing_activity = updated
             turn = updated.turns[-1]
@@ -596,11 +599,18 @@ class ActivityManager:
         if event.event_type in (AgentEventType.USER_TEXT, AgentEventType.YOUTUBE_COMMENT):
             ongoing = self._ongoing_activity
             if ongoing is not None:
-                ongoing = ongoing.begin_turn(str(event.payload.get("text") or ""), event.event_id)
+                ongoing = ongoing.begin_turn(
+                    str(event.payload.get("text") or ""),
+                    event.event_id,
+                    trace_context=event.trace_context,
+                )
                 self._ongoing_activity = ongoing
             context: dict[str, object] = {
                 "event_payload": event.payload,
                 "is_ongoing_activity_input": ongoing is not None,
+                "trace_context": (
+                    ongoing.turns[-1].trace_context if ongoing is not None else event.trace_context
+                ),
             }
             goal = "ユーザー入力に応答する"
             if ongoing is not None:
@@ -623,7 +633,7 @@ class ActivityManager:
                 activity_type=ActivityType.STARTUP_REACTION,
                 goal="起動直後の状況に反応し、配信準備中であることを自然に伝える",
                 priority=90 + event.priority,
-                context={"event_payload": event.payload},
+                context={"event_payload": event.payload, "trace_context": event.trace_context},
                 interruptible=False,
                 source_event_id=event.event_id,
             )
@@ -633,7 +643,7 @@ class ActivityManager:
                 activity_type=ActivityType.STREAM_OPENING_GREETING,
                 goal="配信開始時のあいさつをして、これから話し始める雰囲気を作る",
                 priority=95 + event.priority,
-                context={"event_payload": event.payload},
+                context={"event_payload": event.payload, "trace_context": event.trace_context},
                 interruptible=False,
                 source_event_id=event.event_id,
             )
@@ -643,7 +653,7 @@ class ActivityManager:
                 activity_type=ActivityType.STREAM_CLOSING_GREETING,
                 goal="配信終了前のあいさつをして、視聴者に自然に別れを伝える",
                 priority=110 + event.priority,
-                context={"event_payload": event.payload},
+                context={"event_payload": event.payload, "trace_context": event.trace_context},
                 interruptible=False,
                 source_event_id=event.event_id,
             )
@@ -676,6 +686,7 @@ class ActivityManager:
                         if isinstance(event.payload.get("autonomous_situation_context"), dict)
                         else {}
                     ),
+                    "trace_context": event.trace_context,
                 },
                 interruptible=True,
                 source_event_id=event.event_id,
@@ -686,7 +697,7 @@ class ActivityManager:
                 activity_type=ActivityType.IDLE_OBSERVATION,
                 goal="配信中の間を観察する",
                 priority=15 + event.priority,
-                context={"event_payload": event.payload},
+                context={"event_payload": event.payload, "trace_context": event.trace_context},
                 interruptible=True,
                 source_event_id=event.event_id,
             )
@@ -695,7 +706,7 @@ class ActivityManager:
             activity_type=ActivityType.IDLE_OBSERVATION,
             goal="状態を観察する",
             priority=10 + event.priority,
-            context={"event_payload": event.payload},
+            context={"event_payload": event.payload, "trace_context": event.trace_context},
             interruptible=True,
             source_event_id=event.event_id,
         )

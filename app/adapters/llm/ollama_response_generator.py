@@ -78,6 +78,12 @@ class OllamaResponseGenerator(ResponseGenerator):
             available_capabilities=trace_context.available_capabilities,
             planner_state=trace_context.planner_state,
             constraints=trace_context.constraints,
+            llm_role=trace_context.llm_role,
+            model_key=trace_context.model_key or self._model,
+            service=trace_context.service or "ollama_generate",
+            request_id=trace_context.request_id,
+            attempt=trace_context.attempt,
+            **trace_context.trace_context.as_log_fields(),
         )
 
         self._trace_logger.write(
@@ -106,6 +112,12 @@ class OllamaResponseGenerator(ResponseGenerator):
             adopted_text=response_text or self._fallback_response,
             fallback_used=not bool(response_text),
             stage="adopted",
+            llm_role=trace_context.llm_role,
+            model_key=trace_context.model_key or self._model,
+            service=trace_context.service or "ollama_generate",
+            request_id=trace_context.request_id,
+            attempt=trace_context.attempt,
+            **trace_context.trace_context.as_log_fields(),
         )
 
         if not response_text:

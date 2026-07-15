@@ -4,6 +4,7 @@ from app.domain.autonomous_planning import (
     AutonomousSituationAnalysis,
     AutonomousSituationContext,
 )
+from app.utils.trace import TraceLogger
 
 
 class AutonomousSituationEvaluator:
@@ -46,7 +47,7 @@ class AutonomousSituationEvaluator:
                 "boredom": "気分転換に考えてみたいこと",
                 "energy": "いまの気分",
             }.get(drive, "いま気になっていること")
-        return AutonomousSituationAnalysis(
+        analysis = AutonomousSituationAnalysis(
             suggested_action=action,
             topic_candidate=topic,
             planning_reason=str(event.get("reason") or "internal_drive"),
@@ -57,3 +58,11 @@ class AutonomousSituationEvaluator:
                 "do_not_claim_external_execution": True,
             },
         )
+        TraceLogger().debug(
+            "autonomous_situation_evaluator:evaluated",
+            **(context.trace_context.as_log_fields() if context.trace_context else {}),
+            component_role="autonomous_situation_evaluator",
+            suggested_action=analysis.suggested_action,
+            topic_candidate=analysis.topic_candidate,
+        )
+        return analysis

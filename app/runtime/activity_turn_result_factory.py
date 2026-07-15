@@ -13,6 +13,7 @@ from app.domain.activity_turn_result import (
     CharacterGenerationStatus,
 )
 from app.domain.character_response import ActivityExecutionResult
+from app.utils.llm_trace import build_llm_trace_context
 
 
 def action_planning_failure_group(activity: Activity, error: Exception) -> ActionPlanGroup:
@@ -37,6 +38,7 @@ def action_planning_failure_group(activity: Activity, error: Exception) -> Actio
         execution_value if isinstance(execution_value, ActivityExecutionResult) else None
     )
     now = datetime.now(timezone.utc)
+    trace = build_llm_trace_context(activity).trace_context
     character_value = activity.context.get("character_generation_result")
     character_result = (
         character_value
@@ -49,6 +51,9 @@ def action_planning_failure_group(activity: Activity, error: Exception) -> Actio
             error="action_planning_failed_before_character_result_was_committed",
             started_at=now,
             finished_at=now,
+            trace_id=trace.trace_id,
+            parent_trace_id=trace.parent_trace_id,
+            behavior_plan_id=trace.behavior_plan_id,
         )
     )
     output_unit_id = str(uuid4())
@@ -62,6 +67,9 @@ def action_planning_failure_group(activity: Activity, error: Exception) -> Actio
         error=f"{type(error).__name__}: {error}",
         started_at=now,
         finished_at=now,
+        trace_id=trace.trace_id,
+        parent_trace_id=trace.parent_trace_id,
+        behavior_plan_id=trace.behavior_plan_id,
     )
     aggregate = ActivityTurnResult(
         activity_turn_id=activity_turn_id,
@@ -73,6 +81,9 @@ def action_planning_failure_group(activity: Activity, error: Exception) -> Actio
         operation=execution_result.operation if execution_result is not None else None,
         execution_result=execution_result,
         character_result=character_result,
+        trace_id=trace.trace_id,
+        parent_trace_id=trace.parent_trace_id,
+        behavior_plan_id=trace.behavior_plan_id,
     ).with_output(output_result)
     return ActionPlanGroup(
         source_activity_id=activity.activity_id,
@@ -101,6 +112,9 @@ def canceled_output_group(group: ActionPlanGroup, *, reason: str) -> ActionPlanG
         else str(uuid4()),
         started_at=base.output_result.started_at if base.output_result is not None else now,
         finished_at=now,
+        trace_id=base.trace_id,
+        parent_trace_id=base.parent_trace_id,
+        behavior_plan_id=base.behavior_plan_id,
     )
     return ActionPlanGroup(
         source_activity_id=group.source_activity_id,

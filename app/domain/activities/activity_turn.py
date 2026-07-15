@@ -13,6 +13,7 @@ from app.domain.activity_turn_result import (
     CharacterGenerationResult,
 )
 from app.domain.character_response import ActivityExecutionResult
+from app.domain.trace_context import TraceContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +33,7 @@ class ActivityTurn:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     completed_at: datetime | None = None
+    trace_context: TraceContext = field(default_factory=TraceContext.new)
 
     def completed(self, result: ActivityResult) -> ActivityTurn:
         completed_at = datetime.now(timezone.utc)
@@ -54,6 +56,9 @@ class ActivityTurn:
             source_event_id=self.source_event_id,
             ongoing_activity_id=result.ongoing_activity_id,
             operation=self.operation,
+            trace_id=self.trace_context.trace_id,
+            parent_trace_id=self.trace_context.parent_trace_id,
+            behavior_plan_id=self.trace_context.behavior_plan_id,
         )
         return replace(
             self,
@@ -95,4 +100,7 @@ class ActivityTurn:
             else None,
             operation=self.operation,
             execution_result=self.execution_result,
+            trace_id=self.trace_context.trace_id,
+            parent_trace_id=self.trace_context.parent_trace_id,
+            behavior_plan_id=self.trace_context.behavior_plan_id,
         )
