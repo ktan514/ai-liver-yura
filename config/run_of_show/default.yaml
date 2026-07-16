@@ -1,0 +1,11 @@
+run_of_show_id: default
+title: 標準配信構成
+version: "1"
+planned_duration_seconds: 3600
+segments:
+  - segment_id: opening
+    title: オープニング
+  - segment_id: main
+    title: メイン
+  - segment_id: closing
+    title: クロージング
