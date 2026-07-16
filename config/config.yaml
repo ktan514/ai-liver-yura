@@ -43,6 +43,26 @@ services:
   topic_memory_database:
     type: postgres
     dsn_env: AI_LIVER_DATABASE_URL
+  youtube:
+    type: fake
+    client_secret_path_env: YOUTUBE_CLIENT_SECRET_PATH
+    token_path_env: YOUTUBE_TOKEN_PATH
+    request_timeout_seconds: 15.0
+    max_retries: 2
+    retry_initial_delay_seconds: 1.0
+    oauth_open_browser: true
+    oauth_timeout_seconds: 300.0
+    # 準備段階では既にliveのBroadcastを候補にしない
+    allow_live_broadcast: false
+    allowed_privacy_statuses:
+      - private
+      - unlisted
+      - public
+  obs:
+    type: fake
+    websocket_url: ws://127.0.0.1:4455
+    password_env: OBS_WEBSOCKET_PASSWORD
+    timeout_seconds: 5.0
 
 # 利用可能なモデルを登録し、各機能からキー名で参照する。
 models:
@@ -177,6 +197,30 @@ input_receivers:
 confirmation:
   timeout_seconds: 30.0
   max_attempts: 2
+
+# 配信準備は状態確認だけを行い、OBS開始やYouTube遷移は行わない。
+streaming:
+  health_timeout_seconds: 60.0
+  readiness:
+    require_youtube: true
+    require_obs: true
+    require_tts: true
+    require_avatar: false
+    require_run_of_show: true
+    require_emergency_stop: false
+    allow_required_degraded: false
+    require_live_chat: false
+  obs:
+    expected_scene_collection: AI Liver
+    expected_start_scene: Starting Soon
+    required_audio_sources:
+      - VOICEVOX
+  run_of_show:
+    directory: config/run_of_show
+    default_id: default
+  fake:
+    broadcast_id: fake-broadcast-1
+    broadcast_title: 配信準備テスト枠
 
 plugins:
   games:

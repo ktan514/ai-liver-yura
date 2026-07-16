@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
-from dataclasses import replace
+import sys
+from dataclasses import dataclass, replace
+from datetime import datetime
 from queue import Queue
+from typing import TYPE_CHECKING
 
 from app.adapters.embedding.openai_embedding_generator import (
     OpenAIEmbeddingGenerator,
@@ -102,6 +105,22 @@ from app.usecases.enrich_activity_with_topic_memory_usecase import (
     EnrichActivityWithTopicMemoryUsecase,
 )
 from app.utils.trace import TraceLogger
+
+if TYPE_CHECKING:
+    from app.adapters.streaming import (
+        InMemoryStreamPreparationPublisher,
+        InMemoryStreamSessionRepository,
+    )
+    from app.core.plugins import CapabilityRegistry
+    from app.usecases import PrepareStreamSessionUsecase
+
+
+@dataclass(frozen=True, slots=True)
+class StreamPreparationRuntime:
+    usecase: PrepareStreamSessionUsecase
+    sessions: InMemoryStreamSessionRepository
+    publisher: InMemoryStreamPreparationPublisher
+    capability_registry: CapabilityRegistry
 
 
 def _resolve_service(config: AppConfig, key: str) -> ServiceSettings:
@@ -844,3 +863,196 @@ def _is_model_provider_available(config: AppConfig, model_key: str) -> bool:
     if service.type == "openai":
         return bool(service.api_key_env and os.getenv(service.api_key_env))
     return True
+
+
+def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRuntime:
+    """状態確認専用Runtimeを組み立てる。配信開始・停止の依存は含めない。"""
+    from app.adapters.streaming import (
+        FakeObsPreparationAdapter,
+        FakeObsPreparationConfig,
+        FakeYouTubePreparationAdapter,
+        FakeYouTubePreparationConfig,
+        InMemoryStreamPreparationPublisher,
+        InMemoryStreamSessionRepository,
+        ObsWebSocketPreparationAdapter,
+        UnavailableAvatarHealthAdapter,
+        UnavailableYouTubePreparationAdapter,
+        VoiceVoxHealthAdapter,
+        VoiceVoxHealthConfig,
+        YamlRunOfShowRepository,
+    )
+    from app.core.plugins import CapabilityAvailability, CapabilityRegistry
+    from app.domain.streaming import HealthStatus, ReadinessPolicy, YouTubeBroadcastSummary
+    from app.plugins.youtube_streaming import StreamingPreparationPlugin
+    from app.ports.streaming_preparation import ObsPreparationPort, YouTubePreparationPort
+    from app.usecases import PrepareStreamSessionUsecase, StreamPreparationRequirements
+
+    youtube_service = _resolve_service(config, "youtube")
+    youtube: YouTubePreparationPort
+    if youtube_service.type == "fake":
+        youtube = FakeYouTubePreparationAdapter(
+            FakeYouTubePreparationConfig(
+                broadcasts=(
+                    YouTubeBroadcastSummary(
+                        broadcast_id=config.streaming.fake.broadcast_id,
+                        title=config.streaming.fake.broadcast_title,
+                    ),
+                )
+            )
+        )
+    elif youtube_service.type in {"google", "google_youtube"}:
+        from app.adapters.youtube import (
+            GoogleYouTubeAuthConfig,
+            GoogleYouTubeAuthService,
+            GoogleYouTubeClientConfig,
+            GoogleYouTubeClientFactory,
+            GoogleYouTubePreparationAdapter,
+            GoogleYouTubePreparationConfig,
+        )
+
+        required_settings = {
+            "client_secret_path_env": youtube_service.client_secret_path_env,
+            "token_path_env": youtube_service.token_path_env,
+            "request_timeout_seconds": youtube_service.request_timeout_seconds,
+            "max_retries": youtube_service.max_retries,
+            "retry_initial_delay_seconds": youtube_service.retry_initial_delay_seconds,
+            "oauth_open_browser": youtube_service.oauth_open_browser,
+            "allow_live_broadcast": youtube_service.allow_live_broadcast,
+            "oauth_timeout_seconds": youtube_service.oauth_timeout_seconds,
+            "allowed_privacy_statuses": youtube_service.allowed_privacy_statuses,
+        }
+        missing = [name for name, value in required_settings.items() if value is None]
+        if missing:
+            youtube = UnavailableYouTubePreparationAdapter(
+                "YouTube Google Adapterの設定が不足しています: " + ", ".join(missing)
+            )
+        else:
+            assert youtube_service.request_timeout_seconds is not None
+            assert youtube_service.max_retries is not None
+            assert youtube_service.retry_initial_delay_seconds is not None
+            assert youtube_service.oauth_timeout_seconds is not None
+            assert youtube_service.allowed_privacy_statuses is not None
+            client_secret_path_env = str(youtube_service.client_secret_path_env)
+            token_path_env = str(youtube_service.token_path_env)
+            request_timeout = float(youtube_service.request_timeout_seconds)
+            auth_service = GoogleYouTubeAuthService(
+                GoogleYouTubeAuthConfig(
+                    client_secret_path_env=client_secret_path_env,
+                    token_path_env=token_path_env,
+                    request_timeout_seconds=request_timeout,
+                    open_browser=bool(youtube_service.oauth_open_browser),
+                    oauth_timeout_seconds=youtube_service.oauth_timeout_seconds,
+                )
+            )
+            client_factory = GoogleYouTubeClientFactory(
+                auth_service,
+                GoogleYouTubeClientConfig(request_timeout_seconds=request_timeout),
+            )
+            youtube = GoogleYouTubePreparationAdapter(
+                auth_service=auth_service,
+                client_factory=client_factory,
+                config=GoogleYouTubePreparationConfig(
+                    max_retries=int(youtube_service.max_retries),
+                    retry_initial_delay_seconds=float(youtube_service.retry_initial_delay_seconds),
+                    allow_live_broadcast=bool(youtube_service.allow_live_broadcast),
+                    allowed_privacy_statuses=youtube_service.allowed_privacy_statuses,
+                ),
+            )
+    else:
+        raise RuntimeError(f"未対応のYouTubeサービスです: {youtube_service.type}")
+
+    obs_service = _resolve_service(config, "obs")
+    obs: ObsPreparationPort
+    if obs_service.type == "fake":
+        obs = FakeObsPreparationAdapter(
+            FakeObsPreparationConfig(
+                current_scene=config.streaming.obs.expected_start_scene,
+                current_scene_collection=config.streaming.obs.expected_scene_collection,
+                audio_source_states={
+                    name: True for name in config.streaming.obs.required_audio_sources
+                },
+            )
+        )
+    elif obs_service.type == "obs_websocket":
+        obs = ObsWebSocketPreparationAdapter(
+            websocket_url=_require_service_value(obs_service.websocket_url, "websocket_url", "obs"),
+            password_env=_require_service_value(obs_service.password_env, "password_env", "obs"),
+        )
+    else:
+        raise RuntimeError(f"未対応のOBSサービスです: {obs_service.type}")
+
+    voicevox_service = _resolve_service(config, config.speech.service)
+    player_command = config.speech.player.command or (
+        "afplay" if sys.platform == "darwin" else "aplay"
+    )
+    tts = VoiceVoxHealthAdapter(
+        VoiceVoxHealthConfig(
+            base_url=_require_service_value(
+                voicevox_service.base_url, "base_url", config.speech.service
+            ),
+            timeout_seconds=_service_timeout(voicevox_service),
+            speaker_id=config.speech.speaker_id,
+            player_command=player_command,
+        )
+    )
+    sessions = InMemoryStreamSessionRepository()
+    publisher = InMemoryStreamPreparationPublisher()
+    capability_registry = CapabilityRegistry()
+    provider = StreamingPreparationPlugin()
+    capability_registry.register(provider, "stream.session.prepare")
+
+    status_mapping = {
+        HealthStatus.HEALTHY: CapabilityAvailability.AVAILABLE,
+        HealthStatus.DEGRADED: CapabilityAvailability.DEGRADED,
+        HealthStatus.UNAVAILABLE: CapabilityAvailability.UNAVAILABLE,
+        HealthStatus.UNKNOWN: CapabilityAvailability.UNKNOWN,
+    }
+
+    def report_capability(
+        capability: str,
+        status: HealthStatus,
+        failure_reason: str | None,
+        observed_at: datetime,
+    ) -> None:
+        availability = status_mapping[status]
+        if availability in {
+            CapabilityAvailability.AVAILABLE,
+            CapabilityAvailability.DEGRADED,
+        }:
+            capability_registry.register(provider, capability)
+        else:
+            capability_registry.unregister(provider.plugin_id, capability)
+        capability_registry.update_health(
+            provider.plugin_id,
+            capability,
+            status=availability,
+            failure_reason=failure_reason,
+            observed_at=observed_at,
+        )
+
+    readiness = config.streaming.readiness
+    usecase = PrepareStreamSessionUsecase(
+        youtube=youtube,
+        obs=obs,
+        tts=tts,
+        avatar=UnavailableAvatarHealthAdapter(),
+        run_of_show=YamlRunOfShowRepository(config.streaming.run_of_show.directory),
+        sessions=sessions,
+        publisher=publisher,
+        requirements=StreamPreparationRequirements(
+            require_youtube=readiness.require_youtube,
+            require_obs=readiness.require_obs,
+            require_tts=readiness.require_tts,
+            require_avatar=readiness.require_avatar,
+            require_run_of_show=readiness.require_run_of_show,
+            require_emergency_stop=readiness.require_emergency_stop,
+            require_live_chat=readiness.require_live_chat,
+            expected_scene_collection=config.streaming.obs.expected_scene_collection,
+            expected_start_scene=config.streaming.obs.expected_start_scene,
+            required_audio_sources=config.streaming.obs.required_audio_sources,
+            timeout_seconds=config.streaming.health_timeout_seconds,
+        ),
+        readiness_policy=ReadinessPolicy(allow_required_degraded=readiness.allow_required_degraded),
+        capability_reporter=report_capability,
+    )
+    return StreamPreparationRuntime(usecase, sessions, publisher, capability_registry)

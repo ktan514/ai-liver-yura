@@ -37,6 +37,17 @@ class ServiceSettings:
     api_key_env: str | None = None
     dsn_env: str | None = None
     timeout_seconds: float | None = None
+    client_secret_path_env: str | None = None
+    token_path_env: str | None = None
+    websocket_url: str | None = None
+    password_env: str | None = None
+    request_timeout_seconds: float | None = None
+    max_retries: int | None = None
+    retry_initial_delay_seconds: float | None = None
+    oauth_open_browser: bool | None = None
+    allow_live_broadcast: bool | None = None
+    oauth_timeout_seconds: float | None = None
+    allowed_privacy_statuses: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,6 +195,46 @@ class PluginSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class StreamingReadinessSettings:
+    require_youtube: bool = True
+    require_obs: bool = True
+    require_tts: bool = True
+    require_avatar: bool = False
+    require_run_of_show: bool = True
+    require_emergency_stop: bool = False
+    allow_required_degraded: bool = False
+    require_live_chat: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingObsSettings:
+    expected_scene_collection: str = "AI Liver"
+    expected_start_scene: str = "Starting Soon"
+    required_audio_sources: tuple[str, ...] = ("VOICEVOX",)
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingRunOfShowSettings:
+    directory: str = "config/run_of_show"
+    default_id: str = "default"
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingFakeSettings:
+    broadcast_id: str = "fake-broadcast-1"
+    broadcast_title: str = "配信準備テスト枠"
+
+
+@dataclass(frozen=True, slots=True)
+class StreamingSettings:
+    readiness: StreamingReadinessSettings = field(default_factory=StreamingReadinessSettings)
+    obs: StreamingObsSettings = field(default_factory=StreamingObsSettings)
+    run_of_show: StreamingRunOfShowSettings = field(default_factory=StreamingRunOfShowSettings)
+    fake: StreamingFakeSettings = field(default_factory=StreamingFakeSettings)
+    health_timeout_seconds: float = 5.0
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     app: AppSettings
     trace: TraceSettings
@@ -198,6 +249,7 @@ class AppConfig:
     input_receivers: InputReceiverSettings
     confirmation: ConfirmationSettings
     plugins: PluginSettings = field(default_factory=PluginSettings)
+    streaming: StreamingSettings = field(default_factory=StreamingSettings)
 
 
 def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
@@ -221,6 +273,56 @@ def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
         input_receivers=_load_input_receiver_settings(_require_dict(raw_config, "input_receivers")),
         confirmation=_load_confirmation_settings(_require_dict(raw_config, "confirmation")),
         plugins=_load_plugin_settings(raw_config.get("plugins")),
+        streaming=_load_streaming_settings(raw_config.get("streaming")),
+    )
+
+
+def _load_streaming_settings(value: object) -> StreamingSettings:
+    if value is None:
+        return StreamingSettings()
+    if not isinstance(value, dict):
+        raise RuntimeError("streaming はobject形式で指定してください。")
+    readiness = value.get("readiness", {})
+    obs = value.get("obs", {})
+    run_of_show = value.get("run_of_show", {})
+    fake = value.get("fake", {})
+    if not all(isinstance(item, dict) for item in (readiness, obs, run_of_show, fake)):
+        raise RuntimeError("streaming配下はobject形式で指定してください。")
+    audio_sources = obs.get("required_audio_sources", ["VOICEVOX"])
+    if not isinstance(audio_sources, list) or not all(
+        isinstance(item, str) and item for item in audio_sources
+    ):
+        raise RuntimeError("streaming.obs.required_audio_sourcesは文字列listです。")
+    timeout = value.get("health_timeout_seconds", 5.0)
+    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
+        raise RuntimeError("streaming.health_timeout_secondsは正数です。")
+    return StreamingSettings(
+        readiness=StreamingReadinessSettings(
+            require_youtube=_optional_bool(readiness, "require_youtube", True),
+            require_obs=_optional_bool(readiness, "require_obs", True),
+            require_tts=_optional_bool(readiness, "require_tts", True),
+            require_avatar=_optional_bool(readiness, "require_avatar", False),
+            require_run_of_show=_optional_bool(readiness, "require_run_of_show", True),
+            require_emergency_stop=_optional_bool(readiness, "require_emergency_stop", False),
+            allow_required_degraded=_optional_bool(readiness, "allow_required_degraded", False),
+            require_live_chat=_optional_bool(readiness, "require_live_chat", False),
+        ),
+        obs=StreamingObsSettings(
+            expected_scene_collection=(
+                _optional_string(obs, "expected_scene_collection") or "AI Liver"
+            ),
+            expected_start_scene=(_optional_string(obs, "expected_start_scene") or "Starting Soon"),
+            required_audio_sources=tuple(audio_sources),
+        ),
+        run_of_show=StreamingRunOfShowSettings(
+            directory=_optional_string(run_of_show, "directory") or "config/run_of_show",
+            default_id=_optional_string(run_of_show, "default_id") or "default",
+        ),
+        fake=StreamingFakeSettings(
+            broadcast_id=_optional_string(fake, "broadcast_id") or "fake-broadcast-1",
+            broadcast_title=(_optional_string(fake, "broadcast_title") or "配信準備テスト枠"),
+        ),
+        health_timeout_seconds=float(timeout),
     )
 
 
@@ -395,12 +497,57 @@ def _load_services(config: dict[str, Any]) -> dict[str, ServiceSettings]:
     for key, value in config.items():
         if not isinstance(value, dict):
             raise RuntimeError(f"services.{key} は object 形式で指定してください。")
+        request_timeout = _optional_float(value, "request_timeout_seconds")
+        if request_timeout is not None and request_timeout <= 0:
+            raise RuntimeError(f"services.{key}.request_timeout_secondsは正数です。")
+        max_retries = _optional_int(value, "max_retries")
+        if max_retries is not None and max_retries < 0:
+            raise RuntimeError(f"services.{key}.max_retriesは0以上です。")
+        retry_delay = _optional_float(value, "retry_initial_delay_seconds")
+        if retry_delay is not None and retry_delay <= 0:
+            raise RuntimeError(f"services.{key}.retry_initial_delay_secondsは正数です。")
+        oauth_timeout = _optional_float(value, "oauth_timeout_seconds")
+        if oauth_timeout is not None and oauth_timeout <= 0:
+            raise RuntimeError(f"services.{key}.oauth_timeout_secondsは正数です。")
+        privacy_statuses = value.get("allowed_privacy_statuses")
+        if privacy_statuses is not None and (
+            not isinstance(privacy_statuses, list)
+            or not privacy_statuses
+            or not all(
+                isinstance(item, str) and item in {"private", "unlisted", "public"}
+                for item in privacy_statuses
+            )
+        ):
+            raise RuntimeError(
+                f"services.{key}.allowed_privacy_statusesはprivate/unlisted/publicのlistです。"
+            )
         services[key] = ServiceSettings(
             type=_require_string(value, "type"),
             base_url=_optional_string(value, "base_url"),
             api_key_env=_optional_string(value, "api_key_env"),
             dsn_env=_optional_string(value, "dsn_env"),
             timeout_seconds=_optional_float(value, "timeout_seconds"),
+            client_secret_path_env=_optional_string(value, "client_secret_path_env"),
+            token_path_env=_optional_string(value, "token_path_env"),
+            websocket_url=_optional_string(value, "websocket_url"),
+            password_env=_optional_string(value, "password_env"),
+            request_timeout_seconds=request_timeout,
+            max_retries=max_retries,
+            retry_initial_delay_seconds=retry_delay,
+            oauth_open_browser=(
+                _optional_bool(value, "oauth_open_browser", True)
+                if "oauth_open_browser" in value
+                else None
+            ),
+            allow_live_broadcast=(
+                _optional_bool(value, "allow_live_broadcast", False)
+                if "allow_live_broadcast" in value
+                else None
+            ),
+            oauth_timeout_seconds=oauth_timeout,
+            allowed_privacy_statuses=(
+                tuple(privacy_statuses) if isinstance(privacy_statuses, list) else None
+            ),
         )
     return services
 
