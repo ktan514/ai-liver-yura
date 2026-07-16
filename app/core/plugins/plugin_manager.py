@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from typing import cast
 
-from app.core.plugins.capability_registry import CapabilityRegistry
+from app.core.plugins.capability_registry import (
+    CapabilityAvailability,
+    CapabilityHealth,
+    CapabilityRegistry,
+)
 from app.core.plugins.plugin import Plugin
 from app.core.plugins.plugin_context import PluginContext
 from app.domain.behavior import ActivityDefinition
@@ -169,6 +174,38 @@ class PluginManager:
             self._capabilities.register(plugin, capability)
         else:
             self._capabilities.unregister(plugin_id, capability)
+
+    def set_capability_health(
+        self,
+        plugin_id: str,
+        capability: str,
+        *,
+        status: CapabilityAvailability,
+        failure_reason: str | None = None,
+        observed_at: datetime | None = None,
+    ) -> CapabilityHealth:
+        plugin = self._plugins.get(plugin_id)
+        if plugin is None:
+            raise ValueError(f"未登録のPluginです: {plugin_id}")
+        if capability not in plugin.capabilities:
+            raise ValueError(f"Pluginが宣言していないCapabilityです: {capability}")
+        if self._statuses.get(plugin_id) == PluginStatus.INITIALIZED:
+            if status in {CapabilityAvailability.AVAILABLE, CapabilityAvailability.DEGRADED}:
+                self._capabilities.register(plugin, capability)
+            else:
+                self._capabilities.unregister(plugin_id, capability)
+        return self._capabilities.update_health(
+            plugin_id,
+            capability,
+            status=status,
+            failure_reason=failure_reason,
+            observed_at=observed_at,
+        )
+
+    def get_capability_health(
+        self, capability: str, plugin_id: str | None = None
+    ) -> tuple[CapabilityHealth, ...]:
+        return self._capabilities.get_health(capability, plugin_id)
 
     def status(self, plugin_id: str) -> PluginStatus | None:
         return self._statuses.get(plugin_id)

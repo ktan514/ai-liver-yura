@@ -1,5 +1,9 @@
 from app.core.plugins.capabilities import PluginCapability
-from app.core.plugins.capability_registry import CapabilityRegistry
+from app.core.plugins.capability_registry import (
+    CapabilityAvailability,
+    CapabilityHealth,
+    CapabilityRegistry,
+)
 from app.core.plugins.plugin import PlannedActivityInterpreter, Plugin
 from app.core.plugins.plugin_context import (
     ActivityGateway,
@@ -21,6 +25,8 @@ __all__ = [
     "ActivityGateway",
     "Clock",
     "CapabilityRegistry",
+    "CapabilityAvailability",
+    "CapabilityHealth",
     "MemoryPolicy",
     "Plugin",
     "PlannedActivityInterpreter",
