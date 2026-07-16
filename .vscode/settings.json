@@ -16,6 +16,7 @@
         "prioritizer",
         "pytest",
         "qwen",
+        "shiritori",
         "TIMESTAMPTZ",
         "usecases",
         "voicevox",

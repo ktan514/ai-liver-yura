@@ -1,0 +1,555 @@
+YouTube配信ポリシー仕様書
+Version: 1.0.0
+対象: AIライバー「ゆら」のYouTubeライブ配信運用
+目的: YouTube、OBS、ゆら、人間の責務を明確化し、安全かつ再現可能な配信開始・進行・終了手順を定義する
+
+
+1. 基本方針
+
+本システムでは、次の3状態を明確に分離して管理する。
+
+1. OBSがYouTubeへ映像・音声を送信している状態
+2. YouTube上で視聴者向けライブ配信が開始されている状態
+3. ゆらが配信セッションを認識し、配信進行を開始している状態
+
+これらは同一ではない。
+
+OBSの配信開始成功だけをもって、YouTube配信開始成功とは扱わない。
+YouTubeがlive状態になっただけでは、ゆらの配信進行開始とは扱わない。
+
+ゆらは、OBS状態とYouTube状態の両方を確認した後に、配信セッションをliveへ遷移する。
+
+
+2. 標準運用方針
+
+標準運用では、人間が配信内容と開始承認を担当し、開始承認後の機械操作はゆらが担当する。
+
+標準フロー:
+
+人間がYouTube配信枠を作成
+↓
+人間がOBSを起動
+↓
+人間がゆらを起動
+↓
+人間がゆらの管理画面で配信準備を実行
+↓
+ゆらがYouTube配信枠、OBS、TTS、Avatar、各Pluginを確認
+↓
+人間が配信開始を承認
+↓
+ゆらがOBSへ配信開始を指示
+↓
+OBSがYouTubeへ映像・音声を送信
+↓
+ゆらがYouTubeへの映像到着を確認
+↓
+ゆらがYouTube配信をliveへ遷移
+↓
+ゆらがYouTubeのlive状態を確認
+↓
+ゆらがStreamSessionをliveへ遷移
+↓
+ゆらがオープニングを開始
+
+
+3. 担当分担
+
+3.1 人間の担当
+
+人間は次を担当する。
+
+- YouTubeチャンネルの所有と管理
+- OAuth認証および権限付与
+- 配信枠の作成
+- 配信日時の決定
+- 配信タイトルの決定
+- 配信説明文の決定
+- サムネイルの設定
+- 公開範囲の確認
+- 子ども向け設定等の公開設定確認
+- OBSシーン構成の設計
+- OBS音声ソース構成の設計
+- 配信開始の最終承認
+- 緊急停止
+- 配信後の最終確認
+
+3.2 ゆらの担当
+
+ゆらは次を担当する。
+
+- 配信前Health Check
+- YouTube配信枠の取得
+- OBS WebSocketへの接続
+- OBSの配信状態確認
+- OBS配信開始指示
+- YouTubeへの映像到着確認
+- YouTubeライブ開始操作
+- YouTube live状態確認
+- StreamSession開始
+- RunOfShowに基づく配信進行
+- オープニング
+- コメント取得
+- コメント候補の選定
+- コメントへの応答
+- OpenPrompt管理
+- クロージング
+- YouTube配信終了操作
+- OBS配信停止
+- 配信結果および障害の記録
+
+3.3 OBSの担当
+
+OBSは次を担当する。
+
+- 画面合成
+- 音声合成
+- エンコード
+- YouTubeへの映像・音声送信
+- 配信出力状態の提供
+- 現在シーン情報の提供
+- ドロップフレーム等の送信状態提供
+
+3.4 YouTubeの担当
+
+YouTubeは次を担当する。
+
+- 視聴ページの提供
+- Broadcast状態管理
+- Stream入力受付
+- Live Chat提供
+- ライブ配信状態管理
+- 配信終了後のアーカイブ作成
+
+
+4. ゆらの起動タイミング
+
+ゆらは、OBSがYouTubeへの映像送信を開始する前に起動する。
+
+推奨順序:
+
+OBS起動
+↓
+ゆら起動
+↓
+ゆらがOBSへ接続
+↓
+ゆらがYouTube配信枠を取得
+↓
+配信準備チェック
+↓
+人間の配信開始承認
+↓
+OBS配信開始
+
+ゆらをOBS配信開始後に起動する運用は標準運用としない。
+
+理由:
+
+- オープニング冒頭が無音になる可能性がある
+- コメント取得開始が遅れる
+- StreamSession開始時刻がずれる
+- OBSシーンや音声状態を開始前に確認できない
+- YouTubeのlive状態とゆらの内部状態が同期しない可能性がある
+
+
+5. 配信準備チェック
+
+人間が「配信準備」を実行した場合、ゆらは次を確認する。
+
+5.1 YouTube確認項目
+
+- OAuth認証済みである
+- 対象配信枠を取得できる
+- 対象Broadcastが開始可能状態である
+- 対象StreamがBroadcastへ関連付けられている
+- 公開範囲が想定どおりである
+- Live Chatが利用可能である
+- API接続が正常である
+
+5.2 OBS確認項目
+
+- OBS WebSocketへ接続できる
+- OBSが既に配信中ではない
+- 正しいシーンコレクションが選択されている
+- 正しい開始シーンが選択されている
+- 必須音声ソースが有効である
+- Avatar映像が表示されている
+- 配信出力設定が利用可能である
+
+5.3 ゆら確認項目
+
+- Core Runtimeが起動している
+- YouTube Streaming Pluginが利用可能である
+- OBS Pluginが利用可能である
+- TTS Pluginが利用可能である
+- Avatar Pluginが利用可能である
+- RunOfShowを読み込める
+- StreamSessionを作成できる
+- 緊急停止操作が利用可能である
+
+5.4 開始禁止条件
+
+必須項目が一つでも失敗した場合、ゆらは次を実行してはならない。
+
+- OBS配信開始
+- YouTube live遷移
+- StreamSession live遷移
+- オープニング開始
+
+
+6. YouTube配信開始方式
+
+標準方式は、YouTubeの自動開始に依存せず、ゆらが状態確認後にliveへ遷移させる方式とする。
+
+標準開始手順:
+
+ゆらがOBSへ配信開始指示
+↓
+OBSがYouTubeへ映像・音声を送信
+↓
+ゆらがYouTube Streamのactive状態を確認
+↓
+ゆらがBroadcastをliveへ遷移
+↓
+ゆらがBroadcastのlive状態を確認
+↓
+ゆらがStreamSessionをliveへ遷移
+↓
+ゆらがオープニング開始
+
+YouTubeの自動開始機能は、誤操作で公開配信が始まる可能性があるため、標準運用では使用しない。
+
+
+7. ゆらによる配信開始認識
+
+ゆらは、単一の状態だけで配信開始を判断しない。
+
+配信開始条件:
+
+- OBSの配信出力がactiveである
+- YouTube Streamがactiveである
+- YouTube Broadcastがliveである
+
+上記3条件が成立した場合のみ、次を実行する。
+
+StreamSession.status = live
+
+配信開始認識時に記録する情報:
+
+- broadcast_id
+- stream_id
+- actual_start_time
+- live_chat_id
+- OBS配信開始時刻
+- StreamSession開始時刻
+- correlation_id
+
+
+8. 配信開始操作
+
+人間が通常操作する開始関連UIは、次の2つとする。
+
+1. 配信準備
+2. 配信開始
+
+8.1 配信準備
+
+配信準備では次を行う。
+
+- YouTube配信枠取得
+- OBS接続
+- 各PluginのHealth確認
+- RunOfShow読み込み
+- StreamSession作成
+- 配信開始可能判定
+
+8.2 配信開始
+
+配信開始は人間の承認操作を起点とする。
+
+ゆらは一回の開始指示に対して次を実行する。
+
+OBS送信開始
+→ YouTube映像到着確認
+→ YouTube live遷移
+→ YouTube live状態確認
+→ StreamSession live遷移
+→ オープニング開始
+
+配信開始Commandは冪等でなければならない。
+
+同じ開始Commandが複数回送られても、二重配信開始、二重Session開始、二重オープニングを発生させてはならない。
+
+
+9. 配信進行
+
+StreamSessionがliveになった後、ゆらはRunOfShowに基づいて配信を進行する。
+
+ゆらの配信中の担当:
+
+- 現在Segmentの管理
+- 残り時間の管理
+- 台本発話
+- 自由発話
+- コメント受付
+- コメント選定
+- コメント応答
+- OpenPrompt管理
+- Segment超過時の調整
+- クロージング開始時刻の確保
+
+YouTubeやOBSの状態変化は、配信進行とは独立して監視を継続する。
+
+
+10. 通常終了
+
+標準終了フロー:
+
+終了時刻接近
+↓
+ゆらがclosing Segmentへ移行
+↓
+ゆらが締めの挨拶を実行
+↓
+TTS、字幕、Avatar Action完了確認
+↓
+ゆらがYouTube配信終了を要求
+↓
+YouTubeの終了状態を確認
+↓
+ゆらがOBSへ配信停止を指示
+↓
+コメント受信停止
+↓
+StreamSessionをfinishedへ遷移
+↓
+アーカイブ状態確認
+
+通常終了では、クロージング発話完了前にOBSを停止してはならない。
+
+YouTube終了確認前にStreamSessionをfinishedへ遷移してはならない。
+
+
+11. 緊急停止
+
+緊急停止は通常終了と分離する。
+
+緊急停止時の処理:
+
+- 新規発話受付停止
+- 進行中TTSの停止
+- 新規Actionのキャンセル
+- OBS配信停止
+- YouTube配信終了要求
+- コメント受信停止
+- StreamSessionをabortedへ遷移
+- 停止原因、各システム状態、未完了処理をログへ保存
+
+緊急停止は次の両方から実行可能とする。
+
+- ゆらの管理画面
+- 人間によるOBSまたはYouTube Studioの手動操作
+
+外部で手動停止された場合も、ゆらは状態変化を検知し、StreamSessionをfinishedまたはabortedへ同期する。
+
+
+12. 外部手動操作の扱い
+
+人間がOBSまたはYouTube Studioを直接操作した場合、ゆらはその状態を監視し、内部状態へ反映する。
+
+12.1 OBSが手動開始された場合
+
+- ゆらはOBS activeを検知する
+- YouTube Stream状態を確認する
+- 未承認の配信開始である場合、警告を出す
+- 自動でオープニングを始めない
+- 人間の承認または設定済みポリシーに従う
+
+12.2 OBSが手動停止された場合
+
+- ゆらはOBS inactiveを検知する
+- YouTube状態を確認する
+- 配信継続不能と判断する
+- StreamSessionをabortedまたはclosingへ遷移する
+
+12.3 YouTubeが手動でliveへ変更された場合
+
+- ゆらはBroadcast liveを検知する
+- OBS activeを確認する
+- ゆら自身の準備状態を確認する
+- 準備未完了の場合は緊急状態として扱う
+- 準備完了済みの場合のみStreamSessionを同期する
+
+12.4 YouTubeが手動終了された場合
+
+- ゆらはBroadcast終了を検知する
+- OBS停止を実行または人間へ要求する
+- コメント受信を停止する
+- StreamSessionをfinishedまたはabortedへ同期する
+
+
+13. 障害時ポリシー
+
+13.1 OBS接続障害
+
+配信開始前:
+
+- 配信開始を禁止する
+
+配信中:
+
+- OBSの実配信状態を確認する
+- 再接続を試行する
+- 状態確認不能時は警告を出す
+- 必要に応じて緊急停止へ移行する
+
+13.2 YouTube API接続障害
+
+配信開始前:
+
+- live遷移を実行しない
+- 配信開始を失敗として扱う
+
+配信中:
+
+- OBS送信状態を維持する
+- API再接続を制限回数で試行する
+- YouTube状態を推測しない
+- コメント機能だけを縮退停止できる
+- 長時間復旧しない場合は人間へ判断を要求する
+
+13.3 コメント受信障害
+
+- 配信進行は継続する
+- コメントCapabilityをdegradedまたはunavailableにする
+- 再接続を試行する
+- 復旧時にCapabilityを再登録する
+
+13.4 TTSまたはAvatar障害
+
+- YouTube配信開始成功と混同しない
+- 出力障害として別Resultへ記録する
+- 必要に応じて字幕のみ、音声のみ等の縮退運用を行う
+- 最低限の表現手段も失われた場合は人間へ停止判断を要求する
+
+
+14. 状態管理
+
+ゆらは少なくとも次の状態を別々に保持する。
+
+OBS状態:
+
+- disconnected
+- idle
+- starting
+- active
+- stopping
+- failed
+
+YouTube Stream状態:
+
+- unknown
+- inactive
+- ready
+- active
+- error
+
+YouTube Broadcast状態:
+
+- created
+- ready
+- testing
+- live
+- complete
+- revoked
+- failed
+
+StreamSession状態:
+
+- created
+- preparing
+- ready
+- live
+- closing
+- finished
+- aborted
+- failed
+
+一つの状態変化を、他の状態へ無条件に伝播してはならない。
+
+
+15. ログと追跡
+
+配信開始から終了まで、共通correlation_idで追跡する。
+
+記録対象:
+
+- session_id
+- broadcast_id
+- stream_id
+- OBS接続状態
+- OBS配信状態
+- YouTube Stream状態
+- YouTube Broadcast状態
+- StreamSession状態
+- 開始Command
+- 終了Command
+- 緊急停止Command
+- 各状態の変更時刻
+- 失敗理由
+- 再試行回数
+- 人間による手動操作検知
+- 自動操作結果
+
+認証情報、Stream Key、OAuth Tokenはログへ記録しない。
+
+
+16. 管理画面の標準操作
+
+人間向け管理画面には最低限、次を用意する。
+
+- 配信枠選択
+- 配信準備
+- 配信開始
+- 通常終了
+- 緊急停止
+- OBS状態表示
+- YouTube Stream状態表示
+- YouTube Broadcast状態表示
+- StreamSession状態表示
+- 現在Segment表示
+- 残り時間表示
+- 障害および警告表示
+
+状態表示は単一の「配信中」ではなく、各システムの状態を個別に表示する。
+
+
+17. 禁止事項
+
+- OBS activeだけでYouTube配信開始成功と扱う
+- YouTube liveだけでゆらの配信進行を開始する
+- ゆらの準備完了前にオープニングを開始する
+- 必須Health Check失敗時に配信開始する
+- 開始Commandの二重実行で複数Sessionを生成する
+- 外部操作結果を確認せず成功発話を行う
+- YouTube状態不明時にliveまたはcompleteを推測する
+- 通常終了時に発話完了前にOBSを停止する
+- 緊急停止と通常終了を同じ処理として扱う
+- OAuth TokenやStream Keyをログへ出力する
+
+
+18. 完成条件
+
+本ポリシーに基づく配信開始・終了機能は、次を満たした時点で完成とする。
+
+- 人間の開始承認から、ゆらがOBSとYouTubeを順番に操作できる
+- OBS、YouTube Stream、YouTube Broadcast、StreamSessionを別々に管理できる
+- YouTube live確認後にのみオープニングを開始する
+- 手動操作を検知して内部状態へ同期できる
+- 配信開始Commandが冪等である
+- 通常終了と緊急停止を分離できる
+- YouTube API障害時に状態を推測しない
+- コメント受信障害中も配信進行を継続できる
+- 外部操作失敗を成功したように発話しない
+- 人間とゆらの担当範囲が管理画面上でも明確である

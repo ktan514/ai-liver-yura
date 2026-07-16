@@ -25,6 +25,11 @@ AIライバーはチャットボットではなく、話題の主導権を自身
 - SPEAK の読み上げ時間や発話間隔は Action 実行側の制約として扱い、LLM 思考ループを待機させない
  - RuntimeSupervisor / RuntimeCoordinator は処理本体ではなく、各 Loop の起動・停止・接続を管理する Host として扱う
  - Event 処理、Activity 計画、Activity 実行、外部入力受信は独立した Loop / Service として分ける
+### 関連設計書
+
+- `docs/llm_role_architecture.md`: Situation Evaluator、Behavior Planner、Activity Result、Response Context、Character LLM、Response Validatorの詳細設計
+- 本ファイルはソース配置・実装方針の正本とし、LLMロール間の詳細契約は上記設計書を正本とする
+
 ## 全体骨格の作成方針
 
 本プロジェクトは、以後「最小構成から継ぎ足す」進め方を採用しない。
@@ -104,6 +109,16 @@ RuntimeSupervisor / RuntimeCoordinator
 - ExecuteActionUsecase
 - 起動確認用 `app/__main__.py`
 - Runtime のスモークテスト
+
+## トレースログ方針
+
+- `runtime_trace.log` は設定したレベル以上の実行概要を記録し、標準設定のINFOでは起動・終了、Plugin/Capabilityの変化、Behavior Plannerの最終判断、Activityの開始・継続・完了・拒否、実行結果、重要なフォールバック、警告・エラーだけを扱う
+- `runtime_debug.log` は `trace.debug_file_enabled` が有効な場合に詳細レコードを記録する。待機、ポーリング、`skipped`、途中状態、Capability照合、Action構築、LLM入出力、正規化後のユーザー入力はDEBUGへ出す
+- ログ表示時刻は内部データのUTC方針と切り離し、実行環境のローカルタイムをUTCオフセット付きISO 8601で記録する
+- LLMへ実際に渡す構造と生応答・解析結果・採用文は、`log_llm_prompts` / `log_llm_responses` で個別に有効化する。固定長で切断せず、一行のJSONエスケープ可能なフィールドとして保持する
+- APIキー、Authorization、Password、Token、DSNなどはLogger共通の再帰マスク処理を通し、個別Adapterで独自のマスク処理を重複実装しない
+- 正規化済みユーザー入力は `log_user_input` が有効な場合だけDEBUGへ記録し、INFOへ本文を出さない
+- INFO概要とDEBUG詳細には同じローテーション設定を適用する
 
 ## 現在の主要フロー
 
@@ -498,7 +513,7 @@ ActionScheduler の確定仕様:
 - 同一出力単位では字幕・表情を音声より先に反映し、音声完了までグループの全リソースを保持する
 - 次の出力単位は、現在の音声が完了するまで字幕・表情を含めて開始しない
 - 同一出力単位の ActionPlan と ActionPlanGroup は共通の `output_unit_id` を持つ
-- 出力単位と各 Action の開始・完了は `output_unit_id` / `action_id` 付きのINFOログで追跡できる
+- 出力単位の完了はINFO、待機・選択・開始と各Actionの途中状態はDEBUGで、`output_unit_id` / `action_id` 付きで追跡できる
 
 音声出力の優先順位:
 
@@ -507,7 +522,7 @@ ActionScheduler の確定仕様:
 - 同じ優先順位ではゲートへ到着した順序を維持し、複数のユーザー応答を逆転させない
 - 待機中の自律発話より、後から到着したユーザー応答を先に開始する
 - すでに再生を開始した音声は強制停止せず、その1件の完了後に最優先の待機出力を開始する
-- 待機開始・選択・実行開始ログには `output_unit_id`、`output_priority`、`queue_sequence` を含める
+- DEBUGの待機開始・選択・実行開始ログには `output_unit_id`、`output_priority`、`queue_sequence` を含める
 
 ### USER_TEXT受理時の自律Activity割り込み
 
@@ -533,6 +548,37 @@ ActionScheduler の確定仕様:
 - 再生中Actionの強制停止はAudioPlayerの中断契約と音声リソース解放を別途設計してから導入する
 - 現在再生中の音声が完了した後は、キャンセル済み自律発話を再生せずユーザー応答を次に処理する
 
+### 複数ターン活動の状態保持
+
+- 1入力ごとの処理を表す`Activity`はAction実行後に完了し、複数ターンの状態は`OngoingActivity`として別に保持する
+- `OngoingActivity`は活動種別、状態、開始時の目的、直前のActivityResult、次に期待する入力、終了条件、活動固有contextを持つ
+- 複数ターン活動中のUSER_TEXTから作る会話Activityには、同じ`ongoing_activity_id`と状態スナップショットを引き継ぐ
+- 継続中入力のgoalとcontextには通常会話との識別情報を持たせ、Promptへ活動状態を明示する
+- Action実行完了時に、発話・観察・外部操作を区別できる汎用ActivityResultで継続中活動を更新する
+- ActivityResultは結果種別、概要、成功状態、Actionごとの詳細データを持ち、SPEAKへ依存しない
+- 活動終了時は状態をCOMPLETEDにして現在状態から外し、次のUSER_TEXTを通常会話として扱う
+- 開始、更新、終了は`ongoing_activity_id`、活動種別、終了理由を含むINFOログへ記録する
+- しりとり固有の開始判定、単語更新、勝敗・終了判定はGameEngine基盤完成後の具体ゲーム実装タスクで扱う
+
+### 中断後の話題継続・再開・転換判断
+
+- USER_TEXT受理から30秒間は通常会話が継続中とみなし、新しい自律発話を計画しない
+- 追加のUSER_TEXTを受理した場合は、最後の入力時刻を基準に無入力時間を再計算する
+- OngoingActivityがACTIVEの間は無入力時間にかかわらず自律発話を抑制する
+- OngoingActivityの終了、明示的な会話終了、または無入力タイムアウト後に自律計画を許可する
+- 会話前にPENDINGまたはSUSPENDEDだった自律Activityと未実行Actionは物理的な実行対象から外す
+- Activityをキャンセルしても意味的な話題はInterruptedTopicとして保持し、機械的に破棄・再開しない
+- すでに再生中の音声はTASK-002の方針どおり強制停止しない
+- 自律計画の抑制ログはDEBUGとし、理由とタイムアウト値またはongoing_activity_idを含める
+- InterruptedTopicはactive、interrupted、suspended、completed、abandoned、expiredを表現できる
+- 判断には重要度、関心度、未完了度、消耗度、中断時間、会話ターン、会話中の話題候補、EmotionState、DriveStateを使用する
+- 判断結果はresume_original、resume_with_reframing、branch_from_original、branch_from_interruption、start_new_topic、suspend_original、abandon_original、waitを表現する
+- wait、suspend_original、abandon_originalではその評価時点に自律Eventを生成しない
+- 再開・派生・新規開始ではCURIOSITY_PEAK Eventへ判断、理由、元話題、選択話題、再導入要否を格納する
+- 元話題へ戻る場合は原則として短い再導入を付け、同じ内容を繰り返さないようPromptへ指示する
+- 消耗度は直近の自律発話との表層類似度から暫定算出し、明示的なtopic_metricsがあればそちらを優先する
+- 本格的な意味類似度、候補生成、重要度・関心度推定は将来のTopic Engineへ移管する
+
 テストで確認済みの内容:
 
 - 空の ActionPlanGroup は何もしない
@@ -543,6 +589,83 @@ ActionScheduler の確定仕様:
 - 同一出力単位の各Actionは共通の`output_unit_id`を持つ
 - 待機中の自律発話よりユーザー応答が先に再生される
 - 複数のユーザー応答は到着順のまま再生される
+- 複数ターン活動の状態が次のUSER_TEXTへ引き継がれる
+- 活動中入力と通常会話をcontextおよびPromptで区別できる
+- 活動終了後の入力は通常会話へ戻る
+- ユーザー応答直後は自律発話を計画せず、追加入力で抑制時間を延長する
+- 複数ターン活動の継続中は自律発話を計画しない
+- 会話終了条件成立後の自律Eventに再開理由が含まれる
+- 中断話題の価値と状態に応じて、再開・派生・転換・保留・放棄・待機を選択できる
+- 怒りや落胆時に明るい元話題へ機械的に戻らず、感情回復後に保留話題を再評価できる
+
+### 将来タスク: Emotion制御とTopic Engine
+
+- EmotionStateUpdaterを追加し、USER_TEXT、会話結果、Action成功失敗、時間経過から短期感情を更新する
+- 感情の減衰・回復と、短期反応・持続気分を分離して扱う
+- 感情更新理由と更新前後の値をログで追跡できるようにする
+- Topic Engineを追加し、現在話題、候補、意味的距離、新規性、重要度、関心度、未完了論点、消耗度を一元管理する
+- EmbeddingやLLM評価はPort越しに任意利用とし、利用不能時は決定論的なフォールバックを使う
+- TopicHistoryは発話履歴、InterruptedTopicは中断判断用状態、Topic Engineは候補選定責務として区別する
+
+## Game Engine / 複数ターンゲーム方針
+
+- GameEngineは対応ゲームの登録・一覧・対応判定と、単一GameSessionのライフサイクルだけを管理する
+- GameEngineはLLM、音声、字幕、表情、Action、入力分類、topic memoryを直接扱わない
+- GameDefinitionはgame_type、display_name、description、supported、create_initial_stateを提供する最小抽象とする
+- 未登録またはsupported=falseのゲームは開始を拒否し、同じgame_typeの二重登録も拒否する
+- activeなGameSessionはRuntime内で最大1つとし、PLAYINGまたはPAUSEDをactiveとして扱う
+- GameSessionはsession_id、game_type、status、started_at、updated_at、ended_at、current_turn、metadata、result、end_reasonを保持する
+- GameSessionStatusはSTARTING、PLAYING、PAUSED、COMPLETED、CANCELEDとする
+- 状態遷移はSTARTING→PLAYING、PLAYING→PAUSED、PAUSED→PLAYING、PLAYING→COMPLETED、PLAYING/PAUSED→CANCELEDだけを許可する
+- COMPLETEDまたはCANCELEDからPLAYINGへ戻すことを禁止する
+- ActivityはRuntime上の実行状態、GameSessionはゲーム終了まで継続するゲーム状態として分離する
+- GAME_WITH_USER Activityはgame_session_idと汎用metadataをcontextに持ち、既存のLLM・Action・字幕・音声・表情経路を利用する
+- Activityの完了・中断・再生成だけではGameSessionを終了しない
+- GameEngineはruntime_factoryで一度だけ生成し、ActivityManagerとRuntimeCoordinatorが同一インスタンスを参照する
+- Sessionの開始・一時停止・再開・完了・キャンセルはprevious_status、new_status、reasonを含む構造化ログへ記録する
+- しりとりはShiritoriGameDefinitionとしてFactoryで登録し、GameEngineの共通Session基盤を利用する
+- 自然言語からのゲーム開始判定と、ゲーム入力・通常会話の分類は後続タスクで扱う
+
+### しりとり詳細設計
+
+- ShiritoriStateはcurrent_turn、last_word、expected_head、used_words、turn_count、winner、loser、end_reasonを保持する
+- 手番はUSERとAIを区別し、開始時に指定可能、既定はAI先攻とする
+- ユーザー単語は明示的なsubmit_shiritori_word経路から渡し、通常会話との分類は行わない
+- AI単語はGAME_WITH_USER Activity→ActionPlanner→既存ResponseGeneratorの経路で生成する
+- GameEngineやShiritoriGameDefinitionからLLM、Action、音声、字幕、表情を直接呼ばない
+- AI生成時は既存の人格・品質Promptに、ルール、期待文字、使用済み単語、感情スナップショットを追加する
+- LLM出力はgame_action、word、utteranceを持つJSONとし、状態更新にはwordだけ、SPEAKにはutteranceだけを使う
+- JSON解析失敗、空単語、手番違反、開始文字違反、重複、`ん`終端は採用せず、最大3回まで再生成する
+- 上限後は期待文字に合う安全な内蔵候補を使用し、候補がなければAI降参としてSessionを完了する
+- ユーザーの`ん`終端はAI勝利、AI降参はユーザー勝利とし、winner、loser、end_reasonをSession結果へ保存する
+- ユーザーまたはAIの正常手ごとにlast_word、expected_head、used_words、current_turn、turn_count、updated_atを更新する
+
+単語正規化:
+
+- Unicode NFKC正規化後、前後・全角を含む空白、句読点、括弧、引用符を除去する
+- カタカナはひらがなへ変換し、ユーザーとAIで同じ正規化・検証関数を使う
+- headは先頭の基本かなを使い、`キャベツ`は`き`として扱う
+- tailの小書き文字は大書きへ寄せ、`きゅ`は`ゆ`として扱う
+- 末尾の長音符は読み飛ばして直前かなを使用し、`ミネラルウォーター`は`た`として扱う
+- 今回は辞書APIによる実在語判定、形態素解析、複合語・固有名詞の網羅的例外処理を行わない
+
+検証結果:
+
+- valid、invalid_head、already_used、ends_with_n、not_user_turn、not_ai_turn、game_finished、invalid_wordを区別する
+- 終了済みSessionへの追加入力はgame_finishedとして拒否する
+- 自然言語の終了判定は行わず、cancelまたはsurrenderの明示メソッドを使う
+
+ログと記憶:
+
+- session初期化、ユーザー検証、AI生成要求・拒否・採用、ターン更新、完了、フォールバックを構造化ログへ記録する
+- Prompt全文やユーザー長文は通常のINFOログへ出さず、設定で許可したDEBUGログだけへ記録する
+- GAME_WITH_USERのSPEAK Actionにはskip_topic_memoryを付け、各単語と発話をTopicHistory・topic memoryへ保存しない
+
+### コンソール入力のデコード障害
+
+- コンソールの1入力でUnicodeDecodeErrorが発生してもRuntime全体を異常終了させない
+- デコード不能な入力行だけを破棄し、警告ログと再入力メッセージを出して入力ループを継続する
+- 復旧後の`exit`または`quit`は通常どおり終了要求として扱う
 - RuntimeCoordinator は ActionPlanGroup を返す
 - RuntimeCoordinator 経由でも `SPEAK` / `OBSERVE` を取り出して確認できる
 - `SPEAK` Action 実行時に `SPEECH_STARTED` / `SPEECH_FINISHED` Event が発行される
@@ -914,9 +1037,10 @@ TimerInputReceiver は、一定間隔で Runtime に `SILENCE_TIMEOUT` Event を
 
 ## ResponseGenerator / PromptBuilder / CharacterProfile
 
-ResponseGenerator は、Activity から応答テキストを生成する Port である。
-PromptBuilder は、Activity と CharacterProfile から LLM に渡すプロンプトを生成する Port である。
+ResponseGenerator は、移行後はCharacter LLM相当の発話・表現生成Portとして扱う。
+PromptBuilder は、検証済みResponse Context、Activity Result、CharacterProfileからCharacter LLMへ渡す入力を構築する。
 CharacterProfile は、AIライバーの人格・口調・配信スタイルを保持するドメインモデルである。
+入力の意味解析、Activity選択、Capability可否、実行成功の判断はResponseGeneratorへ持たせない。
 
 目的:
 
@@ -1280,3 +1404,131 @@ pytest
 - YouTube コメント入力 Adapter の追加
 - 音声認識入力 Adapter の追加
 - PyQt6 管理画面から Runtime の start / stop を操作する機能
+
+## ゲーム入力分類
+
+- `app/domain/games/game_input.py`: ゲーム開始を含む8種類の分類、ゲーム制御種別、型付き分類結果
+- `app/runtime/game_input_classifier.py`: active Sessionがない場合の開始要求を含む決定論的判定とLLMフォールバック
+- `app/runtime/runtime_coordinator.py`: 分類結果に基づくゲーム開始・ゲーム処理・通常会話への振り分けと開始失敗時のrollback
+- `app/runtime/shiritori_game_service.py`: Session初期化、AI初手の検証・登録、Game Activity生成
+- `app/adapters/prompt/simple_prompt_builder.py`: JSON限定の分類Promptと会話用ゲーム文脈
+- GameSessionをゲーム状態の唯一の正本とし、開始要求・AI初手・ゲーム内単語はtopic memoryから除外する
+- `app/__main__.py`: ConsoleInputReceiverを`RuntimeCoordinator.submit_user_text`へ接続する本番入口
+- 本番RuntimeFactoryはGameEngineを一度だけ生成し、全ゲーム関連コンポーネントへ同一インスタンスを注入する
+- 本番Factory経由テストでは公開入力APIから3手以上進行し、GameEngine instance IDとSession IDの継続を確認する
+
+## Plugin構成
+
+- `app/core/plugins/`: Plugin公開契約、Context、Capability、汎用Command/Result、PluginManager、現在使用可能な機能だけを保持するCapabilityRegistry
+- `app/plugins/games/plugin.py`: Games Pluginの初期化、Intent公開境界、Command実行、ActivityRequest変換
+- `app/plugins/games/intent/`: GameIntentCommand、意味解析Prompt、JSON Parser、Validator
+- Pluginの`capabilities`はManifest相当の提供可能性宣言、`available_capabilities`は初期化・設定・依存・Provider健全性を反映した現在値として区別する
+- CapabilityRegistryは許可リスト方式でCapability単位に登録・解除・Provider解決を行い、未対応機能一覧や拒否リストは持たない
+- disabled、初期化失敗、停止、依存・Health喪失時は該当Capabilityを解除する。Games PluginはLLM Provider不在時に実行Capabilityを登録しない
+- RuntimeCoordinatorは現在使用可能なCapabilityからInterpreter/Handlerを取得し、Command実行直前にも同じPluginのCapabilityを再検証する
+- 実行要求に一致するCapabilityがなければ通常会話へ戻し、実行したふりと内部用語を禁止する制約をPromptへ渡す。知識質問・過去・否定・雑談は機能不在を理由に拒否しない
+- 未知の要求でも仮Capabilityを生成せず、安全な通常会話へ戻す。代替案は現在可能なものを最大一つに限定する
+- ActionPlannerは`prepared_response_text`とPlugin MemoryPolicyを汎用的に適用する
+- `plugins.games.enabled`でゲーム機能をCore変更なしに無効化できる
+- 将来別Pythonパッケージへ分離する場合も、`app/core/plugins`の契約とGatewayだけを依存境界とする
+- mixed入力は構造化までとし、ゲーム進行と雑談応答の統合は次工程で実装する
+
+## Behavior Planner・Situation Evaluator・Character LLM
+
+本プロジェクトでは、未知のユーザー入力を特定ワードや特定Plugin向けの固定分岐で処理しない。
+登録済みのActivityDefinitionを意味的に照合し、実行可否と発話表現を分離する汎用構造を採用する。
+
+詳細設計は `docs/llm_role_architecture.md` を正本とする。
+
+基本フロー:
+
+```text
+External Event
+  ↓
+Situation Evaluator
+  ↓
+Behavior Plan
+  ↓
+Activity Registry照合
+  ↓
+Capability Registry検証
+  ↓
+Activity実行
+  ↓
+Activity Result
+  ↓
+Response Context
+  ↓
+Character LLM
+  ↓
+Response Validator
+  ↓
+ActionPlanGroup / Output Unit
+```
+
+責務分離:
+
+- Situation Evaluatorは人格を持たず、入力の意味、発話意図、Activity候補、operation、constraints、否定、仮定、過去、知識質問、confidenceを構造化する
+- Behavior PlannerはSituation Evaluatorの解析結果、AgentState、OngoingActivity、ActivityDefinitionを基に次の行動を決定する
+- Activity Registryは「どのようなActivityが存在するか」の正本とする
+- Capability Registryは「現在そのActivityを実行できるか」の正本とする
+- Pluginが無効でもActivityの意味認識は可能とし、実行可否だけをCapability Registryで拒否する
+- Activity Resultは、実際に起きた事実の正本とする
+- Response ContextはActivity Resultと現在状態を、Character LLMが安全に表現できる形式へ整理する
+- Character LLMはキャラクター口調、感情表現、発話、表情、ジェスチャー候補だけを生成する
+- Response ValidatorはCharacter LLM出力とActivity Resultの整合性を検証し、未実行・拒否・失敗した処理を成功したように発話させない
+- Character LLMへユーザー入力だけを直接渡し、行動判断と最終発話を同時に行わせない
+- LLMが返したActivity名、Capability、Providerは信用せず、登録済み定義から導出する
+- 架空Activity、不正JSON、低確信度、LLM障害は安全なConversationまたは確認へフォールバックする
+- 再生成は最大1回とし、無制限ループを禁止する
+
+汎用化方針:
+
+- Coreへ「しりとり」「検索」「OBS」等の特定ワード判定を埋め込まない
+- 個別Activityの意味情報、supported operations、constraints schema、required capability、provider pluginはActivityDefinitionまたはPlugin側が提供する
+- 決定論的Matcherを使う場合もPlugin側から共通インターフェースで提供し、Coreは候補比較だけを行う
+- 未知の言い回しはSituation EvaluatorがActivityDefinition一覧と意味照合する
+- 発話の整合性検証はキーワードブラックリストではなく、対応する成功Activity Resultの有無で判断する
+- ゲーム、外部検索、OBS操作、音楽再生、アバター操作、ファイル操作、外部サービス操作に同じ仕組みを適用する
+
+Activity Resultの最低項目:
+
+- `activity_type`
+- `operation`
+- `status`
+- `capability`
+- `provider_plugin_id`
+- `result_payload`
+- `failure_reason`
+- `constraints`
+
+status候補:
+
+- `succeeded`
+- `rejected`
+- `failed`
+- `canceled`
+- `waiting_input`
+
+LLMロール:
+
+- `situation_evaluator`
+- `character`
+- `response_validator`
+
+初期実装では同じProvider・Modelを共有してよいが、設定、Prompt、依存関係、temperatureは論理ロールごとに分離する。
+将来はSituation Evaluatorを低温度・構造化出力重視、Character LLMを表現力重視、Response Validatorを低温度・整合性重視のモデルへ個別に差し替えられるようにする。
+
+ログ方針:
+
+- INFOには最終Behavior判断、Activity結果、Character応答生成完了、Validator拒否・置換、重要なフォールバックだけを残す
+- DEBUGにはSituation Evaluator入力、ActivityDefinition候補、LLM生出力、構造化解析、Activity Plan、Capability検証、Activity Result、Response Context、Character LLM入出力、Validator結果を記録する
+- Promptや生成結果を記録する場合は共通マスク処理を通す
+
+既存クラスとの関係:
+
+- 現行`BehaviorPlanner`は段階的にSituation Evaluatorと行動選択責務へ分離する
+- 現行`ResponseGenerator`はCharacter LLM相当の発話生成Portへ整理する
+- `ActionPlanner`はCharacter LLM出力を直接信用せず、検証済みResponseをActionPlanGroupへ変換する
+- `RuntimeCoordinator`は個別機能判定を持たず、各Service・Registry・Loopの接続と実行調停へ寄せる
+- `OngoingActivity`は複数Turnの目的と状態を保持し、各Turnの実行結果はActivity Resultとして記録する
