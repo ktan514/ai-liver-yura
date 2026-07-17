@@ -106,6 +106,39 @@ async def test_all_required_healthy_becomes_ready_and_publishes(tmp_path: Path) 
     assert session is not None and session.can_start is True
     assert published == [result]
     assert any(item.status == HealthStatus.DEGRADED for item in result.checks)
+    assert (
+        next(item for item in result.checks if item.check_id == "obs.configuration").status
+        == HealthStatus.HEALTHY
+    )
+    assert (
+        next(item for item in result.checks if item.check_id == "obs.websocket.version").metadata[
+            "websocket_version"
+        ]
+        == "5.x-fake"
+    )
+
+
+@pytest.mark.asyncio
+async def test_obs_active_output_prevents_ready(tmp_path: Path) -> None:
+    usecase, _, _, command = build_usecase(
+        tmp_path, obs_config=FakeObsPreparationConfig(output_status="active")
+    )
+    result = await usecase.execute(command)
+    item = next(item for item in result.checks if item.check_id == "obs.idle")
+    assert result.ready is False
+    assert item.failure_reason == "obs.output.not_idle.active"
+
+
+@pytest.mark.asyncio
+async def test_optional_hidden_obs_avatar_is_degraded_but_ready(tmp_path: Path) -> None:
+    usecase, _, _, command = build_usecase(
+        tmp_path, obs_config=FakeObsPreparationConfig(avatar_source_visible=False)
+    )
+    result = await usecase.execute(command)
+    item = next(item for item in result.checks if item.check_id == "obs.avatar_source")
+    assert item.required is False
+    assert item.status == HealthStatus.DEGRADED
+    assert result.ready is True
 
 
 @pytest.mark.asyncio

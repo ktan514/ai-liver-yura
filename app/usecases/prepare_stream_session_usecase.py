@@ -54,6 +54,7 @@ class StreamPreparationRequirements:
     expected_scene_collection: str = "AI Liver"
     expected_start_scene: str = "Starting Soon"
     required_audio_sources: tuple[str, ...] = ("VOICEVOX",)
+    require_obs_avatar_visible: bool = False
     timeout_seconds: float = 5.0
 
 
@@ -110,6 +111,10 @@ class PrepareStreamSessionUsecase:
     def youtube_adapter_type(self) -> str:
         return self._youtube.adapter_type
 
+    @property
+    def obs_adapter_type(self) -> str:
+        return self._obs.adapter_type
+
     async def get_youtube_authentication_state(self) -> YouTubeAuthenticationState:
         state = await self._youtube.get_authentication_state()
         self._report_authentication_state(state)
@@ -128,6 +133,10 @@ class PrepareStreamSessionUsecase:
 
     def find_active_session(self) -> StreamSession | None:
         return self._sessions.find_active_or_preparing()
+
+    async def inspect_obs(self) -> tuple[HealthCheckItem, ...]:
+        """Run only read-only OBS preparation checks without changing a session."""
+        return await self._obs_checks()
 
     async def execute(self, command: StreamPreparationCommand) -> StreamPreparationResult:
         async with self._lock:
@@ -461,7 +470,23 @@ class PrepareStreamSessionUsecase:
         if snapshot.status != HealthStatus.HEALTHY or snapshot.value is None:
             reason = snapshot.failure_reason or "OBS状態を取得できません。"
             return (
+                self._item(
+                    "obs.configuration",
+                    "obs",
+                    required,
+                    HealthStatus.UNAVAILABLE,
+                    "obs.configuration.invalid",
+                    failure_reason=reason,
+                ),
                 self._object_item(snapshot, "OBSへ接続しました。"),
+                self._item(
+                    "obs.websocket.version",
+                    "obs",
+                    required,
+                    HealthStatus.UNKNOWN,
+                    "obs.websocket.version.unconfirmed",
+                    failure_reason=reason,
+                ),
                 self._item(
                     "obs.idle",
                     "obs",
@@ -504,54 +529,137 @@ class PrepareStreamSessionUsecase:
                 ),
             )
         value = cast(ObsPreparationSnapshot, snapshot.value)
-        return (
+        audio_details = value.audio_source_details
+        missing = [
+            name
+            for name in self._requirements.required_audio_sources
+            if not audio_details.get(name, {}).get(
+                "exists", value.audio_source_states.get(name, False)
+            )
+        ]
+        muted = [
+            name
+            for name, item in audio_details.items()
+            if name in self._requirements.required_audio_sources and item.get("muted") is True
+        ]
+        low_volume = [
+            name
+            for name, item in audio_details.items()
+            if name in self._requirements.required_audio_sources and item.get("low_volume") is True
+        ]
+        optional_audio_issues = [
+            name
+            for name, item in audio_details.items()
+            if name not in self._requirements.required_audio_sources
+            and (
+                item.get("exists") is False
+                or item.get("muted") is True
+                or item.get("low_volume") is True
+            )
+        ]
+        audio_ok = not missing and not muted
+        audio_status = (
+            HealthStatus.UNAVAILABLE
+            if not audio_ok
+            else HealthStatus.DEGRADED
+            if low_volume
+            else HealthStatus.HEALTHY
+        )
+        avatar_required = self._requirements.require_obs_avatar_visible
+        avatar_ok = value.avatar_source_exists and value.avatar_source_visible
+        avatar_status = (
+            HealthStatus.HEALTHY
+            if avatar_ok
+            else HealthStatus.UNAVAILABLE
+            if avatar_required
+            else HealthStatus.DEGRADED
+        )
+        checks = (
             self._item(
-                "obs.connected", "obs", required, HealthStatus.HEALTHY, "OBSへ接続しました。"
+                "obs.configuration",
+                "obs",
+                required,
+                HealthStatus.HEALTHY,
+                "obs.configuration.valid",
+            ),
+            self._item(
+                "obs.connected",
+                "obs",
+                required,
+                HealthStatus.HEALTHY if value.connected else HealthStatus.UNAVAILABLE,
+                "obs.connected" if value.connected else "obs.disconnected",
+                failure_reason=None if value.connected else "obs.connection_failed",
+            ),
+            self._item(
+                "obs.websocket.version",
+                "obs",
+                required,
+                HealthStatus.HEALTHY
+                if value.obs_version and value.websocket_version
+                else HealthStatus.UNAVAILABLE,
+                "obs.websocket.version.compatible",
+                failure_reason=(
+                    None
+                    if value.obs_version and value.websocket_version
+                    else "obs.protocol_version_unsupported"
+                ),
             ),
             self._condition(
                 "obs.idle",
                 "obs",
                 required,
                 value.output_status == "idle",
-                "OBS出力はidleです。",
-                f"OBS出力がidleではありません: {value.output_status}",
+                "obs.output.idle",
+                f"obs.output.not_idle.{value.output_status}",
             ),
             self._condition(
                 "obs.scene_collection",
                 "obs",
                 required,
                 value.current_scene_collection == self._requirements.expected_scene_collection,
-                "Scene Collectionは正しい状態です。",
-                "必要なScene Collectionではありません。",
+                "obs.scene_collection.matches",
+                "obs.scene_collection.mismatch",
             ),
             self._condition(
                 "obs.start_scene",
                 "obs",
                 required,
                 value.current_scene == self._requirements.expected_start_scene,
-                "開始Sceneは正しい状態です。",
-                "必要な開始Sceneではありません。",
+                "obs.start_scene.matches",
+                "obs.start_scene.mismatch",
             ),
-            self._condition(
+            self._item(
                 "obs.audio_sources",
                 "obs",
                 required,
-                all(
-                    value.audio_source_states.get(name) is True
-                    for name in self._requirements.required_audio_sources
-                ),
-                "必須音声Sourceを確認しました。",
-                "必須音声Sourceが存在しないか無効です。",
+                audio_status,
+                "obs.audio_sources.ready" if audio_ok else "obs.audio_sources.unavailable",
+                failure_reason=None if audio_ok else "obs.audio_sources.invalid",
             ),
-            self._condition(
+            self._item(
                 "obs.avatar_source",
                 "obs",
-                self._requirements.require_avatar,
-                value.avatar_source_visible,
-                "Avatar Sourceは表示されています。",
-                "Avatar Sourceが非表示です。",
+                avatar_required,
+                avatar_status,
+                "obs.avatar_source.visible" if avatar_ok else "obs.avatar_source.hidden",
+                failure_reason=None if avatar_ok else "obs.avatar_source.unavailable",
             ),
         )
+        metadata = {
+            "obs_version": value.obs_version or "unknown",
+            "websocket_version": value.websocket_version or "unknown",
+            "output_status": value.output_status,
+            "current_scene_collection": value.current_scene_collection,
+            "current_scene": value.current_scene,
+            "missing_audio_sources": missing,
+            "muted_audio_sources": muted,
+            "low_volume_audio_sources": low_volume,
+            "optional_audio_source_issues": optional_audio_issues,
+            "avatar_visible": value.avatar_source_visible,
+            "avatar_paths": list(value.avatar_source_paths),
+            "adapter_type": value.adapter_type,
+        }
+        return tuple(self._replace_metadata(item, metadata) for item in checks)
 
     async def _run_of_show_checks(self, run_of_show_id: str) -> tuple[HealthCheckItem, ...]:
         required = self._requirements.require_run_of_show
@@ -779,7 +887,12 @@ class PrepareStreamSessionUsecase:
             "youtube.stream.bound": "youtube.stream.inspect",
             "youtube.broadcast.status": "youtube.broadcast.inspect",
             "youtube.live_chat.available": "youtube.live_chat.inspect",
-            "obs.connected": "obs.inspect",
+            "obs.connected": "obs.connect",
+            "obs.idle": "obs.inspect.output",
+            "obs.scene_collection": "obs.inspect.scene",
+            "obs.start_scene": "obs.inspect.scene",
+            "obs.audio_sources": "obs.inspect.audio",
+            "obs.avatar_source": "obs.inspect.avatar_source",
             "tts.available": "tts.speak",
             "avatar.available": "avatar.control",
         }

@@ -138,3 +138,15 @@ class UnavailableAvatarHealthAdapter(FakeAvatarHealthAdapter):
             status=HealthStatus.DEGRADED,
             failure_reason="実Avatar連携は未実装です。",
         )
+
+
+class FakeTtsHealthAdapter:
+    async def check(self, *, required: bool) -> HealthCheckItem:
+        return HealthCheckItem(
+            check_id=f"tts-{uuid4()}",
+            component="tts.available",
+            status=HealthStatus.HEALTHY,
+            required=required,
+            summary="Demo TTSを利用できます（音声は再生しません）。",
+            metadata={"adapter_type": "fake"},
+        )

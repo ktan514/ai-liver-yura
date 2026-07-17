@@ -4,8 +4,29 @@ version: "1"
 planned_duration_seconds: 3600
 segments:
   - segment_id: opening
+    segment_type: opening
     title: オープニング
+    duration_seconds: 60
+    required: true
+    script_mode: llm
+    prompt_template_id: stream_opening_v1
+    order: 0
   - segment_id: main
+    segment_type: main
     title: メイン
+    duration_seconds: 600
+    required: true
+    script_mode: llm
+    prompt_template_id: stream_main_v1
+    order: 10
+    intent: Yuraらしく今日の配信テーマを紹介する
+    topic: 今日の配信テーマ
   - segment_id: closing
+    segment_type: closing
     title: クロージング
+    duration_seconds: 60
+    required: true
+    script_mode: llm
+    prompt_template_id: stream_closing_v1
+    order: 20
+    intent: 視聴者へ感謝し配信を締める

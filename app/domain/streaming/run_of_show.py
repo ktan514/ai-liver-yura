@@ -11,3 +11,17 @@ class RunOfShowSummary:
     segment_count: int
     source_path: str
     version: str
+
+
+@dataclass(frozen=True, slots=True)
+class RunOfShowSegment:
+    segment_id: str
+    segment_type: str
+    title: str
+    duration_seconds: int
+    required: bool
+    script_mode: str
+    prompt_template_id: str
+    order: int = 0
+    intent: str | None = None
+    topic: str | None = None
