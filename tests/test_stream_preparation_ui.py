@@ -1,197 +1,80 @@
 from __future__ import annotations
 
-import os
-from concurrent.futures import Future
-from datetime import datetime, timezone
-from typing import cast
+from typing import Any
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import httpx
+from fastapi.testclient import TestClient
 
-from PyQt6.QtWidgets import QApplication
-
-from app.domain.streaming import (
-    HealthCheckItem,
-    HealthStatus,
-    RunOfShowSummary,
-    StreamPreparationResult,
-    YouTubeAuthenticationState,
-    YouTubeAuthenticationStatus,
-    YouTubeBroadcastSummary,
-)
-from app.ui.pyqt import StreamPreparationController, StreamPreparationWindow
+from app.admin_api import AdminApiService, create_admin_api
+from app.config.app_config import load_app_config
+from app.runtime.runtime_factory import create_stream_preparation_runtime
+from streaming_admin.client import CoreApiClient, CoreApiError
+from streaming_admin.config import AdminClientConfig
 
 
-def resolved(value: object) -> Future[object]:
-    future: Future[object] = Future()
-    future.set_result(value)
-    return future
+def api_client(token: str = "secret") -> TestClient:
+    runtime = create_stream_preparation_runtime(load_app_config())
+    return TestClient(create_admin_api(AdminApiService(runtime), token=token))
 
 
-class FakeGateway:
-    def __init__(
-        self,
-        authentication_state: YouTubeAuthenticationState | None = None,
-    ) -> None:
-        self.prepare_future: Future[StreamPreparationResult] = Future()
-        self.authenticate_future: Future[object] = resolved(
-            YouTubeAuthenticationState(YouTubeAuthenticationStatus.AUTHENTICATED)
-        )
-        self.broadcast_future: Future[object] | None = None
-        self.authentication_state = authentication_state or YouTubeAuthenticationState(
-            YouTubeAuthenticationStatus.AUTHENTICATED
-        )
-        self.prepare_calls = 0
-        self.broadcast_calls = 0
-        self.closed = False
-
-    def youtube_adapter_type(self) -> Future[object]:
-        return resolved("fake")
-
-    def youtube_authentication_state(self) -> Future[object]:
-        return resolved(self.authentication_state)
-
-    def authenticate_youtube(self) -> Future[object]:
-        return self.authenticate_future
-
-    def list_broadcasts(self) -> Future[object]:
-        self.broadcast_calls += 1
-        if self.broadcast_future is not None:
-            return self.broadcast_future
-        return resolved((YouTubeBroadcastSummary("broadcast", "テスト配信"),))
-
-    def list_run_of_shows(self) -> Future[object]:
-        return resolved((RunOfShowSummary("default", "標準", 60, 1, "default.yaml", "1"),))
-
-    def prepare(
-        self,
-        *,
-        broadcast_id: str,
-        broadcast_title: str,
-        run_of_show_id: str,
-        requested_by: str = "pyqt_management_ui",
-    ) -> Future[StreamPreparationResult]:
-        del broadcast_id, broadcast_title, run_of_show_id, requested_by
-        self.prepare_calls += 1
-        return self.prepare_future
-
-    def close(self) -> None:
-        self.closed = True
+def test_admin_api_health_auth_and_secret_boundary() -> None:
+    client = api_client()
+    headers = {"Authorization": "Bearer secret"}
+    assert client.get("/api/v1/health", headers=headers).status_code == 200
+    payload = client.get("/api/v1/youtube/auth", headers=headers).json()
+    assert payload["status"] == "authenticated"
+    serialized = str(payload).lower()
+    assert "refresh_token" not in serialized
+    assert "client_secret" not in serialized
+    assert "token_path" not in serialized
+    assert client.get("/api/v1/health").status_code == 401
 
 
-def application() -> QApplication:
-    instance = QApplication.instance()
-    return cast(QApplication, instance) if instance is not None else QApplication([])
-
-
-def test_ui_disables_double_click_and_displays_ready_result() -> None:
-    app = application()
-    gateway = FakeGateway()
-    controller = StreamPreparationController(gateway)
-    window = StreamPreparationWindow(controller)
-    app.processEvents()
-    assert window.broadcast_selector.currentData() == "broadcast"
-    assert window.run_of_show_selector.currentData() == "default"
-
-    window.prepare_button.click()
-    assert window.prepare_button.isEnabled() is False
-    assert controller.prepare("broadcast", "テスト配信", "default") is False
-    assert gateway.prepare_calls == 1
-
-    now = datetime.now(timezone.utc)
-    gateway.prepare_future.set_result(
-        StreamPreparationResult(
-            session_id="session",
-            trace_id="trace",
-            status="ready",
-            ready=True,
-            checks=(
-                HealthCheckItem(
-                    "runtime.running",
-                    "runtime",
-                    HealthStatus.HEALTHY,
-                    True,
-                    "running",
-                ),
-            ),
-            failure_reasons=(),
-            started_at=now,
-            completed_at=now,
-        )
+def test_admin_api_options_and_prepare_are_dtos() -> None:
+    client = api_client()
+    headers = {"Authorization": "Bearer secret"}
+    broadcasts = client.get("/api/v1/streaming/broadcasts", headers=headers).json()["items"]
+    run_of_shows = client.get("/api/v1/streaming/run-of-shows", headers=headers).json()["items"]
+    assert broadcasts[0]["display_label"]
+    assert "bound_stream_id" not in broadcasts[0]
+    response = client.post(
+        "/api/v1/streaming/session/prepare",
+        headers=headers,
+        json={
+            "command_id": "command-1",
+            "session_id": None,
+            "broadcast_id": broadcasts[0]["broadcast_id"],
+            "run_of_show_id": run_of_shows[0]["run_of_show_id"],
+            "expected_state_version": None,
+        },
     )
-    app.processEvents()
-    assert window.status_panel.session_status.text() == "ready"
-    assert window.health_table.rowCount() == 1
-    assert window.start_button.isEnabled() is False
-    window.close()
-    assert gateway.closed is True
+    assert response.status_code == 200
+    assert response.json()["session_id"]
+    assert "selected_stream_id" not in response.json()
 
 
-def test_ui_displays_failure_reason_and_closes_safely() -> None:
-    app = application()
-    gateway = FakeGateway()
-    controller = StreamPreparationController(gateway)
-    window = StreamPreparationWindow(controller)
-    app.processEvents()
-    window.prepare_button.click()
-    now = datetime.now(timezone.utc)
-    gateway.prepare_future.set_result(
-        StreamPreparationResult(
-            "session",
-            "trace",
-            "failed",
-            False,
-            (),
-            ("OBS disconnected",),
-            now,
-            now,
-        )
+def test_core_api_client_reports_core_unavailable(monkeypatch: Any) -> None:
+    def fail(*args: object, **kwargs: object) -> object:
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(httpx, "request", fail)
+    client = CoreApiClient(AdminClientConfig())
+    try:
+        client.health()
+    except CoreApiError as error:
+        assert error.code == "runtime.unavailable"
+        assert error.retryable is True
+    else:
+        raise AssertionError("CoreApiError was not raised")
+
+
+def test_structured_validation_error() -> None:
+    client = api_client()
+    response = client.post(
+        "/api/v1/streaming/session/prepare",
+        headers={"Authorization": "Bearer secret"},
+        json={},
     )
-    app.processEvents()
-    assert "OBS disconnected" in window.status_panel.failure_reason.text()
-    window.close()
-    window.close()
-    assert gateway.closed is True
-
-
-def test_ui_authentication_is_non_blocking_and_reloads_broadcasts() -> None:
-    app = application()
-    gateway = FakeGateway(
-        YouTubeAuthenticationState(
-            YouTubeAuthenticationStatus.AUTHENTICATION_REQUIRED,
-            "認証してください。",
-        )
-    )
-    gateway.authenticate_future = Future()
-    controller = StreamPreparationController(gateway)
-    window = StreamPreparationWindow(controller)
-    app.processEvents()
-    assert window.adapter_type_label.text() == "fake"
-    assert window.authentication_status_label.text() == "authentication_required"
-    assert window.prepare_button.isEnabled() is False
-
-    window.authenticate_button.click()
-    assert window.authentication_status_label.text() == "authentication_in_progress"
-    assert window.authenticate_button.isEnabled() is False
-    gateway.authenticate_future.set_result(
-        YouTubeAuthenticationState(YouTubeAuthenticationStatus.AUTHENTICATED)
-    )
-    app.processEvents()
-    assert window.authentication_status_label.text() == "authenticated"
-    assert gateway.broadcast_calls == 1
-    assert window.broadcast_selector.currentData() == "broadcast"
-    window.close()
-
-
-def test_ui_disables_reload_while_loading_and_never_displays_token() -> None:
-    app = application()
-    gateway = FakeGateway()
-    gateway.broadcast_future = Future()
-    controller = StreamPreparationController(gateway)
-    window = StreamPreparationWindow(controller)
-    app.processEvents()
-    assert window.reload_broadcasts_button.isEnabled() is False
-    gateway.broadcast_future.set_exception(RuntimeError("安全なAPI失敗理由"))
-    app.processEvents()
-    assert "安全なAPI失敗理由" in window.status_panel.failure_reason.text()
-    assert "token" not in window.status_panel.failure_reason.text().lower()
-    window.close()
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "request.invalid"
+    assert response.json()["error"]["trace_id"]
