@@ -60,9 +60,13 @@ services:
       - public
   obs:
     type: fake
-    websocket_url: ws://127.0.0.1:4455
+    host: 127.0.0.1
+    port: 4455
     password_env: OBS_WEBSOCKET_PASSWORD
-    timeout_seconds: 5.0
+    connect_timeout_seconds: 5.0
+    request_timeout_seconds: 5.0
+    max_retries: 2
+    retry_initial_delay_seconds: 0.5
 
 # 利用可能なモデルを登録し、各機能からキー名で参照する。
 models:
@@ -215,12 +219,55 @@ streaming:
     expected_start_scene: Starting Soon
     required_audio_sources:
       - VOICEVOX
+    optional_audio_sources: []
+    avatar_source_name: Yura
+    require_avatar_source_visible: false
+    low_volume_threshold_db: -60.0
+    max_scene_depth: 8
   run_of_show:
     directory: config/run_of_show
     default_id: default
   fake:
     broadcast_id: fake-broadcast-1
     broadcast_title: 配信準備テスト枠
+  moderation:
+    blocked_terms: []
+    allowed_terms: []
+    max_comment_length: 300
+    repeated_message_window_seconds: 30
+    repeated_message_limit: 3
+    url_policy: review
+    unknown_message_type_policy: ignore
+    max_concurrent_evaluations: 4
+    evaluation_queue_capacity: 128
+    timeout_seconds: 3.0
+  comment_ranking:
+    weights:
+      recency: 0.15
+      relevance: 0.25
+      novelty: 0.15
+      conversation_fit: 0.20
+      engagement: 0.15
+      fairness: 0.10
+    selection_threshold: 0.55
+    minimum_conversation_fit: 0.5
+    candidate_ttl_seconds: 90
+    reservation_ttl_seconds: 30
+    max_pool_size: 200
+    max_rank_batch_size: 50
+    history_size: 100
+    author_cooldown_count: 2
+    semantic_timeout_seconds: 2.0
+    max_concurrent_rankings: 1
+    queue_capacity: 16
+  comment_response:
+    max_characters: 140
+    max_sentences: 3
+    allow_follow_up_question: true
+    mention_author_name: optional
+    repeat_comment_text: false
+    response_cooldown_seconds: 5
+    max_retries: 2
 
 plugins:
   games:

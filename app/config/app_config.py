@@ -48,6 +48,9 @@ class ServiceSettings:
     allow_live_broadcast: bool | None = None
     oauth_timeout_seconds: float | None = None
     allowed_privacy_statuses: tuple[str, ...] | None = None
+    host: str | None = None
+    port: int | None = None
+    connect_timeout_seconds: float | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +214,11 @@ class StreamingObsSettings:
     expected_scene_collection: str = "AI Liver"
     expected_start_scene: str = "Starting Soon"
     required_audio_sources: tuple[str, ...] = ("VOICEVOX",)
+    optional_audio_sources: tuple[str, ...] = ()
+    avatar_source_name: str | None = None
+    require_avatar_source_visible: bool = False
+    low_volume_threshold_db: float = -60.0
+    max_scene_depth: int = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,11 +234,101 @@ class StreamingFakeSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class CommentModerationSettings:
+    blocked_terms: tuple[str, ...] = ()
+    allowed_terms: tuple[str, ...] = ()
+    max_comment_length: int = 300
+    repeated_message_window_seconds: int = 30
+    repeated_message_limit: int = 3
+    url_policy: str = "review"
+    unknown_message_type_policy: str = "ignore"
+    max_concurrent_evaluations: int = 4
+    evaluation_queue_capacity: int = 128
+    timeout_seconds: float = 3.0
+
+
+@dataclass(frozen=True, slots=True)
+class CommentRankingSettings:
+    weights: dict[str, float] = field(
+        default_factory=lambda: {
+            "recency": 0.15,
+            "relevance": 0.25,
+            "novelty": 0.15,
+            "conversation_fit": 0.20,
+            "engagement": 0.15,
+            "fairness": 0.10,
+        }
+    )
+    selection_threshold: float = 0.55
+    minimum_conversation_fit: float = 0.5
+    candidate_ttl_seconds: int = 90
+    reservation_ttl_seconds: int = 30
+    max_pool_size: int = 200
+    max_rank_batch_size: int = 50
+    history_size: int = 100
+    author_cooldown_count: int = 2
+    semantic_timeout_seconds: float = 2.0
+    max_concurrent_rankings: int = 1
+    queue_capacity: int = 16
+
+    def __post_init__(self) -> None:
+        expected = {
+            "recency",
+            "relevance",
+            "novelty",
+            "conversation_fit",
+            "engagement",
+            "fairness",
+        }
+        if set(self.weights) != expected or abs(sum(self.weights.values()) - 1.0) > 0.000001:
+            raise ValueError("comment_ranking.weights_invalid")
+        if any(not 0 <= value <= 1 for value in self.weights.values()):
+            raise ValueError("comment_ranking.weights_invalid")
+        if not 0 <= self.selection_threshold <= 1 or not 0 <= self.minimum_conversation_fit <= 1:
+            raise ValueError("comment_ranking.threshold_invalid")
+        positive = (
+            self.candidate_ttl_seconds,
+            self.reservation_ttl_seconds,
+            self.max_pool_size,
+            self.max_rank_batch_size,
+            self.history_size,
+            self.author_cooldown_count,
+            self.semantic_timeout_seconds,
+            self.max_concurrent_rankings,
+            self.queue_capacity,
+        )
+        if any(value <= 0 for value in positive):
+            raise ValueError("comment_ranking.capacity_invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class CommentResponseSettings:
+    max_characters: int = 140
+    max_sentences: int = 3
+    allow_follow_up_question: bool = True
+    mention_author_name: str = "optional"
+    repeat_comment_text: bool = False
+    response_cooldown_seconds: int = 5
+    max_retries: int = 2
+
+    def __post_init__(self) -> None:
+        if self.max_characters <= 0 or self.max_sentences <= 0:
+            raise ValueError("comment_response.length_invalid")
+        if self.mention_author_name not in {"never", "optional"}:
+            raise ValueError("comment_response.author_policy_invalid")
+        if self.response_cooldown_seconds < 0 or self.max_retries < 0:
+            raise ValueError("comment_response.retry_invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class StreamingSettings:
     readiness: StreamingReadinessSettings = field(default_factory=StreamingReadinessSettings)
     obs: StreamingObsSettings = field(default_factory=StreamingObsSettings)
     run_of_show: StreamingRunOfShowSettings = field(default_factory=StreamingRunOfShowSettings)
     fake: StreamingFakeSettings = field(default_factory=StreamingFakeSettings)
+    moderation: CommentModerationSettings = field(default_factory=CommentModerationSettings)
+    comment_ranking: CommentRankingSettings = field(default_factory=CommentRankingSettings)
+    comment_response: CommentResponseSettings = field(default_factory=CommentResponseSettings)
     health_timeout_seconds: float = 5.0
 
 
@@ -286,13 +384,34 @@ def _load_streaming_settings(value: object) -> StreamingSettings:
     obs = value.get("obs", {})
     run_of_show = value.get("run_of_show", {})
     fake = value.get("fake", {})
-    if not all(isinstance(item, dict) for item in (readiness, obs, run_of_show, fake)):
+    moderation = value.get("moderation", {})
+    ranking = value.get("comment_ranking", {})
+    response = value.get("comment_response", {})
+    if not all(
+        isinstance(item, dict)
+        for item in (readiness, obs, run_of_show, fake, moderation, ranking, response)
+    ):
         raise RuntimeError("streaming配下はobject形式で指定してください。")
+    default_weights = CommentRankingSettings().weights
+    weights = ranking.get("weights", default_weights)
+    if not isinstance(weights, dict) or set(weights) != set(default_weights):
+        raise RuntimeError("streaming.comment_ranking.weightsのFeatureが不正です。")
+    parsed_weights = {key: float(value) for key, value in weights.items()}
+    if (
+        any(value < 0 or value > 1 for value in parsed_weights.values())
+        or abs(sum(parsed_weights.values()) - 1.0) > 0.000001
+    ):
+        raise RuntimeError("streaming.comment_ranking.weightsの合計は1.0で指定してください。")
     audio_sources = obs.get("required_audio_sources", ["VOICEVOX"])
     if not isinstance(audio_sources, list) or not all(
         isinstance(item, str) and item for item in audio_sources
     ):
         raise RuntimeError("streaming.obs.required_audio_sourcesは文字列listです。")
+    optional_audio_sources = obs.get("optional_audio_sources", [])
+    if not isinstance(optional_audio_sources, list) or not all(
+        isinstance(item, str) and item for item in optional_audio_sources
+    ):
+        raise RuntimeError("streaming.obs.optional_audio_sourcesは文字列listです。")
     timeout = value.get("health_timeout_seconds", 5.0)
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
         raise RuntimeError("streaming.health_timeout_secondsは正数です。")
@@ -313,6 +432,13 @@ def _load_streaming_settings(value: object) -> StreamingSettings:
             ),
             expected_start_scene=(_optional_string(obs, "expected_start_scene") or "Starting Soon"),
             required_audio_sources=tuple(audio_sources),
+            optional_audio_sources=tuple(optional_audio_sources),
+            avatar_source_name=_optional_string(obs, "avatar_source_name"),
+            require_avatar_source_visible=_optional_bool(
+                obs, "require_avatar_source_visible", False
+            ),
+            low_volume_threshold_db=float(obs.get("low_volume_threshold_db", -60.0)),
+            max_scene_depth=int(obs.get("max_scene_depth", 8)),
         ),
         run_of_show=StreamingRunOfShowSettings(
             directory=_optional_string(run_of_show, "directory") or "config/run_of_show",
@@ -321,6 +447,45 @@ def _load_streaming_settings(value: object) -> StreamingSettings:
         fake=StreamingFakeSettings(
             broadcast_id=_optional_string(fake, "broadcast_id") or "fake-broadcast-1",
             broadcast_title=(_optional_string(fake, "broadcast_title") or "配信準備テスト枠"),
+        ),
+        moderation=CommentModerationSettings(
+            blocked_terms=tuple(str(item) for item in moderation.get("blocked_terms", [])),
+            allowed_terms=tuple(str(item) for item in moderation.get("allowed_terms", [])),
+            max_comment_length=int(moderation.get("max_comment_length", 300)),
+            repeated_message_window_seconds=int(
+                moderation.get("repeated_message_window_seconds", 30)
+            ),
+            repeated_message_limit=int(moderation.get("repeated_message_limit", 3)),
+            url_policy=str(moderation.get("url_policy", "review")),
+            unknown_message_type_policy=str(
+                moderation.get("unknown_message_type_policy", "ignore")
+            ),
+            max_concurrent_evaluations=int(moderation.get("max_concurrent_evaluations", 4)),
+            evaluation_queue_capacity=int(moderation.get("evaluation_queue_capacity", 128)),
+            timeout_seconds=float(moderation.get("timeout_seconds", 3.0)),
+        ),
+        comment_ranking=CommentRankingSettings(
+            weights=parsed_weights,
+            selection_threshold=float(ranking.get("selection_threshold", 0.55)),
+            minimum_conversation_fit=float(ranking.get("minimum_conversation_fit", 0.5)),
+            candidate_ttl_seconds=int(ranking.get("candidate_ttl_seconds", 90)),
+            reservation_ttl_seconds=int(ranking.get("reservation_ttl_seconds", 30)),
+            max_pool_size=int(ranking.get("max_pool_size", 200)),
+            max_rank_batch_size=int(ranking.get("max_rank_batch_size", 50)),
+            history_size=int(ranking.get("history_size", 100)),
+            author_cooldown_count=int(ranking.get("author_cooldown_count", 2)),
+            semantic_timeout_seconds=float(ranking.get("semantic_timeout_seconds", 2.0)),
+            max_concurrent_rankings=int(ranking.get("max_concurrent_rankings", 1)),
+            queue_capacity=int(ranking.get("queue_capacity", 16)),
+        ),
+        comment_response=CommentResponseSettings(
+            max_characters=int(response.get("max_characters", 140)),
+            max_sentences=int(response.get("max_sentences", 3)),
+            allow_follow_up_question=bool(response.get("allow_follow_up_question", True)),
+            mention_author_name=str(response.get("mention_author_name", "optional")),
+            repeat_comment_text=bool(response.get("repeat_comment_text", False)),
+            response_cooldown_seconds=int(response.get("response_cooldown_seconds", 5)),
+            max_retries=int(response.get("max_retries", 2)),
         ),
         health_timeout_seconds=float(timeout),
     )
@@ -503,6 +668,12 @@ def _load_services(config: dict[str, Any]) -> dict[str, ServiceSettings]:
         max_retries = _optional_int(value, "max_retries")
         if max_retries is not None and max_retries < 0:
             raise RuntimeError(f"services.{key}.max_retriesは0以上です。")
+        port = _optional_int(value, "port")
+        if port is not None and not 1 <= port <= 65535:
+            raise RuntimeError(f"services.{key}.portは1以上65535以下です。")
+        connect_timeout = _optional_float(value, "connect_timeout_seconds")
+        if connect_timeout is not None and connect_timeout <= 0:
+            raise RuntimeError(f"services.{key}.connect_timeout_secondsは正数です。")
         retry_delay = _optional_float(value, "retry_initial_delay_seconds")
         if retry_delay is not None and retry_delay <= 0:
             raise RuntimeError(f"services.{key}.retry_initial_delay_secondsは正数です。")
@@ -548,6 +719,9 @@ def _load_services(config: dict[str, Any]) -> dict[str, ServiceSettings]:
             allowed_privacy_statuses=(
                 tuple(privacy_statuses) if isinstance(privacy_statuses, list) else None
             ),
+            host=_optional_string(value, "host"),
+            port=port,
+            connect_timeout_seconds=connect_timeout,
         )
     return services
 

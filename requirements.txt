@@ -1,8 +1,10 @@
-PyQt6
 python-dotenv
 PyYAML
 pydantic
 asyncpg
+fastapi==0.115.12
+uvicorn==0.34.3
+obsws-python==1.8.0
 google-api-python-client==2.198.0
 google-auth==2.56.0
 google-auth-oauthlib==1.4.0
