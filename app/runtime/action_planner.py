@@ -18,10 +18,12 @@ from app.domain.activity_turn_result import (
 from app.domain.character_response import (
     ActivityExecutionResult,
 )
+from app.domain.streaming import LifecycleOperation
 from app.domain.trace_context import trace_context_from
 from app.ports.response_generator import ResponseGenerator
 from app.runtime.character_response_pipeline import CharacterResponsePipeline
 from app.runtime.shiritori_game_service import ShiritoriGameService
+from app.usecases.stream_lifecycle_gate import StreamLifecycleGate
 from app.utils.llm_trace import build_llm_trace_context
 from app.utils.trace import TraceLogger
 
@@ -41,8 +43,13 @@ class ActionPlanner:
         self._character_response_pipeline = character_response_pipeline
         self._activity_is_active = activity_is_active
         self._trace_logger = TraceLogger()
+        self._lifecycle_gate: StreamLifecycleGate | None = None
+
+    def set_lifecycle_gate(self, gate: StreamLifecycleGate) -> None:
+        self._lifecycle_gate = gate
 
     async def plan(self, activity: Activity) -> ActionPlanGroup:
+        self._require_lifecycle(activity, LifecycleOperation.START_LLM_GENERATION)
         self._trace_logger.write(
             "action_planner:plan:start",
             activity_id=activity.activity_id,
@@ -55,6 +62,8 @@ class ActionPlanner:
             ActivityType.GAME_WITH_USER,
             ActivityType.STARTUP_REACTION,
             ActivityType.STREAM_OPENING_GREETING,
+            ActivityType.STREAM_MAIN_SEGMENT,
+            ActivityType.STREAM_COMMENT_RESPONSE,
             ActivityType.STREAM_CLOSING_GREETING,
         }:
             prepared_response = activity.context.get("prepared_response_text")
@@ -95,6 +104,18 @@ class ActionPlanner:
                     activity
                 )
                 response_source = "conversation_fallback" if fallback_used else "llm_generation"
+            if activity.activity_type == ActivityType.STREAM_COMMENT_RESPONSE:
+                event_payload = activity.context.get("event_payload")
+                style = (
+                    event_payload.get("response_style") if isinstance(event_payload, dict) else None
+                )
+                limit = style.get("max_characters") if isinstance(style, dict) else 140
+                max_characters = limit if isinstance(limit, int) and limit > 0 else 140
+                response_text = response_text[:max_characters].strip()
+                if character_generation_result is not None:
+                    character_generation_result = replace(
+                        character_generation_result, adopted_text=response_text
+                    )
             if character_generation_result is None:
                 character_generation_result = self._generation_result(
                     activity,
@@ -150,6 +171,7 @@ class ActionPlanner:
                 response_length=len(response_text),
             )
             output_unit_id = str(uuid4())
+            self._require_lifecycle(activity, LifecycleOperation.CREATE_ACTION_PLAN)
             self._trace_logger.write(
                 "action_planner:plan:response_generated",
                 activity_id=activity.activity_id,
@@ -162,9 +184,9 @@ class ActionPlanner:
                 required_resources={ActionResource.MOUTH},
                 source_activity_id=activity.activity_id,
                 output_unit_id=output_unit_id,
-                metadata={"skip_topic_memory": True}
-                if self._should_skip_topic_memory(activity)
-                else {},
+                metadata=self._lifecycle_metadata(
+                    activity, skip_topic_memory=self._should_skip_topic_memory(activity)
+                ),
             )
             subtitle_plan = ActionPlan(
                 action_type=ActionType.UPDATE_SUBTITLE,
@@ -172,6 +194,7 @@ class ActionPlanner:
                 required_resources={ActionResource.SUBTITLE},
                 source_activity_id=activity.activity_id,
                 output_unit_id=output_unit_id,
+                metadata=self._lifecycle_metadata(activity),
             )
             expression_text = (
                 character_response.expression if character_response is not None else "smile"
@@ -185,6 +208,7 @@ class ActionPlanner:
                 required_resources={ActionResource.FACE},
                 source_activity_id=activity.activity_id,
                 output_unit_id=output_unit_id,
+                metadata=self._lifecycle_metadata(activity),
             )
             action_plans = [speak_plan, subtitle_plan, expression_plan]
             if character_response is not None and character_response.gesture:
@@ -195,6 +219,7 @@ class ActionPlanner:
                         required_resources={ActionResource.BODY},
                         source_activity_id=activity.activity_id,
                         output_unit_id=output_unit_id,
+                        metadata=self._lifecycle_metadata(activity),
                     )
                 )
             action_plan_group = ActionPlanGroup(
@@ -208,10 +233,12 @@ class ActionPlanner:
             )
             self._trace_logger.write(
                 "action_planner:plan:actions_created",
-                **build_llm_trace_context(activity).trace_context.derive(
+                **build_llm_trace_context(activity)
+                .trace_context.derive(
                     character_generation_result_id=character_generation_result.result_id,
                     output_unit_id=output_unit_id,
-                ).as_log_fields(),
+                )
+                .as_log_fields(),
                 activity_id=activity.activity_id,
                 activity_type=activity.activity_type.value,
                 action_types=[
@@ -307,10 +334,12 @@ class ActionPlanner:
             )
             self._trace_logger.write(
                 "action_planner:plan:actions_created",
-                **build_llm_trace_context(activity).trace_context.derive(
+                **build_llm_trace_context(activity)
+                .trace_context.derive(
                     character_generation_result_id=character_generation_result.result_id,
                     output_unit_id=output_unit_id,
-                ).as_log_fields(),
+                )
+                .as_log_fields(),
                 activity_id=activity.activity_id,
                 activity_type=activity.activity_type.value,
                 action_types=[
@@ -343,9 +372,9 @@ class ActionPlanner:
         )
         self._trace_logger.write(
             "action_planner:plan:actions_created",
-            **build_llm_trace_context(activity).trace_context.derive(
-                output_unit_id=output_unit_id
-            ).as_log_fields(),
+            **build_llm_trace_context(activity)
+            .trace_context.derive(output_unit_id=output_unit_id)
+            .as_log_fields(),
             activity_id=activity.activity_id,
             activity_type=activity.activity_type.value,
             action_types=[
@@ -355,6 +384,35 @@ class ActionPlanner:
             required_resources=[ActionResource.EYES.value],
         )
         return action_plan_group
+
+    def _require_lifecycle(self, activity: Activity, operation: LifecycleOperation) -> None:
+        if self._lifecycle_gate is None:
+            return
+        payload = activity.context.get("event_payload")
+        session_id = payload.get("session_id") if isinstance(payload, dict) else None
+        if not isinstance(session_id, str):
+            return
+        decision = self._lifecycle_gate.evaluate(
+            operation,
+            session_id,
+            activity_type=activity.activity_type.value,
+        )
+        if not decision.allowed:
+            raise RuntimeError(decision.reason_code or "lifecycle.operation_not_allowed")
+
+    @staticmethod
+    def _lifecycle_metadata(
+        activity: Activity, *, skip_topic_memory: bool = False
+    ) -> dict[str, object]:
+        payload = activity.context.get("event_payload")
+        session_id = payload.get("session_id") if isinstance(payload, dict) else None
+        metadata: dict[str, object] = {
+            "lifecycle_session_id": session_id,
+            "lifecycle_activity_type": activity.activity_type.value,
+        }
+        if skip_topic_memory:
+            metadata["skip_topic_memory"] = True
+        return metadata
 
     async def _generate_response_with_safe_fallback(self, activity: Activity) -> tuple[str, bool]:
         try:
@@ -443,10 +501,7 @@ class ActionPlanner:
                 or (trace.activity_turn_id if trace is not None else None)
                 or activity.activity_id
             ),
-            str(
-                ongoing_id
-                or (trace.ongoing_activity_id if trace is not None else None)
-            )
+            str(ongoing_id or (trace.ongoing_activity_id if trace is not None else None))
             if ongoing_id is not None or (trace is not None and trace.ongoing_activity_id)
             else None,
         )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, replace
 from queue import Queue
 from typing import cast
@@ -15,6 +15,7 @@ from app.core.plugins.plugin import (
 from app.core.plugins.user_request import UserRequestKind, interpret_user_request
 from app.domain.actions import ActionPlanGroup
 from app.domain.activities import Activity, ActivityStatus, ActivityType, OngoingActivity
+from app.domain.activity_turn_result import ActivityTurnResult
 from app.domain.behavior import (
     ActivityOperation,
     ActivityPlan,
@@ -40,6 +41,8 @@ from app.domain.pending_confirmation import (
     ConfirmationResolutionKind,
     PendingConfirmation,
 )
+from app.domain.streaming import LifecycleOperation
+from app.domain.trace_context import TraceContext
 from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler
 from app.runtime.activity_executor_thread import ActivityExecutorThread
@@ -64,6 +67,7 @@ from app.runtime.game_input_classifier import GameInputClassifier
 from app.runtime.ongoing_activity_coordinator import OngoingActivityCoordinator
 from app.runtime.pending_confirmation import ConfirmationResolver, PendingConfirmationManager
 from app.runtime.shiritori_game_service import ShiritoriGameService
+from app.usecases.stream_lifecycle_gate import StreamLifecycleGate
 from app.utils.trace import TraceLogger
 
 
@@ -92,6 +96,7 @@ class RuntimeCoordinator:
         activity_registry: ActivityRegistry | None = None,
         pending_confirmation_manager: PendingConfirmationManager | None = None,
         confirmation_resolver: ConfirmationResolver | None = None,
+        autonomous_planning_enabled: bool = True,
     ) -> None:
         self._event_queue = event_queue
         self._activity_manager = activity_manager
@@ -125,6 +130,13 @@ class RuntimeCoordinator:
         self._running = False
         self._thread_join_timeout_seconds = 1.0
         self._trace_logger = TraceLogger()
+        self._stream_lifecycle_gate: StreamLifecycleGate | None = None
+        self._comment_moderation_handler: Callable[[AgentEvent], Awaitable[object]] | None = None
+        self._autonomous_planning_enabled = autonomous_planning_enabled
+
+    @property
+    def autonomous_planning_enabled(self) -> bool:
+        return self._autonomous_planning_enabled
 
     @property
     def game_engine(self) -> GameEngine:
@@ -227,6 +239,100 @@ class RuntimeCoordinator:
             )
         )
 
+    async def execute_stream_opening(
+        self, payload: dict[str, object], trace_id: str
+    ) -> ActivityTurnResult:
+        """検証済み配信情報を既存のCharacter/Claim/Action出力経路へ渡す。"""
+
+        group = await self._handle_event(
+            AgentEvent(
+                event_type=AgentEventType.STREAM_STARTED,
+                payload=dict(payload),
+                priority=100,
+                discardable=False,
+                trace_context=TraceContext(trace_id=trace_id),
+            )
+        )
+        base = group.activity_turn_result
+        if base is None:
+            raise RuntimeError("opening.activity_turn.missing")
+        return self._activity_manager.get_turn_result(base.activity_turn_id) or base
+
+    async def execute_stream_main_segment(
+        self, payload: dict[str, object], trace_id: str
+    ) -> ActivityTurnResult:
+        group = await self._handle_event(
+            AgentEvent(
+                event_type=AgentEventType.STREAM_MAIN_SEGMENT,
+                payload=dict(payload),
+                priority=100,
+                discardable=False,
+                trace_context=TraceContext(trace_id=trace_id),
+            )
+        )
+        base = group.activity_turn_result
+        if base is None:
+            raise RuntimeError("main_segment.activity_turn.missing")
+        return self._activity_manager.get_turn_result(base.activity_turn_id) or base
+
+    async def execute_stream_comment_response(
+        self, payload: dict[str, object], trace_id: str
+    ) -> ActivityTurnResult:
+        group = await self._handle_event(
+            AgentEvent(
+                event_type=AgentEventType.STREAM_COMMENT_RESPONSE,
+                payload=dict(payload),
+                priority=100,
+                discardable=False,
+                trace_context=TraceContext(trace_id=trace_id),
+            )
+        )
+        base = group.activity_turn_result
+        if base is None:
+            raise RuntimeError("comment_response.activity_turn.missing")
+        return self._activity_manager.get_turn_result(base.activity_turn_id) or base
+
+    def cancel_stream_outputs(self) -> bool:
+        return self._action_scheduler.cancel_outputs()
+
+    def configure_stream_lifecycle_gate(self, gate: StreamLifecycleGate) -> None:
+        self._stream_lifecycle_gate = gate
+        self._activity_manager.set_lifecycle_gate(gate)
+        self._action_planner.set_lifecycle_gate(gate)
+        self._action_scheduler.set_lifecycle_gate(gate)
+
+    def configure_comment_moderation(
+        self, handler: Callable[[AgentEvent], Awaitable[object]]
+    ) -> None:
+        self._comment_moderation_handler = handler
+
+    def evaluate_comment_polling(
+        self, gate: StreamLifecycleGate, session_id: str, *, continuing: bool = False
+    ) -> object:
+        return gate.evaluate(
+            LifecycleOperation.CONTINUE_COMMENT_POLLING
+            if continuing
+            else LifecycleOperation.START_COMMENT_POLLING,
+            session_id,
+        )
+
+    async def execute_stream_closing(
+        self, payload: dict[str, object], trace_id: str
+    ) -> ActivityTurnResult:
+        group = await self._handle_event(
+            AgentEvent(
+                event_type=AgentEventType.STREAM_ENDING,
+                payload=dict(payload),
+                priority=120,
+                discardable=False,
+                trace_context=TraceContext(trace_id=trace_id),
+            )
+        )
+        base = group.activity_turn_result
+        if base is None:
+            raise RuntimeError("closing.activity_turn.missing")
+        return self._activity_manager.get_turn_result(base.activity_turn_id) or base
+
     async def publish_events(self, events: list[AgentEvent]) -> None:
         self._trace_logger.write(
             "runtime_coordinator:publish_events:start",
@@ -235,6 +341,13 @@ class RuntimeCoordinator:
         for event in events:
             filtered_event = self._event_filter.filter(event)
             if filtered_event is None:
+                continue
+            if (
+                filtered_event.event_type == AgentEventType.YOUTUBE_COMMENT
+                and filtered_event.payload.get("moderation_status") == "not_evaluated"
+                and self._comment_moderation_handler is not None
+            ):
+                await self._comment_moderation_handler(filtered_event)
                 continue
             if filtered_event.event_type == AgentEventType.USER_TEXT:
                 self._trace_logger.info(
@@ -480,17 +593,13 @@ class RuntimeCoordinator:
         plan = evaluation.plan
         event = replace(
             event,
-            trace_context=event.trace_context.derive(
-                behavior_plan_id=plan.behavior_plan_id
-            ),
+            trace_context=event.trace_context.derive(behavior_plan_id=plan.behavior_plan_id),
         )
         self._last_behavior_evaluation = evaluation
         self._last_behavior_fallback_plan = None
         self._trace_logger.info(
             "behavior_planner:activity_plan_evaluated",
-            **event.trace_context.derive(
-                behavior_plan_id=plan.behavior_plan_id
-            ).as_log_fields(),
+            **event.trace_context.derive(behavior_plan_id=plan.behavior_plan_id).as_log_fields(),
             decision=plan.decision.value,
             activity_type=plan.activity_type,
             operation=plan.operation.value if plan.operation else None,
@@ -509,9 +618,7 @@ class RuntimeCoordinator:
                 current_status=ongoing.status.value if ongoing is not None else None,
             ),
             **confirmation_payload,
-            "trace_context": event.trace_context.derive(
-                behavior_plan_id=plan.behavior_plan_id
-            ),
+            "trace_context": event.trace_context.derive(behavior_plan_id=plan.behavior_plan_id),
         }
         if not evaluation.accepted:
             behavior_payload["activity_execution_result"] = ActivityExecutionResult(
@@ -1608,6 +1715,11 @@ class RuntimeCoordinator:
             drive_energy=self._agent_life_service.agent_state.current_drive.energy,
         )
         if self._event_queue.empty():
+            if not self._autonomous_planning_enabled:
+                self._trace_logger.write(
+                    "runtime_coordinator:run_once:autonomous_planning_disabled"
+                )
+                return None
             self._activity_planning_request_queue.put(ActivityPlanningRequest())
             self._trace_logger.write(
                 "runtime_coordinator:run_once:activity_planning_requested",
@@ -1653,6 +1765,13 @@ class RuntimeCoordinator:
     def _start_threads(self) -> None:
         """常駐 Thread を必要に応じて起動する。"""
 
+        if not self._autonomous_planning_enabled:
+            self._trace_logger.info(
+                "runtime_coordinator:threads:skipped",
+                reason="autonomous_planning_disabled",
+            )
+            return
+
         if not self._activity_planner_thread.is_alive():
             self._activity_planner_thread.start()
 
@@ -1667,6 +1786,9 @@ class RuntimeCoordinator:
 
     def _stop_threads(self) -> None:
         """常駐 Thread に停止要求を送り、終了を待つ。"""
+
+        if not self._autonomous_planning_enabled:
+            return
 
         self._activity_planner_thread.stop()
         self._activity_executor_thread.stop()
@@ -1684,6 +1806,14 @@ class RuntimeCoordinator:
         )
 
     async def _handle_event(self, event: AgentEvent) -> ActionPlanGroup:
+        if (
+            self._stream_lifecycle_gate is not None
+            and event.event_type in {AgentEventType.YOUTUBE_COMMENT, AgentEventType.CURIOSITY_PEAK}
+            and not isinstance(event.payload.get("session_id"), str)
+        ):
+            session_id = self._stream_lifecycle_gate.active_session_id()
+            if session_id is not None:
+                event = replace(event, payload={**event.payload, "session_id": session_id})
         self._trace_logger.write(
             "runtime_coordinator:handle_event:start",
             event_type=event.event_type.value,

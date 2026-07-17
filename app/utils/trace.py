@@ -126,9 +126,7 @@ class TraceLogger:
     def error(self, label: str, **values: object) -> None:
         self._write(TraceLevel.ERROR, label, values)
 
-    def bind(
-        self, context: TraceContext | None = None, **values: object
-    ) -> TraceContextLogger:
+    def bind(self, context: TraceContext | None = None, **values: object) -> TraceContextLogger:
         bound = context.as_log_fields() if context is not None else {}
         return TraceContextLogger(self, {**bound, **values})
 
@@ -434,9 +432,7 @@ class NullTraceLogger:
     def error(self, label: str, **values: object) -> None:
         pass
 
-    def bind(
-        self, context: TraceContext | None = None, **values: object
-    ) -> TraceContextLogger:
+    def bind(self, context: TraceContext | None = None, **values: object) -> TraceContextLogger:
         return TraceContextLogger(self, values)
 
     def llm_request(self, **values: object) -> None:
@@ -481,9 +477,7 @@ class TraceContextLogger:
     def error(self, label: str, **values: object) -> None:
         self._logger.error(label, **self._merge(values))
 
-    def write(
-        self, label: str, *, level: str | TraceLevel | None = None, **values: object
-    ) -> None:
+    def write(self, label: str, *, level: str | TraceLevel | None = None, **values: object) -> None:
         self._logger.write(label, level=level, **self._merge(values))
 
     def _merge(self, values: dict[str, object]) -> dict[str, object]:

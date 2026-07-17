@@ -166,9 +166,7 @@ class ActivityPlanningService:
         return replace(
             event,
             payload=payload,
-            trace_context=event.trace_context.derive(
-                behavior_plan_id=plan.behavior_plan_id
-            ),
+            trace_context=event.trace_context.derive(behavior_plan_id=plan.behavior_plan_id),
         ), plan
 
     def _create_activity(self, event: AgentEvent) -> Activity:
@@ -259,9 +257,7 @@ class ActivityPlannerThread(threading.Thread):
                     if self._canceling_trace_context is not None
                     else None
                 ),
-                canceled_trace_id=(
-                    canceled_trace.trace_id if canceled_trace is not None else None
-                ),
+                canceled_trace_id=(canceled_trace.trace_id if canceled_trace is not None else None),
                 planned_activity_id=planned_activity.planned_activity_id,
                 activity_id=planned_activity.activity.activity_id,
                 reason="user_text_received_during_planning",

@@ -70,9 +70,7 @@ def build_llm_trace_context(activity: Activity) -> LlmTraceContext:
         or trace_context.game_session_id,
         confirmation_id=_optional_string(confirmation_payload.get("confirmation_id"))
         or trace_context.confirmation_id,
-        activity_execution_result_id=_optional_string(
-            getattr(execution_result, "result_id", None)
-        )
+        activity_execution_result_id=_optional_string(getattr(execution_result, "result_id", None))
         or trace_context.activity_execution_result_id,
         character_generation_result_id=_optional_string(
             getattr(character_result, "result_id", None)

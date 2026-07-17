@@ -13,8 +13,10 @@ from app.domain.activity_turn_result import ActivityOutputResult, ActivityTurnRe
 from app.domain.character_response import ActivityExecutionResult
 from app.domain.events import AgentEvent, AgentEventType
 from app.domain.games import GameSession
+from app.domain.streaming import LifecycleOperation
 from app.domain.trace_context import TraceContext
 from app.runtime.game_engine import GameEngine
+from app.usecases.stream_lifecycle_gate import StreamLifecycleGate
 from app.utils.trace import TraceLogger
 
 
@@ -31,6 +33,10 @@ class ActivityManager:
         self._game_engine = game_engine
         self._lock = threading.RLock()
         self._trace_logger = TraceLogger()
+        self._lifecycle_gate: StreamLifecycleGate | None = None
+
+    def set_lifecycle_gate(self, gate: StreamLifecycleGate) -> None:
+        self._lifecycle_gate = gate
 
     @property
     def foreground_activity(self) -> Activity | None:
@@ -391,6 +397,24 @@ class ActivityManager:
             return self._handle_event_locked(event)
 
     def _handle_event_locked(self, event: AgentEvent) -> Activity:
+        operation = {
+            AgentEventType.STREAM_STARTED: LifecycleOperation.START_OPENING,
+            AgentEventType.STREAM_MAIN_SEGMENT: LifecycleOperation.START_MAIN_SEGMENT,
+            AgentEventType.STREAM_ENDING: LifecycleOperation.START_CLOSING,
+            AgentEventType.YOUTUBE_COMMENT: LifecycleOperation.CONTINUE_COMMENT_POLLING,
+            AgentEventType.CURIOSITY_PEAK: LifecycleOperation.START_AUTONOMOUS_TALK,
+        }.get(event.event_type)
+        session_id = event.payload.get("session_id")
+        if (
+            self._lifecycle_gate is not None
+            and operation is not None
+            and isinstance(session_id, str)
+        ):
+            decision = self._lifecycle_gate.evaluate(
+                operation, session_id, trace_id=event.trace_context.trace_id
+            )
+            if not decision.allowed:
+                raise RuntimeError(decision.reason_code or "lifecycle.operation_not_allowed")
         prepared = self._find_by_source_event(event.event_id)
         if prepared is not None:
             self._trace_logger.info(
@@ -643,6 +667,28 @@ class ActivityManager:
                 activity_type=ActivityType.STREAM_OPENING_GREETING,
                 goal="配信開始時のあいさつをして、これから話し始める雰囲気を作る",
                 priority=95 + event.priority,
+                context={"event_payload": event.payload, "trace_context": event.trace_context},
+                interruptible=False,
+                source_event_id=event.event_id,
+            )
+
+        if event.event_type == AgentEventType.STREAM_MAIN_SEGMENT:
+            segment = event.payload.get("main_segment")
+            title = segment.get("title") if isinstance(segment, dict) else None
+            return Activity(
+                activity_type=ActivityType.STREAM_MAIN_SEGMENT,
+                goal=f"本編Segment「{title or 'main'}」の意図に沿って1回だけ話す",
+                priority=94 + event.priority,
+                context={"event_payload": event.payload, "trace_context": event.trace_context},
+                interruptible=False,
+                source_event_id=event.event_id,
+            )
+
+        if event.event_type == AgentEventType.STREAM_COMMENT_RESPONSE:
+            return Activity(
+                activity_type=ActivityType.STREAM_COMMENT_RESPONSE,
+                goal="予約済みの安全化された視聴者コメントへ、配信の流れを壊さず短く返答する",
+                priority=93 + event.priority,
                 context={"event_payload": event.payload, "trace_context": event.trace_context},
                 interruptible=False,
                 source_event_id=event.event_id,

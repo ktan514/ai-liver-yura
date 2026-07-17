@@ -64,7 +64,5 @@ def build_activity_result(
         succeeded=output_result is None or output_result.status.value == "completed",
         trace_id=output_result.trace_id if output_result is not None else None,
         parent_trace_id=output_result.parent_trace_id if output_result is not None else None,
-        activity_turn_id=(
-            output_result.activity_turn_id if output_result is not None else None
-        ),
+        activity_turn_id=(output_result.activity_turn_id if output_result is not None else None),
     )

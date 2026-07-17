@@ -406,9 +406,7 @@ class CharacterLlmService:
                 "activity_turn_id": source.context.get("activity_turn_id"),
                 "ongoing_activity": source.context.get("ongoing_activity"),
                 "llm_attempt": attempt,
-                "activity_execution_result": source.context.get(
-                    "activity_execution_result"
-                ),
+                "activity_execution_result": source.context.get("activity_execution_result"),
             },
         )
         raw = await self._model.generate_character_response(activity)
@@ -571,9 +569,7 @@ class ResponseValidator:
                 "activity_turn_id": source.context.get("activity_turn_id"),
                 "ongoing_activity": source.context.get("ongoing_activity"),
                 "llm_attempt": attempt,
-                "activity_execution_result": source.context.get(
-                    "activity_execution_result"
-                ),
+                "activity_execution_result": source.context.get("activity_execution_result"),
             },
         )
         try:
@@ -805,10 +801,7 @@ class CharacterResponsePipeline:
                 or (trace.activity_turn_id if trace is not None else None)
                 or activity.activity_id
             ),
-            str(
-                ongoing_id
-                or (trace.ongoing_activity_id if trace is not None else None)
-            )
+            str(ongoing_id or (trace.ongoing_activity_id if trace is not None else None))
             if ongoing_id is not None or (trace is not None and trace.ongoing_activity_id)
             else None,
         )

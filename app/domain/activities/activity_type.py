@@ -11,6 +11,8 @@ class ActivityType(str, Enum):
     AUTONOMOUS_TALK = "autonomous_talk"
     STARTUP_REACTION = "startup_reaction"
     STREAM_OPENING_GREETING = "stream_opening_greeting"
+    STREAM_MAIN_SEGMENT = "stream_main_segment"
+    STREAM_COMMENT_RESPONSE = "stream_comment_response"
     STREAM_CLOSING_GREETING = "stream_closing_greeting"
     LISTENING_MODE = "listening_mode"
     STIMULUS_REACTION = "stimulus_reaction"

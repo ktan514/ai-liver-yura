@@ -16,6 +16,7 @@ from app.adapters.llm import (
     LegacyCharacterModelAdapter,
     OllamaResponseGenerator,
     OpenAIResponseGenerator,
+    StreamingDemoResponseGenerator,
 )
 from app.adapters.memory import (
     LlmMemorySummaryGenerator,
@@ -108,19 +109,32 @@ from app.utils.trace import TraceLogger
 
 if TYPE_CHECKING:
     from app.adapters.streaming import (
+        InMemoryStreamMainSegmentRepository,
+        InMemoryStreamOpeningRepository,
         InMemoryStreamPreparationPublisher,
         InMemoryStreamSessionRepository,
     )
     from app.core.plugins import CapabilityRegistry
-    from app.usecases import PrepareStreamSessionUsecase
+    from app.ports.streaming_control import ObsStreamingControlPort, YouTubeStreamingControlPort
+    from app.ports.streaming_preparation import RunOfShowRepository
+    from app.ports.youtube_live_chat import YouTubeLiveChatReadPort
+    from app.usecases import PrepareStreamSessionUsecase, StartStreamSessionUsecase
 
 
 @dataclass(frozen=True, slots=True)
 class StreamPreparationRuntime:
+    config: AppConfig
     usecase: PrepareStreamSessionUsecase
     sessions: InMemoryStreamSessionRepository
     publisher: InMemoryStreamPreparationPublisher
     capability_registry: CapabilityRegistry
+    start_usecase: StartStreamSessionUsecase
+    openings: InMemoryStreamOpeningRepository
+    main_segments: InMemoryStreamMainSegmentRepository
+    run_of_show: RunOfShowRepository
+    obs_control: ObsStreamingControlPort
+    youtube_control: YouTubeStreamingControlPort
+    live_chat: YouTubeLiveChatReadPort
 
 
 def _resolve_service(config: AppConfig, key: str) -> ServiceSettings:
@@ -148,6 +162,32 @@ def _service_timeout(service: ServiceSettings) -> float:
     if service.timeout_seconds is None:
         raise RuntimeError("外部AIサービスには timeout_seconds が必要です。")
     return service.timeout_seconds
+
+
+def create_streaming_demo_config(config: AppConfig) -> AppConfig:
+    """Return an explicit, external-I/O-free composition preset."""
+    services = dict(config.services)
+    services["youtube"] = replace(services["youtube"], type="fake")
+    services["obs"] = replace(services["obs"], type="fake")
+    return replace(
+        config,
+        app=replace(config.app, mode="streaming_demo"),
+        services=services,
+        response_generator=replace(config.response_generator, type="dummy"),
+        speech=replace(config.speech, enabled=False),
+        memory=replace(
+            config.memory,
+            topic_memory=replace(config.memory.topic_memory, enabled=False),
+        ),
+        streaming=replace(
+            config.streaming,
+            fake=replace(
+                config.streaming.fake,
+                broadcast_id="demo-broadcast",
+                broadcast_title="ゆら ローカル配信テスト",
+            ),
+        ),
+    )
 
 
 def _embedding_dimension(config: AppConfig) -> int:
@@ -217,14 +257,27 @@ def create_response_generator(
     prompt_builder: SimplePromptBuilder,
     *,
     temperature: float | None = None,
-) -> DummyResponseGenerator | OllamaResponseGenerator | OpenAIResponseGenerator:
-    response_generator: DummyResponseGenerator | OllamaResponseGenerator | OpenAIResponseGenerator
+) -> (
+    DummyResponseGenerator
+    | StreamingDemoResponseGenerator
+    | OllamaResponseGenerator
+    | OpenAIResponseGenerator
+):
+    response_generator: (
+        DummyResponseGenerator
+        | StreamingDemoResponseGenerator
+        | OllamaResponseGenerator
+        | OpenAIResponseGenerator
+    )
     response_generator_config = config.response_generator
     trace_logger = TraceLogger()
     trace_logger.write(
         "runtime_factory:create_response_generator:start",
         response_generator_type=response_generator_config.type,
     )
+
+    if config.app.mode == "streaming_demo":
+        return StreamingDemoResponseGenerator()
 
     if response_generator_config.type == "dummy":
         response_generator = DummyResponseGenerator(
@@ -307,7 +360,12 @@ def create_llm_role_generator(
     settings: LlmRoleSettings,
     character_profile: CharacterProfile,
     prompt_builder: SimplePromptBuilder,
-) -> DummyResponseGenerator | OllamaResponseGenerator | OpenAIResponseGenerator:
+) -> (
+    DummyResponseGenerator
+    | StreamingDemoResponseGenerator
+    | OllamaResponseGenerator
+    | OpenAIResponseGenerator
+):
     """役割ごとに独立したAdapterを生成する。旧設定への暗黙フォールバックはしない。"""
 
     model, service = _resolve_model(config, settings.model)
@@ -735,8 +793,19 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
     embedding_generator = create_embedding_generator(config)
     topic_memory_store = create_topic_memory_store(config)
     memory_summary_generator = create_memory_summary_generator(config)
-    speech_synthesizer = create_speech_synthesizer(config)
-    audio_player = create_audio_player(config)
+    speech_synthesizer: SpeechSynthesizer | None
+    audio_player: AudioPlayer | None
+    if config.app.mode == "streaming_demo":
+        from app.adapters.streaming.fake_output_adapters import (
+            FakeAudioPlayer,
+            FakeSpeechSynthesizer,
+        )
+
+        speech_synthesizer = FakeSpeechSynthesizer()
+        audio_player = FakeAudioPlayer()
+    else:
+        speech_synthesizer = create_speech_synthesizer(config)
+        audio_player = create_audio_player(config)
     enrich_activity_with_topic_memory_usecase = EnrichActivityWithTopicMemoryUsecase(
         embedding_generator=embedding_generator,
         topic_memory_store=topic_memory_store,
@@ -815,6 +884,7 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         activity_registry=activity_registry,
         pending_confirmation_manager=pending_confirmation_manager,
         confirmation_resolver=ConfirmationResolver(),
+        autonomous_planning_enabled=config.app.mode != "streaming_demo",
     )
     trace_logger.write(
         "runtime_factory:create_runtime_coordinator:finished",
@@ -868,27 +938,44 @@ def _is_model_provider_available(config: AppConfig, model_key: str) -> bool:
 def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRuntime:
     """状態確認専用Runtimeを組み立てる。配信開始・停止の依存は含めない。"""
     from app.adapters.streaming import (
+        FakeLiveChatAdapter,
         FakeObsPreparationAdapter,
         FakeObsPreparationConfig,
+        FakeTtsHealthAdapter,
         FakeYouTubePreparationAdapter,
         FakeYouTubePreparationConfig,
+        InMemoryStreamMainSegmentRepository,
+        InMemoryStreamOpeningRepository,
         InMemoryStreamPreparationPublisher,
         InMemoryStreamSessionRepository,
-        ObsWebSocketPreparationAdapter,
         UnavailableAvatarHealthAdapter,
         UnavailableYouTubePreparationAdapter,
         VoiceVoxHealthAdapter,
         VoiceVoxHealthConfig,
         YamlRunOfShowRepository,
     )
+    from app.adapters.streaming.fake_streaming_control import (
+        FakeObsStreamingControlAdapter,
+        FakeYouTubeStreamingControlAdapter,
+    )
     from app.core.plugins import CapabilityAvailability, CapabilityRegistry
     from app.domain.streaming import HealthStatus, ReadinessPolicy, YouTubeBroadcastSummary
     from app.plugins.youtube_streaming import StreamingPreparationPlugin
-    from app.ports.streaming_preparation import ObsPreparationPort, YouTubePreparationPort
-    from app.usecases import PrepareStreamSessionUsecase, StreamPreparationRequirements
+    from app.ports.streaming_preparation import (
+        ObsPreparationPort,
+        TtsHealthPort,
+        YouTubePreparationPort,
+    )
+    from app.usecases import (
+        PrepareStreamSessionUsecase,
+        StartStreamSessionUsecase,
+        StreamPreparationRequirements,
+    )
 
     youtube_service = _resolve_service(config, "youtube")
     youtube: YouTubePreparationPort
+    youtube_control: YouTubeStreamingControlPort
+    live_chat: YouTubeLiveChatReadPort
     if youtube_service.type == "fake":
         youtube = FakeYouTubePreparationAdapter(
             FakeYouTubePreparationConfig(
@@ -896,10 +983,19 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
                     YouTubeBroadcastSummary(
                         broadcast_id=config.streaming.fake.broadcast_id,
                         title=config.streaming.fake.broadcast_title,
+                        live_chat_id="demo-live-chat"
+                        if config.app.mode == "streaming_demo"
+                        else None,
                     ),
                 )
             )
         )
+        youtube_control = FakeYouTubeStreamingControlAdapter()
+        live_chat = FakeLiveChatAdapter(keep_alive=config.app.mode == "streaming_demo")
+        if config.app.mode == "streaming_demo":
+            youtube_control.adapter_type = "demo_fake"
+            youtube_control.stream_statuses = ["active", "active", "inactive"]
+            youtube_control.broadcast_statuses = ["ready", "live", "live", "live", "complete"]
     elif youtube_service.type in {"google", "google_youtube"}:
         from app.adapters.youtube import (
             GoogleYouTubeAuthConfig,
@@ -926,6 +1022,8 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
             youtube = UnavailableYouTubePreparationAdapter(
                 "YouTube Google Adapterの設定が不足しています: " + ", ".join(missing)
             )
+            youtube_control = FakeYouTubeStreamingControlAdapter()
+            live_chat = FakeLiveChatAdapter()
         else:
             assert youtube_service.request_timeout_seconds is not None
             assert youtube_service.max_retries is not None
@@ -958,11 +1056,20 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
                     allowed_privacy_statuses=youtube_service.allowed_privacy_statuses,
                 ),
             )
+            from app.adapters.youtube.google_youtube_streaming_control_adapter import (
+                GoogleYouTubeStreamingControlAdapter,
+            )
+
+            youtube_control = GoogleYouTubeStreamingControlAdapter(client_factory, youtube)
+            from app.adapters.youtube import GoogleYouTubeLiveChatAdapter
+
+            live_chat = GoogleYouTubeLiveChatAdapter(client_factory)
     else:
         raise RuntimeError(f"未対応のYouTubeサービスです: {youtube_service.type}")
 
     obs_service = _resolve_service(config, "obs")
     obs: ObsPreparationPort
+    obs_control: ObsStreamingControlPort
     if obs_service.type == "fake":
         obs = FakeObsPreparationAdapter(
             FakeObsPreparationConfig(
@@ -973,33 +1080,85 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
                 },
             )
         )
+        obs_control = FakeObsStreamingControlAdapter()
+        if config.app.mode == "streaming_demo":
+            obs_control.adapter_type = "demo_fake"
+            obs_control.statuses = ["idle", "active", "active", "active", "idle"]
     elif obs_service.type == "obs_websocket":
-        obs = ObsWebSocketPreparationAdapter(
-            websocket_url=_require_service_value(obs_service.websocket_url, "websocket_url", "obs"),
-            password_env=_require_service_value(obs_service.password_env, "password_env", "obs"),
+        from urllib.parse import urlparse
+
+        from app.adapters.obs import (
+            ObsWebSocketClientConfig,
+            ObsWebSocketClientFactory,
+            ObsWebSocketPreparationAdapter,
+            ObsWebSocketPreparationConfig,
+            ObsWebSocketStreamingControlAdapter,
         )
+
+        parsed = urlparse(obs_service.websocket_url or "")
+        host = obs_service.host or parsed.hostname or ""
+        port = obs_service.port or parsed.port or 4455
+        password_env = obs_service.password_env or ""
+        obs_client_factory = ObsWebSocketClientFactory(
+            ObsWebSocketClientConfig(
+                host=host,
+                port=port,
+                password_env=password_env,
+                connect_timeout_seconds=obs_service.connect_timeout_seconds
+                or obs_service.timeout_seconds
+                or 5.0,
+            )
+        )
+        obs = ObsWebSocketPreparationAdapter(
+            obs_client_factory,
+            ObsWebSocketPreparationConfig(
+                required_audio_sources=config.streaming.obs.required_audio_sources,
+                optional_audio_sources=config.streaming.obs.optional_audio_sources,
+                avatar_source_name=config.streaming.obs.avatar_source_name,
+                low_volume_threshold_db=config.streaming.obs.low_volume_threshold_db,
+                request_timeout_seconds=obs_service.request_timeout_seconds
+                or obs_service.timeout_seconds
+                or 5.0,
+                max_retries=obs_service.max_retries or 0,
+                retry_initial_delay_seconds=obs_service.retry_initial_delay_seconds or 0.5,
+                max_scene_depth=config.streaming.obs.max_scene_depth,
+            ),
+        )
+        obs_control = ObsWebSocketStreamingControlAdapter(obs_client_factory)
     else:
         raise RuntimeError(f"未対応のOBSサービスです: {obs_service.type}")
 
-    voicevox_service = _resolve_service(config, config.speech.service)
-    player_command = config.speech.player.command or (
-        "afplay" if sys.platform == "darwin" else "aplay"
-    )
-    tts = VoiceVoxHealthAdapter(
-        VoiceVoxHealthConfig(
-            base_url=_require_service_value(
-                voicevox_service.base_url, "base_url", config.speech.service
-            ),
-            timeout_seconds=_service_timeout(voicevox_service),
-            speaker_id=config.speech.speaker_id,
-            player_command=player_command,
+    tts: TtsHealthPort
+    if config.app.mode == "streaming_demo":
+        tts = FakeTtsHealthAdapter()
+    else:
+        voicevox_service = _resolve_service(config, config.speech.service)
+        player_command = config.speech.player.command or (
+            "afplay" if sys.platform == "darwin" else "aplay"
         )
-    )
+        tts = VoiceVoxHealthAdapter(
+            VoiceVoxHealthConfig(
+                base_url=_require_service_value(
+                    voicevox_service.base_url, "base_url", config.speech.service
+                ),
+                timeout_seconds=_service_timeout(voicevox_service),
+                speaker_id=config.speech.speaker_id,
+                player_command=player_command,
+            )
+        )
     sessions = InMemoryStreamSessionRepository()
     publisher = InMemoryStreamPreparationPublisher()
     capability_registry = CapabilityRegistry()
     provider = StreamingPreparationPlugin()
     capability_registry.register(provider, "stream.session.prepare")
+    for capability in (
+        "stream.session.end.normal",
+        "stream.session.stop.emergency",
+        "youtube.broadcast.transition_complete",
+        "obs.stream.stop",
+        "output.cancel",
+    ):
+        capability_registry.register(provider, capability)
 
     status_mapping = {
         HealthStatus.HEALTHY: CapabilityAvailability.AVAILABLE,
@@ -1031,12 +1190,13 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
         )
 
     readiness = config.streaming.readiness
+    run_of_show = YamlRunOfShowRepository(config.streaming.run_of_show.directory)
     usecase = PrepareStreamSessionUsecase(
         youtube=youtube,
         obs=obs,
         tts=tts,
         avatar=UnavailableAvatarHealthAdapter(),
-        run_of_show=YamlRunOfShowRepository(config.streaming.run_of_show.directory),
+        run_of_show=run_of_show,
         sessions=sessions,
         publisher=publisher,
         requirements=StreamPreparationRequirements(
@@ -1050,9 +1210,29 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
             expected_scene_collection=config.streaming.obs.expected_scene_collection,
             expected_start_scene=config.streaming.obs.expected_start_scene,
             required_audio_sources=config.streaming.obs.required_audio_sources,
+            require_obs_avatar_visible=config.streaming.obs.require_avatar_source_visible,
             timeout_seconds=config.streaming.health_timeout_seconds,
         ),
         readiness_policy=ReadinessPolicy(allow_required_degraded=readiness.allow_required_degraded),
         capability_reporter=report_capability,
     )
-    return StreamPreparationRuntime(usecase, sessions, publisher, capability_registry)
+    start_usecase = StartStreamSessionUsecase(
+        sessions=sessions,
+        obs=obs_control,
+        youtube=youtube_control,
+        poll_interval_seconds=0 if config.app.mode == "streaming_demo" else 1,
+    )
+    return StreamPreparationRuntime(
+        config,
+        usecase,
+        sessions,
+        publisher,
+        capability_registry,
+        start_usecase,
+        InMemoryStreamOpeningRepository(),
+        InMemoryStreamMainSegmentRepository(),
+        run_of_show,
+        obs_control,
+        youtube_control,
+        live_chat,
+    )

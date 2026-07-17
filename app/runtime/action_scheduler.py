@@ -15,6 +15,8 @@ from app.domain.activity_turn_result import (
     ActivityOutputResult,
     ActivityOutputStatus,
 )
+from app.domain.streaming import LifecycleOperation
+from app.usecases.stream_lifecycle_gate import StreamLifecycleGate
 from app.utils.trace import TraceLogger
 
 
@@ -35,8 +37,68 @@ class ActionScheduler:
         }
         self._trace_logger = TraceLogger()
         self._output_gate = _PriorityOutputGate()
+        self._prevent_new_actions = False
+        self._running_tasks: set[asyncio.Task[object]] = set()
+        self._lifecycle_gate: StreamLifecycleGate | None = None
+
+    def set_lifecycle_gate(self, gate: StreamLifecycleGate) -> None:
+        self._lifecycle_gate = gate
+
+    def prevent_new_actions(self) -> None:
+        self._prevent_new_actions = True
+
+    def cancel_outputs(self) -> bool:
+        self._prevent_new_actions = True
+        current = asyncio.current_task()
+        canceled = False
+        for task in tuple(self._running_tasks):
+            if task is not current and not task.done():
+                task.cancel()
+                canceled = True
+        return canceled
 
     async def execute(self, action_plan_group: ActionPlanGroup) -> ActivityOutputResult:
+        if self._prevent_new_actions:
+            return self._canceled_before_start(action_plan_group)
+        if self._lifecycle_gate is not None and action_plan_group.action_plans:
+            metadata = action_plan_group.action_plans[0].metadata
+            session_id = metadata.get("lifecycle_session_id")
+            activity_type = metadata.get("lifecycle_activity_type")
+            if isinstance(session_id, str):
+                decision = self._lifecycle_gate.evaluate(
+                    LifecycleOperation.ENQUEUE_ACTION,
+                    session_id,
+                    activity_type=str(activity_type or ""),
+                )
+                if not decision.allowed:
+                    return self._canceled_before_start(action_plan_group)
+                operation_by_action = {
+                    ActionType.SPEAK: LifecycleOperation.START_SPEECH,
+                    ActionType.UPDATE_SUBTITLE: LifecycleOperation.UPDATE_SUBTITLE,
+                    ActionType.CHANGE_EXPRESSION: LifecycleOperation.CHANGE_EXPRESSION,
+                    ActionType.MOVE: LifecycleOperation.START_MOTION,
+                }
+                for action in action_plan_group.action_plans:
+                    operation = operation_by_action.get(action.action_type)
+                    if operation is None:
+                        continue
+                    action_decision = self._lifecycle_gate.evaluate(
+                        operation,
+                        session_id,
+                        activity_type=str(activity_type or ""),
+                    )
+                    if not action_decision.allowed:
+                        return self._canceled_before_start(action_plan_group)
+        task = asyncio.current_task()
+        if task is not None:
+            self._running_tasks.add(task)
+        try:
+            return await self._execute_allowed(action_plan_group)
+        finally:
+            if task is not None:
+                self._running_tasks.discard(task)
+
+    async def _execute_allowed(self, action_plan_group: ActionPlanGroup) -> ActivityOutputResult:
         started_at = datetime.now(timezone.utc)
         turn_result = action_plan_group.activity_turn_result
         activity_turn_id = (
@@ -131,6 +193,19 @@ class ActionScheduler:
         )
         self._trace_output_result(output_result)
         return output_result
+
+    def _canceled_before_start(self, group: ActionPlanGroup) -> ActivityOutputResult:
+        turn = group.activity_turn_result
+        now = datetime.now(timezone.utc)
+        return ActivityOutputResult(
+            status=ActivityOutputStatus.CANCELED,
+            output_unit_id=group.group_id,
+            activity_turn_id=turn.activity_turn_id if turn else group.group_id,
+            source_event_id=turn.source_event_id if turn else None,
+            error="output_prevented_by_emergency_stop",
+            started_at=now,
+            finished_at=now,
+        )
 
     def _trace_output_result(self, result: ActivityOutputResult) -> None:
         self._trace_logger.info(
@@ -406,9 +481,7 @@ class ActionScheduler:
             replace(
                 result,
                 trace_id=turn_result.trace_id if turn_result is not None else None,
-                parent_trace_id=(
-                    turn_result.parent_trace_id if turn_result is not None else None
-                ),
+                parent_trace_id=(turn_result.parent_trace_id if turn_result is not None else None),
             )
             for result in action_results
         )

@@ -21,5 +21,7 @@ class AgentEventType(str, Enum):
 
     APP_STARTED = "app_started"
     STREAM_STARTED = "stream_started"
+    STREAM_MAIN_SEGMENT = "stream_main_segment"
+    STREAM_COMMENT_RESPONSE = "stream_comment_response"
     STREAM_ENDING = "stream_ending"
     STREAM_ENDED = "stream_ended"
