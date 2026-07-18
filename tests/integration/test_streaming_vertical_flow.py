@@ -31,6 +31,7 @@ from app.adapters.streaming.fake_streaming_control import (
     FakeObsStreamingControlAdapter,
     FakeYouTubeStreamingControlAdapter,
 )
+from app.bootstrap.streaming import RuntimeCoreActivityAdapter
 from app.config.app_config import CommentRankingSettings, load_app_config
 from app.domain.actions import ActionPlan
 from app.domain.character import CharacterProfile
@@ -198,13 +199,13 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
         broadcast_statuses=["ready", "live", "live", "live", "complete"],
     )
     obs.adapter_type = "obs_websocket"
-    youtube.adapter_type = "google"
     start = StartStreamSessionUsecase(
         sessions=sessions,
         obs=obs,
         youtube=youtube,
         poll_interval_seconds=0,
         step_timeout_seconds=1,
+        allow_fake_youtube=True,
     )
     start_result = await start.execute(
         ApproveStreamStartCommand(
@@ -233,12 +234,15 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
         publisher=publish,
     )
     gate.update_external_state(session.session_id, ACTIVE)
-    coordinator.configure_stream_lifecycle_gate(gate)
+    activity_gateway = RuntimeCoreActivityAdapter(coordinator)
+    activity_gateway.configure_lifecycle_gate(gate)
     main = StreamMainSegmentUsecase(
         sessions=sessions,
         activities=mains,
         run_of_show=run_of_show,
-        executor=coordinator.execute_stream_main_segment,
+        executor=lambda payload, trace_id: activity_gateway.execute(
+            "stream.activity.main", payload, trace_id
+        ),
         event_publisher=publish,
         lifecycle_gate=gate,
     )
@@ -246,7 +250,9 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
         sessions=sessions,
         openings=openings,
         run_of_show=run_of_show,
-        executor=coordinator.execute_stream_opening,
+        executor=lambda payload, trace_id: activity_gateway.execute(
+            "stream.activity.opening", payload, trace_id
+        ),
         event_publisher=publish,
         lifecycle_gate=gate,
         completed_handler=main.start,
@@ -254,7 +260,8 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
     opening_activity = await opening.start(
         session.session_id,
         start_result,
-        adapter_types=("google", "obs_websocket"),
+        adapter_types=("fake", "obs_websocket"),
+        test_mode=True,
     )
     main_activity = main.status(session.session_id)
     assert opening_activity.status.value == "completed"
@@ -278,7 +285,9 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
         activities=InMemoryCommentResponseActivityRepository(),
         selections=ranker,
         history=InMemoryCommentResponseHistory(),
-        executor=coordinator.execute_stream_comment_response,
+        executor=lambda payload, trace_id: activity_gateway.execute(
+            "stream.activity.comment_response", payload, trace_id
+        ),
         settings=config.streaming.comment_response,
         publisher=publish,
     )
@@ -304,7 +313,7 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
         publisher=publish,
         candidate_sink=candidate_sink,
     )
-    coordinator.configure_comment_moderation(moderation.evaluate_event)
+    activity_gateway.configure_comment_moderation(moderation.evaluate_event)
     chat = FakeLiveChatAdapter(pages=[live_chat_page()])
     poller = YouTubeLiveChatPoller(
         session_id=session.session_id,
@@ -335,8 +344,10 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
         run_of_show=run_of_show,
         obs=obs,
         youtube=youtube,
-        closing_executor=coordinator.execute_stream_closing,
-        output_canceler=coordinator.cancel_stream_outputs,
+        closing_executor=lambda payload, trace_id: activity_gateway.execute(
+            "stream.activity.closing", payload, trace_id
+        ),
+        output_canceler=activity_gateway.cancel_outputs,
         event_publisher=publish,
         test_mode=True,
     )

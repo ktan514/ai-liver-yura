@@ -247,8 +247,15 @@ class EndStreamSessionUsecase:
         mode: str,
         closing_status: str,
     ) -> StreamEndResult:
-        broadcast = await self._youtube.get_broadcast_status(session.selected_broadcast_id)
+        broadcast = "unknown"
+        obs = "unknown"
         try:
+            if mode == "emergency":
+                obs = await self._stop_obs_output()
+            if broadcast != "complete":
+                broadcast = await self._youtube.get_broadcast_status(
+                    session.selected_broadcast_id
+                )
             if broadcast != "complete":
                 await self._youtube.transition_broadcast_to_complete(session.selected_broadcast_id)
             broadcast = await self._youtube.get_broadcast_status(session.selected_broadcast_id)
@@ -261,10 +268,8 @@ class EndStreamSessionUsecase:
                 command.trace_id,
                 session.session_id,
             )
-            obs = await self._obs.get_output_status()
-            if obs != "idle":
-                await self._obs.stop_stream()
-            obs = await self._obs.get_output_status()
+            if mode == "normal":
+                obs = await self._stop_obs_output()
             stream = await self._youtube.get_stream_status(session.selected_stream_id or "")
             if obs != "idle" or stream not in {"inactive", "no_data"}:
                 raise RuntimeError("external_state_not_stopped")
@@ -308,6 +313,12 @@ class EndStreamSessionUsecase:
         self._latest = result
         self._event(f"{event_prefix}.completed", result.trace_id, result.session_id)
         return result
+
+    async def _stop_obs_output(self) -> str:
+        status = await self._obs.get_output_status()
+        if status != "idle":
+            await self._obs.stop_stream()
+        return await self._obs.get_output_status()
 
     def _failure(
         self,

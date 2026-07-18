@@ -20,6 +20,7 @@ from app.core.plugins.plugin_result import (
     PluginIntentResult,
     PromptFragment,
 )
+from app.core.plugins.static_provider import StaticCapabilityProvider
 
 __all__ = [
     "ActivityGateway",
@@ -40,4 +41,5 @@ __all__ = [
     "PluginStatus",
     "PromptFragment",
     "SystemClock",
+    "StaticCapabilityProvider",
 ]

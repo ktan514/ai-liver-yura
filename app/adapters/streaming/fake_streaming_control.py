@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from app.adapters.obs.obs_error_mapper import ObsAdapterError
+
 
 @dataclass(slots=True)
 class FakeObsStreamingControlAdapter:
@@ -18,6 +20,12 @@ class FakeObsStreamingControlAdapter:
 
     async def stop_stream(self) -> None:
         self.stop_calls += 1
+
+    async def get_connection_status(self) -> str:
+        return "connected"
+
+    async def disconnect(self) -> None:
+        return None
 
 
 @dataclass(slots=True)
@@ -51,3 +59,23 @@ class FakeYouTubeStreamingControlAdapter:
             if len(self.broadcast_statuses) > 1
             else self.broadcast_statuses[0]
         )
+
+
+@dataclass(slots=True)
+class DisabledObsStreamingControlAdapter:
+    adapter_type: str = "disabled"
+
+    async def start_stream(self) -> None:
+        raise ObsAdapterError("configuration", "obs.disabled")
+
+    async def stop_stream(self) -> None:
+        return None
+
+    async def get_output_status(self) -> str:
+        return "unknown"
+
+    async def get_connection_status(self) -> str:
+        return "disabled"
+
+    async def disconnect(self) -> None:
+        return None

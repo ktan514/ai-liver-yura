@@ -13,6 +13,10 @@ class ObsStreamingControlPort(Protocol):
 
     async def get_output_status(self) -> str: ...
 
+    async def get_connection_status(self) -> str: ...
+
+    async def disconnect(self) -> None: ...
+
 
 class YouTubeStreamingControlPort(Protocol):
     @property

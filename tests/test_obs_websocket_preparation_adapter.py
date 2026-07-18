@@ -222,3 +222,9 @@ def test_configuration_and_error_mapping_never_expose_password(
     assert captured.value.category == "configuration"
     assert "OBS_TEST_PASSWORD" not in str(captured.value)
     assert ObsErrorMapper.map(TimeoutError()).retryable is True
+    assert (
+        ObsErrorMapper.map(
+            RuntimeError("failed to identify client with the server, check connection settings")
+        ).failure_code
+        == "obs.authentication_failed"
+    )

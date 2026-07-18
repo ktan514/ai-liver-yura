@@ -22,6 +22,7 @@ class ObsRequestClient(Protocol):
     def get_scene_item_list(self, name: str) -> Any: ...
     def get_group_scene_item_list(self, name: str) -> Any: ...
     def start_stream(self) -> Any: ...
+    def stop_stream(self) -> Any: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +31,7 @@ class ObsWebSocketClientConfig:
     port: int
     password_env: str
     connect_timeout_seconds: float = 5.0
+    request_timeout_seconds: float = 5.0
 
     def validate(self) -> None:
         if not self.host.strip():
@@ -38,7 +40,7 @@ class ObsWebSocketClientConfig:
             raise ObsAdapterError("configuration", "obs.configuration.port_invalid")
         if not self.password_env.strip():
             raise ObsAdapterError("configuration", "obs.configuration.password_env_missing")
-        if self.connect_timeout_seconds <= 0:
+        if self.connect_timeout_seconds <= 0 or self.request_timeout_seconds <= 0:
             raise ObsAdapterError("configuration", "obs.configuration.timeout_invalid")
 
 
@@ -61,6 +63,9 @@ class ObsWebSocketClientFactory:
                 host=self.config.host,
                 port=self.config.port,
                 password=password,
-                timeout=self.config.connect_timeout_seconds,
+                timeout=max(
+                    self.config.connect_timeout_seconds,
+                    self.config.request_timeout_seconds,
+                ),
             ),
         )

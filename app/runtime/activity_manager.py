@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 
+from app.core.contracts.activity_policy import ActivityPolicy
 from app.domain.activities import (
     Activity,
     ActivityResult,
@@ -13,10 +14,8 @@ from app.domain.activity_turn_result import ActivityOutputResult, ActivityTurnRe
 from app.domain.character_response import ActivityExecutionResult
 from app.domain.events import AgentEvent, AgentEventType
 from app.domain.games import GameSession
-from app.domain.streaming import LifecycleOperation
 from app.domain.trace_context import TraceContext
 from app.runtime.game_engine import GameEngine
-from app.usecases.stream_lifecycle_gate import StreamLifecycleGate
 from app.utils.trace import TraceLogger
 
 
@@ -33,9 +32,9 @@ class ActivityManager:
         self._game_engine = game_engine
         self._lock = threading.RLock()
         self._trace_logger = TraceLogger()
-        self._lifecycle_gate: StreamLifecycleGate | None = None
+        self._lifecycle_gate: ActivityPolicy | None = None
 
-    def set_lifecycle_gate(self, gate: StreamLifecycleGate) -> None:
+    def set_activity_policy(self, gate: ActivityPolicy) -> None:
         self._lifecycle_gate = gate
 
     @property
@@ -398,11 +397,11 @@ class ActivityManager:
 
     def _handle_event_locked(self, event: AgentEvent) -> Activity:
         operation = {
-            AgentEventType.STREAM_STARTED: LifecycleOperation.START_OPENING,
-            AgentEventType.STREAM_MAIN_SEGMENT: LifecycleOperation.START_MAIN_SEGMENT,
-            AgentEventType.STREAM_ENDING: LifecycleOperation.START_CLOSING,
-            AgentEventType.YOUTUBE_COMMENT: LifecycleOperation.CONTINUE_COMMENT_POLLING,
-            AgentEventType.CURIOSITY_PEAK: LifecycleOperation.START_AUTONOMOUS_TALK,
+            AgentEventType.STREAM_STARTED: "start_opening",
+            AgentEventType.STREAM_MAIN_SEGMENT: "start_main_segment",
+            AgentEventType.STREAM_ENDING: "start_closing",
+            AgentEventType.YOUTUBE_COMMENT: "continue_comment_polling",
+            AgentEventType.CURIOSITY_PEAK: "start_autonomous_talk",
         }.get(event.event_type)
         session_id = event.payload.get("session_id")
         if (
@@ -410,7 +409,7 @@ class ActivityManager:
             and operation is not None
             and isinstance(session_id, str)
         ):
-            decision = self._lifecycle_gate.evaluate(
+            decision = self._lifecycle_gate.evaluate_policy(
                 operation, session_id, trace_id=event.trace_context.trace_id
             )
             if not decision.allowed:

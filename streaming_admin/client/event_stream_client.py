@@ -16,6 +16,8 @@ class EventStreamClient:
         self._seen: set[str] = set()
         self._last_event_id: str | None = None
         self._stop = threading.Event()
+        self._response_lock = threading.Lock()
+        self._active_response: httpx.Response | None = None
 
     def run(
         self, on_event: Callable[[ApiEvent], None], on_connection: Callable[[bool], None]
@@ -33,22 +35,37 @@ class EventStreamClient:
                     headers=headers,
                     timeout=httpx.Timeout(10, read=None),
                 ) as response:
-                    response.raise_for_status()
-                    on_connection(True)
-                    for line in response.iter_lines():
+                    with self._response_lock:
                         if self._stop.is_set():
                             return
-                        if not line.startswith("data: "):
-                            continue
-                        event = ApiEvent.from_dict(json.loads(line[6:]))
-                        if event.event_id in self._seen:
-                            continue
-                        self._seen.add(event.event_id)
-                        self._last_event_id = event.event_id
-                        on_event(event)
+                        self._active_response = response
+                    try:
+                        response.raise_for_status()
+                        if not self._stop.is_set():
+                            on_connection(True)
+                        for line in response.iter_lines():
+                            if self._stop.is_set():
+                                return
+                            if not line.startswith("data: "):
+                                continue
+                            event = ApiEvent.from_dict(json.loads(line[6:]))
+                            if event.event_id in self._seen:
+                                continue
+                            self._seen.add(event.event_id)
+                            self._last_event_id = event.event_id
+                            on_event(event)
+                    finally:
+                        with self._response_lock:
+                            if self._active_response is response:
+                                self._active_response = None
             except (httpx.HTTPError, ValueError, KeyError):
-                on_connection(False)
-                self._stop.wait(2)
+                if not self._stop.is_set():
+                    on_connection(False)
+                    self._stop.wait(2)
 
     def stop(self) -> None:
         self._stop.set()
+        with self._response_lock:
+            response = self._active_response
+        if response is not None:
+            response.close()

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from app.core.plugins import CapabilityAvailability, CapabilityRegistry
-from app.plugins.youtube_streaming import StreamingPreparationPlugin
+from app.core.plugins import (
+    CapabilityAvailability,
+    CapabilityRegistry,
+    StaticCapabilityProvider,
+)
 
 
 def test_capability_health_preserves_provider_reason_and_binary_compatibility() -> None:
     registry = CapabilityRegistry()
-    plugin = StreamingPreparationPlugin()
+    plugin = StaticCapabilityProvider(
+        "test_provider", frozenset({"stream.session.prepare"})
+    )
     registry.register(plugin, "stream.session.prepare")
     registry.update_health(
         plugin.plugin_id,

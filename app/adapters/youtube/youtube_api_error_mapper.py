@@ -2,40 +2,18 @@ from __future__ import annotations
 
 import json
 import socket
-from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
 import httplib2  # type: ignore[import-untyped]
 from google.auth.exceptions import TransportError
 from googleapiclient.errors import HttpError  # type: ignore[import-untyped]
 
-
-class YouTubeApiErrorKind(str, Enum):
-    AUTHENTICATION = "authentication"
-    PERMISSION = "permission"
-    QUOTA_EXHAUSTED = "quota_exhausted"
-    RATE_LIMIT = "rate_limit"
-    DAILY_LIMIT = "daily_limit"
-    UNKNOWN_QUOTA = "unknown_quota"
-    NOT_FOUND = "not_found"
-    INVALID_STATE = "invalid_state"
-    TIMEOUT = "timeout"
-    NETWORK = "network"
-    SERVER = "server"
-    INVALID_RESPONSE = "invalid_response"
-
-
-@dataclass(frozen=True, slots=True)
-class YouTubeApiError(RuntimeError):
-    kind: YouTubeApiErrorKind
-    safe_message: str
-    retryable: bool = False
-    http_status: int | None = None
-    api_reason: str | None = None
-
-    def __str__(self) -> str:
-        return self.safe_message
+from app.ports.youtube_errors import (
+    YouTubeApiError as YouTubeApiError,
+)
+from app.ports.youtube_errors import (
+    YouTubeApiErrorKind as YouTubeApiErrorKind,
+)
 
 
 class YouTubeApiErrorMapper:

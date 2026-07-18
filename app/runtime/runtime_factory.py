@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from dataclasses import dataclass, replace
@@ -16,7 +17,6 @@ from app.adapters.llm import (
     LegacyCharacterModelAdapter,
     OllamaResponseGenerator,
     OpenAIResponseGenerator,
-    StreamingDemoResponseGenerator,
 )
 from app.adapters.memory import (
     LlmMemorySummaryGenerator,
@@ -70,6 +70,9 @@ from app.domain.short_term_memory import ShortTermMemory
 from app.domain.topic import TopicHistory
 from app.domain.topic_classifier import TopicClassifier
 from app.plugins.games import GamesPlugin
+from app.plugins.youtube_streaming.adapters.streaming_demo_response_generator import (
+    StreamingDemoResponseGenerator,
+)
 from app.ports.audio_player import AudioPlayer
 from app.ports.embedding_generator import EmbeddingGenerator
 from app.ports.llm_roles import ResponseGeneratorRoleAdapter
@@ -106,6 +109,8 @@ from app.usecases.enrich_activity_with_topic_memory_usecase import (
     EnrichActivityWithTopicMemoryUsecase,
 )
 from app.utils.trace import TraceLogger
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from app.adapters.streaming import (
@@ -958,9 +963,12 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
         FakeObsStreamingControlAdapter,
         FakeYouTubeStreamingControlAdapter,
     )
-    from app.core.plugins import CapabilityAvailability, CapabilityRegistry
+    from app.core.plugins import (
+        CapabilityAvailability,
+        CapabilityRegistry,
+        StaticCapabilityProvider,
+    )
     from app.domain.streaming import HealthStatus, ReadinessPolicy, YouTubeBroadcastSummary
-    from app.plugins.youtube_streaming import StreamingPreparationPlugin
     from app.ports.streaming_preparation import (
         ObsPreparationPort,
         TtsHealthPort,
@@ -1084,6 +1092,14 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
         if config.app.mode == "streaming_demo":
             obs_control.adapter_type = "demo_fake"
             obs_control.statuses = ["idle", "active", "active", "active", "idle"]
+    elif obs_service.type == "disabled":
+        from app.adapters.streaming import DisabledObsPreparationAdapter
+        from app.adapters.streaming.fake_streaming_control import (
+            DisabledObsStreamingControlAdapter,
+        )
+
+        obs = DisabledObsPreparationAdapter()
+        obs_control = DisabledObsStreamingControlAdapter()
     elif obs_service.type == "obs_websocket":
         from urllib.parse import urlparse
 
@@ -1107,6 +1123,9 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
                 connect_timeout_seconds=obs_service.connect_timeout_seconds
                 or obs_service.timeout_seconds
                 or 5.0,
+                request_timeout_seconds=obs_service.request_timeout_seconds
+                or obs_service.timeout_seconds
+                or 5.0,
             )
         )
         obs = ObsWebSocketPreparationAdapter(
@@ -1124,9 +1143,27 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
                 max_scene_depth=config.streaming.obs.max_scene_depth,
             ),
         )
-        obs_control = ObsWebSocketStreamingControlAdapter(obs_client_factory)
+        obs_control = ObsWebSocketStreamingControlAdapter(
+            obs_client_factory,
+            request_timeout_seconds=obs_service.request_timeout_seconds
+            or obs_service.timeout_seconds
+            or 5.0,
+        )
     else:
         raise RuntimeError(f"未対応のOBSサービスです: {obs_service.type}")
+
+    if (
+        isinstance(youtube_control, FakeYouTubeStreamingControlAdapter)
+        and obs_control.adapter_type == "obs_websocket"
+    ):
+        youtube_control.stream_statuses = ["active", "active", "inactive"]
+        youtube_control.broadcast_statuses = [
+            "ready",
+            "live",
+            "live",
+            "live",
+            "complete",
+        ]
 
     tts: TtsHealthPort
     if config.app.mode == "streaming_demo":
@@ -1149,7 +1186,20 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
     sessions = InMemoryStreamSessionRepository()
     publisher = InMemoryStreamPreparationPublisher()
     capability_registry = CapabilityRegistry()
-    provider = StreamingPreparationPlugin()
+    provider = StaticCapabilityProvider(
+        "youtube_streaming",
+        frozenset(
+            {
+                "stream.session.prepare",
+                "stream.session.end.normal",
+                "stream.session.stop.emergency",
+                "youtube.broadcast.transition_complete",
+                "obs.stream.stop",
+                "output.cancel",
+            }
+        ),
+        "YouTube Streaming Capability Health",
+    )
     capability_registry.register(provider, "stream.session.prepare")
     for capability in (
         "stream.session.end.normal",
@@ -1221,6 +1271,20 @@ def create_stream_preparation_runtime(config: AppConfig) -> StreamPreparationRun
         obs=obs_control,
         youtube=youtube_control,
         poll_interval_seconds=0 if config.app.mode == "streaming_demo" else 1,
+        allow_fake_youtube=(
+            youtube_control.adapter_type == "fake"
+            and obs_control.adapter_type == "obs_websocket"
+        ),
+    )
+    logger.info(
+        "Streaming adapters configured: config_path=%s youtube_adapter=%s "
+        "obs_adapter=%s obs_host=%s obs_port=%s obs_password_env_set=%s",
+        config.config_path,
+        youtube_control.adapter_type,
+        obs_control.adapter_type,
+        obs_service.host,
+        obs_service.port,
+        bool(obs_service.password_env and os.getenv(obs_service.password_env)),
     )
     return StreamPreparationRuntime(
         config,

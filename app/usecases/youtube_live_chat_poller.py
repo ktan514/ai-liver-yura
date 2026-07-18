@@ -9,7 +9,6 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
-from app.adapters.youtube.youtube_api_error_mapper import YouTubeApiError, YouTubeApiErrorKind
 from app.domain.events import AgentEvent, AgentEventType
 from app.domain.streaming import (
     LifecycleOperation,
@@ -18,6 +17,7 @@ from app.domain.streaming import (
     NormalizedLiveChatMessage,
 )
 from app.domain.trace_context import TraceContext
+from app.ports.youtube_errors import YouTubeApiError, YouTubeApiErrorKind
 from app.ports.youtube_live_chat import (
     LiveChatDeduplicationRepository,
     LiveChatMessageDto,

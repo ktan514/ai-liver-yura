@@ -10,10 +10,12 @@ from collections.abc import Generator
 import uvicorn
 
 from app.adapters.input import ConsoleInputReceiver
-from app.admin_api import AdminApiService, create_admin_api
-from app.admin_api.manual_check_log import create_manual_check_log
+from app.admin_api import create_admin_api
+from app.bootstrap import compose_streaming
 from app.config.app_config import load_app_config
+from app.core.application.shutdown import ApplicationShutdownCoordinator
 from app.domain.events import AgentEvent, AgentEventType
+from app.plugins.youtube_streaming.adapters.manual_check_log import create_manual_check_log
 from app.runtime import create_runtime_coordinator
 from app.runtime.runtime_factory import (
     create_stream_preparation_runtime,
@@ -93,18 +95,36 @@ async def async_main() -> None:
     if admin_host not in {"127.0.0.1", "localhost", "::1"} and not admin_token:
         raise RuntimeError("localhost以外へbindする場合はAI_LIVER_ADMIN_API_TOKENが必要です。")
     admin_runtime = create_stream_preparation_runtime(config)
+    obs_settings = config.services["obs"]
+    trace_logger.info(
+        "app:streaming_config_loaded",
+        config_path=config.config_path,
+        youtube_adapter_type=admin_runtime.usecase.youtube_adapter_type,
+        obs_adapter_type=admin_runtime.usecase.obs_adapter_type,
+        obs_host=obs_settings.host,
+        obs_port=obs_settings.port,
+        obs_password_env_set=bool(
+            obs_settings.password_env and os.getenv(obs_settings.password_env)
+        ),
+    )
     manual_check_log = create_manual_check_log(
         config.app.mode,
         os.getenv("AI_LIVER_MANUAL_CHECK_LOG") == "1",
     )
-    admin_service = AdminApiService(
+    streaming_plugin_settings = config.plugins.registrations.get("youtube_streaming")
+    composition = compose_streaming(
         admin_runtime,
+        runtime=runtime,
         demo_mode=config.app.mode == "streaming_demo",
         manual_check_log=manual_check_log,
+        enabled=streaming_plugin_settings.enabled
+        if streaming_plugin_settings is not None
+        else True,
     )
+    admin_service = composition.admin_api
     if manual_check_log is not None:
         manual_check_log.record("core", "runtime", "admin_api_started")
-    admin_service.configure_opening(runtime)
+    await composition.registry.start_all()
     admin_server = CoordinatedUvicornServer(
         uvicorn.Config(
             create_admin_api(admin_service, admin_token),
@@ -181,23 +201,33 @@ async def async_main() -> None:
 
     print("shutdown requested")
     admin_service.broker.publish("runtime.shutting_down", {})
-    poller = admin_service._comment_poller  # noqa: SLF001 -- composition-root shutdown
-    if poller is not None:
-        poller.stop("runtime.shutting_down")
-    print("poller stopped")
-    admin_server.should_exit = True
-    if not admin_task.done():
-        await admin_task
-    print("admin api stopped")
-    trace_logger.write("app:runtime_stop_requested")
-    runtime.stop()
-    await runtime_task
-    print("runtime stopped")
+    shutdown = ApplicationShutdownCoordinator(composition.registry)
+
+    async def stop_runtime() -> None:
+        print("poller stopped")
+        trace_logger.write("app:runtime_stop_requested")
+        runtime.stop()
+        await runtime_task
+        print("runtime stopped")
+
+    async def stop_admin_api() -> None:
+        admin_server.should_exit = True
+        if not admin_task.done():
+            await admin_task
+        print("admin api stopped")
+
+    async def close_logging() -> None:
+        if manual_check_log is not None:
+            manual_check_log.close()
+            print("manual log closed")
+
+    await shutdown.shutdown(
+        stop_runtime=stop_runtime,
+        stop_framework=stop_admin_api,
+        close_logging=close_logging,
+    )
     trace_logger.write("app:runtime_task_finished")
     trace_logger.info("app:finished")
-    if manual_check_log is not None:
-        manual_check_log.close()
-        print("manual log closed")
     print("終了しました。")
 
 

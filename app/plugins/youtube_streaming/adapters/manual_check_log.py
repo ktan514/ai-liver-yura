@@ -8,8 +8,10 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.adapters.llm.streaming_demo_response_generator import STREAMING_DEMO_RESPONSES
 from app.domain.activities import ActivityType
+from app.plugins.youtube_streaming.adapters.streaming_demo_response_generator import (
+    STREAMING_DEMO_RESPONSES,
+)
 
 
 def create_manual_check_log(

@@ -130,6 +130,28 @@ async def test_fake_adapter_version_and_not_ready_are_rejected() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fake_youtube_is_allowed_only_with_explicit_real_obs_vertical_mode() -> None:
+    repository = InMemoryStreamSessionRepository()
+    session = ready_session(repository)
+    obs = FakeObsStreamingControlAdapter(["idle", "active", "active"])
+    obs.adapter_type = "obs_websocket"
+    youtube = FakeYouTubeStreamingControlAdapter()
+    value = StartStreamSessionUsecase(
+        sessions=repository,
+        obs=obs,
+        youtube=youtube,
+        allow_fake_youtube=True,
+        poll_interval_seconds=0,
+    )
+
+    result = await value.execute(command(session))
+
+    assert result.successful is True
+    assert result.youtube_stream_status == "active"
+    assert result.youtube_broadcast_status == "live"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("obs_statuses", "stream_statuses", "broadcast_statuses", "failure_code"),
     [

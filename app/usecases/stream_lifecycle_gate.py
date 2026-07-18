@@ -244,6 +244,21 @@ class StreamLifecycleGate:
                 )
         return self._decision(operation, session_id, session, True, None, False, trace_id)
 
+    def evaluate_policy(
+        self,
+        operation: str,
+        context_id: str,
+        *,
+        activity_type: str | None = None,
+        trace_id: str = "",
+    ) -> LifecycleDecision:
+        return self.evaluate(
+            LifecycleOperation(operation),
+            context_id,
+            activity_type=activity_type,
+            trace_id=trace_id,
+        )
+
     def snapshot(self, session_id: str) -> dict[str, object]:
         session = self._sessions.get(session_id)
         operations = {}

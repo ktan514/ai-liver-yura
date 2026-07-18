@@ -79,3 +79,24 @@ class FakeObsPreparationAdapter:
             websocket_version="5.x-fake",
             adapter_type=self.adapter_type,
         )
+
+
+class DisabledObsPreparationAdapter(FakeObsPreparationAdapter):
+    adapter_type = "disabled"
+
+    def __init__(self) -> None:
+        super().__init__(FakeObsPreparationConfig(connected=False, output_status="unknown"))
+
+    async def connect(self) -> None:
+        return None
+
+    async def snapshot(self) -> ObsPreparationSnapshot:
+        return ObsPreparationSnapshot(
+            connected=False,
+            output_status="unknown",
+            current_scene="",
+            current_scene_collection="",
+            audio_source_states={},
+            avatar_source_visible=False,
+            adapter_type=self.adapter_type,
+        )

@@ -59,7 +59,7 @@ services:
       - unlisted
       - public
   obs:
-    type: fake
+    type: obs_websocket
     host: 127.0.0.1
     port: 4455
     password_env: OBS_WEBSOCKET_PASSWORD
@@ -208,7 +208,7 @@ streaming:
   readiness:
     require_youtube: true
     require_obs: true
-    require_tts: true
+    require_tts: false
     require_avatar: false
     require_run_of_show: true
     require_emergency_stop: false
@@ -217,8 +217,7 @@ streaming:
   obs:
     expected_scene_collection: AI Liver
     expected_start_scene: Starting Soon
-    required_audio_sources:
-      - VOICEVOX
+    required_audio_sources: []
     optional_audio_sources: []
     avatar_source_name: Yura
     require_avatar_source_visible: false
@@ -270,6 +269,10 @@ streaming:
     max_retries: 2
 
 plugins:
+  registry:
+    youtube_streaming:
+      enabled: true
+      config_reference: streaming
   games:
     enabled: false
     intent_interpreter:

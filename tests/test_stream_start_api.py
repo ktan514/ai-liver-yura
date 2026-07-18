@@ -9,7 +9,8 @@ from app.adapters.streaming.fake_streaming_control import (
     FakeObsStreamingControlAdapter,
     FakeYouTubeStreamingControlAdapter,
 )
-from app.admin_api import AdminApiService, create_admin_api
+from app.admin_api import create_admin_api
+from app.bootstrap import compose_streaming
 from app.config.app_config import load_app_config
 from app.domain.streaming import StreamSession, StreamSessionStatus
 from app.runtime.runtime_factory import create_stream_preparation_runtime
@@ -25,19 +26,19 @@ def ready_runtime(real_controls: bool) -> tuple[object, StreamSession]:
     ready = runtime.sessions.save(
         preparing.transition(StreamSessionStatus.READY, selected_stream_id="stream")
     )
+    obs = FakeObsStreamingControlAdapter()
+    youtube = FakeYouTubeStreamingControlAdapter()
     if real_controls:
-        obs = FakeObsStreamingControlAdapter()
-        youtube = FakeYouTubeStreamingControlAdapter()
         obs.adapter_type = "obs_websocket"
         youtube.adapter_type = "google"
-        start = StartStreamSessionUsecase(
-            sessions=runtime.sessions,
-            obs=obs,
-            youtube=youtube,
-            poll_interval_seconds=0.001,
-            step_timeout_seconds=0.01,
-        )
-        runtime = replace(runtime, start_usecase=start)
+    start = StartStreamSessionUsecase(
+        sessions=runtime.sessions,
+        obs=obs,
+        youtube=youtube,
+        poll_interval_seconds=0.001,
+        step_timeout_seconds=0.01,
+    )
+    runtime = replace(runtime, start_usecase=start)
     return runtime, ready
 
 
@@ -52,7 +53,7 @@ def approval(ready: StreamSession) -> dict[str, object]:
 
 def test_approve_and_status_endpoints_complete_asynchronously() -> None:
     runtime, ready = ready_runtime(True)
-    service = AdminApiService(runtime)  # type: ignore[arg-type]
+    service = compose_streaming(runtime).admin_api
     with TestClient(create_admin_api(service, token="secret")) as client:
         headers = {"Authorization": "Bearer secret"}
         response = client.post(
@@ -74,14 +75,14 @@ def test_approve_and_status_endpoints_complete_asynchronously() -> None:
 
 def test_approve_endpoint_rejects_fake_adapter_and_version_mismatch() -> None:
     runtime, ready = ready_runtime(False)
-    service = AdminApiService(runtime)  # type: ignore[arg-type]
+    service = compose_streaming(runtime).admin_api
     client = TestClient(create_admin_api(service))
     response = client.post("/api/v1/streaming/session/start/approve", json=approval(ready))
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "stream.start.test_adapter"
 
     runtime, ready = ready_runtime(True)
-    service = AdminApiService(runtime)  # type: ignore[arg-type]
+    service = compose_streaming(runtime).admin_api
     client = TestClient(create_admin_api(service))
     payload = approval(ready)
     payload["expected_state_version"] = 999

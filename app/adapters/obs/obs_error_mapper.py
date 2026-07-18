@@ -20,7 +20,11 @@ class ObsErrorMapper:
         message = str(error).lower()
         if isinstance(error, ObsAdapterError):
             return error
-        if "auth" in message or "password" in message:
+        if (
+            "auth" in message
+            or "password" in message
+            or "failed to identify client" in message
+        ):
             return ObsAdapterError("authentication", "obs.authentication_failed")
         if "timeout" in name or "timeout" in message:
             return ObsAdapterError("timeout", "obs.request_timeout", True)

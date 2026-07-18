@@ -51,12 +51,26 @@ class CoreApiClient:
         return value
 
     def manual_check_ui_event(self, event: str, details: dict[str, Any] | None = None) -> None:
-        if self.manual_check_enabled:
-            self._request(
-                "POST",
-                "/api/v1/manual-check/ui-events",
-                {"event": event, "details": details or {}},
-            )
+        self._request(
+            "POST",
+            "/api/v1/manual-check/ui-events",
+            {"event": event, "details": details or {}},
+        )
+
+    def console_snapshot(self) -> dict[str, Any]:
+        return dict(self._request("GET", "/api/v1/admin/console"))
+
+    def diagnostics(self) -> dict[str, Any]:
+        return dict(self._request("GET", "/api/v1/admin/diagnostics"))
+
+    def save_diagnostics(self) -> dict[str, Any]:
+        return dict(self._request("POST", "/api/v1/admin/diagnostics/save"))
+
+    def settings(self) -> dict[str, Any]:
+        return dict(self._request("GET", "/api/v1/admin/settings"))
+
+    def update_settings(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return dict(self._request("PATCH", "/api/v1/admin/settings", payload))
 
     def auth_status(self) -> dict[str, Any]:
         return dict(self._request("GET", "/api/v1/youtube/auth"))

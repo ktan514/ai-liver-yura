@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Protocol
 from uuid import uuid4
 
+from app.core.contracts.activity_policy import ActivityPolicy
 from app.domain.actions import ActionPlan, ActionPlanGroup, ActionResource, ActionType
 from app.domain.activity_turn_result import (
     ActionExecutionResult,
@@ -15,8 +16,6 @@ from app.domain.activity_turn_result import (
     ActivityOutputResult,
     ActivityOutputStatus,
 )
-from app.domain.streaming import LifecycleOperation
-from app.usecases.stream_lifecycle_gate import StreamLifecycleGate
 from app.utils.trace import TraceLogger
 
 
@@ -39,9 +38,9 @@ class ActionScheduler:
         self._output_gate = _PriorityOutputGate()
         self._prevent_new_actions = False
         self._running_tasks: set[asyncio.Task[object]] = set()
-        self._lifecycle_gate: StreamLifecycleGate | None = None
+        self._lifecycle_gate: ActivityPolicy | None = None
 
-    def set_lifecycle_gate(self, gate: StreamLifecycleGate) -> None:
+    def set_activity_policy(self, gate: ActivityPolicy) -> None:
         self._lifecycle_gate = gate
 
     def prevent_new_actions(self) -> None:
@@ -65,24 +64,24 @@ class ActionScheduler:
             session_id = metadata.get("lifecycle_session_id")
             activity_type = metadata.get("lifecycle_activity_type")
             if isinstance(session_id, str):
-                decision = self._lifecycle_gate.evaluate(
-                    LifecycleOperation.ENQUEUE_ACTION,
+                decision = self._lifecycle_gate.evaluate_policy(
+                    "enqueue_action",
                     session_id,
                     activity_type=str(activity_type or ""),
                 )
                 if not decision.allowed:
                     return self._canceled_before_start(action_plan_group)
                 operation_by_action = {
-                    ActionType.SPEAK: LifecycleOperation.START_SPEECH,
-                    ActionType.UPDATE_SUBTITLE: LifecycleOperation.UPDATE_SUBTITLE,
-                    ActionType.CHANGE_EXPRESSION: LifecycleOperation.CHANGE_EXPRESSION,
-                    ActionType.MOVE: LifecycleOperation.START_MOTION,
+                    ActionType.SPEAK: "start_speech",
+                    ActionType.UPDATE_SUBTITLE: "update_subtitle",
+                    ActionType.CHANGE_EXPRESSION: "change_expression",
+                    ActionType.MOVE: "start_motion",
                 }
                 for action in action_plan_group.action_plans:
                     operation = operation_by_action.get(action.action_type)
                     if operation is None:
                         continue
-                    action_decision = self._lifecycle_gate.evaluate(
+                    action_decision = self._lifecycle_gate.evaluate_policy(
                         operation,
                         session_id,
                         activity_type=str(activity_type or ""),

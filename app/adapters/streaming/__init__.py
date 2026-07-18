@@ -2,6 +2,7 @@ from app.adapters.obs import ObsWebSocketPreparationAdapter
 from app.adapters.streaming.fake_comment_moderation_adapter import FakeCommentModerationAdapter
 from app.adapters.streaming.fake_live_chat_adapter import FakeLiveChatAdapter
 from app.adapters.streaming.fake_obs_preparation_adapter import (
+    DisabledObsPreparationAdapter,
     FakeObsPreparationAdapter,
     FakeObsPreparationConfig,
 )
@@ -43,6 +44,7 @@ from app.adapters.streaming.preparation_publisher import (
 from app.adapters.streaming.yaml_run_of_show_repository import YamlRunOfShowRepository
 
 __all__ = [
+    "DisabledObsPreparationAdapter",
     "FakeAvatarHealthAdapter",
     "FakeTtsHealthAdapter",
     "FakeObsPreparationAdapter",

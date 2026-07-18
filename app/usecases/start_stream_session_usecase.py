@@ -29,6 +29,7 @@ class StartStreamSessionUsecase:
         poll_interval_seconds: float = 1.0,
         step_timeout_seconds: float = 30.0,
         trace_logger: TraceLogger | None = None,
+        allow_fake_youtube: bool = False,
     ) -> None:
         self._sessions = sessions
         self._obs = obs
@@ -37,6 +38,7 @@ class StartStreamSessionUsecase:
         self._poll_interval = poll_interval_seconds
         self._step_timeout = step_timeout_seconds
         self._trace = trace_logger or TraceLogger()
+        self._allow_fake_youtube = allow_fake_youtube
         self._results: dict[str, StreamStartResult] = {}
         self._latest: StreamStartResult | None = None
         self._lock = asyncio.Lock()
@@ -50,7 +52,9 @@ class StartStreamSessionUsecase:
 
     @property
     def uses_test_adapter(self) -> bool:
-        return self._obs.adapter_type == "fake" or self._youtube.adapter_type == "fake"
+        return self._obs.adapter_type not in {"obs_websocket", "demo_fake"} or (
+            self._youtube.adapter_type == "fake" and not self._allow_fake_youtube
+        )
 
     async def execute(self, command: ApproveStreamStartCommand) -> StreamStartResult:
         async with self._lock:
@@ -66,7 +70,9 @@ class StartStreamSessionUsecase:
         session = self._sessions.get(command.session_id)
         if session is None:
             raise StreamStartRejected("stream.session.not_found")
-        if self.uses_test_adapter:
+        if self._obs.adapter_type not in {"obs_websocket", "demo_fake"}:
+            raise StreamStartRejected("stream.start.test_adapter")
+        if self._youtube.adapter_type == "fake" and not self._allow_fake_youtube:
             raise StreamStartRejected("stream.start.test_adapter")
         if session.state_version != command.expected_state_version:
             raise StreamStartRejected("stream.start.version_mismatch")

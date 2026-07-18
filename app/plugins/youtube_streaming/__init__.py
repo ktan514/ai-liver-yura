@@ -1,3 +1,4 @@
-from app.plugins.youtube_streaming.plugin import StreamingPreparationPlugin
+from app.plugins.youtube_streaming.application.service import StreamingApplicationService
+from app.plugins.youtube_streaming.public.registration import create_registration
 
-__all__ = ["StreamingPreparationPlugin"]
+__all__ = ["StreamingApplicationService", "create_registration"]

@@ -1,0 +1,51 @@
+from app.core.contracts.plugins.errors import (
+    CapabilityUnavailable,
+    CommandRejected,
+    DuplicateCapability,
+    PluginDependencyMissing,
+    PluginStartFailed,
+    PluginStopFailed,
+    PluginUnavailable,
+    QueryFailed,
+)
+from app.core.contracts.plugins.models import (
+    CapabilityPolicy,
+    CapabilityRegistration,
+    EventSubscription,
+    PluginActivityRequest,
+    PluginHealth,
+    PluginHealthStatus,
+    PluginRegistration,
+)
+from app.core.contracts.plugins.protocols import (
+    ActivityProvider,
+    CommandHandler,
+    PluginDescriptor,
+    PluginEventSubscriber,
+    PluginLifecycle,
+    QueryHandler,
+)
+
+__all__ = [
+    "ActivityProvider",
+    "CapabilityPolicy",
+    "CapabilityRegistration",
+    "CapabilityUnavailable",
+    "CommandHandler",
+    "CommandRejected",
+    "DuplicateCapability",
+    "EventSubscription",
+    "PluginActivityRequest",
+    "PluginDependencyMissing",
+    "PluginDescriptor",
+    "PluginEventSubscriber",
+    "PluginHealth",
+    "PluginHealthStatus",
+    "PluginLifecycle",
+    "PluginRegistration",
+    "PluginStartFailed",
+    "PluginStopFailed",
+    "PluginUnavailable",
+    "QueryFailed",
+    "QueryHandler",
+]

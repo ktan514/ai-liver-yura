@@ -6,10 +6,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.__main__ import is_demo_exit_command, should_start_console_input
-from app.adapters.llm import StreamingDemoResponseGenerator
-from app.admin_api import AdminApiService, create_admin_api
+from app.admin_api import create_admin_api
+from app.bootstrap import StreamingComposition, compose_streaming
 from app.config.app_config import load_app_config
 from app.domain.activities import Activity, ActivityType
+from app.plugins.youtube_streaming.adapters.streaming_demo_response_generator import (
+    StreamingDemoResponseGenerator,
+)
 from app.runtime.runtime_factory import (
     create_runtime_coordinator,
     create_stream_preparation_runtime,
@@ -17,16 +20,16 @@ from app.runtime.runtime_factory import (
 )
 
 
-def demo_service() -> AdminApiService:
+def demo_composition() -> StreamingComposition:
     config = create_streaming_demo_config(load_app_config())
     runtime = create_stream_preparation_runtime(config)
-    service = AdminApiService(runtime, demo_mode=True)
-    service.configure_opening(create_runtime_coordinator(config))
-    return service
+    return compose_streaming(
+        runtime, runtime=create_runtime_coordinator(config), demo_mode=True
+    )
 
 
 def test_demo_preset_builds_only_fake_external_adapters() -> None:
-    service = demo_service()
+    service = demo_composition().application
     assert service.runtime.config.app.mode == "streaming_demo"
     assert service.runtime.config.response_generator.type == "dummy"
     assert service.runtime.config.speech.enabled is False
@@ -58,15 +61,17 @@ async def test_demo_generator_returns_final_speech_per_streaming_activity() -> N
 
 def test_demo_endpoint_is_hidden_in_standard_mode() -> None:
     runtime = create_stream_preparation_runtime(load_app_config())
-    client = TestClient(create_admin_api(AdminApiService(runtime)))
+    client = TestClient(create_admin_api(compose_streaming(runtime).admin_api))
     response = client.post("/api/v1/demo/live-chat/messages", json={"text": "hello"})
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "demo.disabled"
 
 
 def test_demo_endpoint_requires_a_live_session() -> None:
-    client = TestClient(create_admin_api(demo_service()))
-    assert client.get("/api/v1/health").json()["runtime_mode"] == "streaming_demo"
+    client = TestClient(create_admin_api(demo_composition().admin_api))
+    health = client.get("/api/v1/health").json()
+    assert health["runtime_mode"] == "streaming_demo"
+    assert health["adapter_modes"] == {"youtube": "fake", "obs": "fake"}
     response = client.post("/api/v1/demo/live-chat/messages", json={"text": "hello"})
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "demo.live_session_required"
@@ -85,8 +90,9 @@ async def test_demo_comment_uses_poller_moderation_ranking_and_response(
     config = create_streaming_demo_config(load_app_config())
     preparation = create_stream_preparation_runtime(config)
     coordinator = create_runtime_coordinator(config)
-    service = AdminApiService(preparation, demo_mode=True)
-    service.configure_opening(coordinator)
+    service = compose_streaming(
+        preparation, runtime=coordinator, demo_mode=True
+    ).application
     assert coordinator.autonomous_planning_enabled is False
     try:
         selected = (await service.broadcasts())[0]

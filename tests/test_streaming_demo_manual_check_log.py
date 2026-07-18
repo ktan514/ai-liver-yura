@@ -6,9 +6,10 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from app.admin_api import AdminApiService, create_admin_api
-from app.admin_api.manual_check_log import create_manual_check_log
+from app.admin_api import create_admin_api
+from app.bootstrap import compose_streaming
 from app.config.app_config import load_app_config
+from app.plugins.youtube_streaming.adapters.manual_check_log import create_manual_check_log
 from app.runtime.runtime_factory import create_stream_preparation_runtime
 
 
@@ -114,7 +115,9 @@ def test_health_exposes_log_status_and_ui_endpoint_uses_same_writer(tmp_path: Pa
     logger = create_manual_check_log("streaming_demo", True, tmp_path)
     assert logger is not None
     runtime = create_stream_preparation_runtime(load_app_config())
-    service = AdminApiService(runtime, demo_mode=True, manual_check_log=logger)
+    service = compose_streaming(
+        runtime, demo_mode=True, manual_check_log=logger
+    ).admin_api
     client = TestClient(create_admin_api(service))
     health = client.get("/api/v1/health").json()["manual_check_log"]
     assert health["enabled"] is True

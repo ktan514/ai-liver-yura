@@ -56,3 +56,4 @@ def session_snapshot(
         "observed_at": timestamp(session.updated_at),
         "adapter_modes": {"youtube": youtube_adapter_type, "obs": obs_adapter_type},
     }
+

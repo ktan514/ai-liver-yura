@@ -6,7 +6,7 @@ from typing import Any
 
 import yaml
 
-CONFIG_PATH = Path("config/config.yaml")
+CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "config.yaml"
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,8 +193,15 @@ class GamesPluginSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class PluginRegistrationSettings:
+    enabled: bool = True
+    config_reference: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class PluginSettings:
     games: GamesPluginSettings = field(default_factory=GamesPluginSettings)
+    registrations: dict[str, PluginRegistrationSettings] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,10 +355,12 @@ class AppConfig:
     confirmation: ConfirmationSettings
     plugins: PluginSettings = field(default_factory=PluginSettings)
     streaming: StreamingSettings = field(default_factory=StreamingSettings)
+    config_path: str = ""
 
 
 def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
-    raw_config = load_raw_config(config_path)
+    resolved_path = config_path.resolve()
+    raw_config = load_raw_config(resolved_path)
 
     return AppConfig(
         app=_load_app_settings(_require_dict(raw_config, "app")),
@@ -372,6 +381,7 @@ def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
         confirmation=_load_confirmation_settings(_require_dict(raw_config, "confirmation")),
         plugins=_load_plugin_settings(raw_config.get("plugins")),
         streaming=_load_streaming_settings(raw_config.get("streaming")),
+        config_path=str(resolved_path),
     )
 
 
@@ -499,6 +509,20 @@ def _load_plugin_settings(value: object) -> PluginSettings:
     games = value.get("games", {})
     if not isinstance(games, dict):
         raise RuntimeError("plugins.games はobject形式で指定してください。")
+    registrations = value.get("registry", {})
+    if not isinstance(registrations, dict):
+        raise RuntimeError("plugins.registry はobject形式で指定してください。")
+    parsed_registrations: dict[str, PluginRegistrationSettings] = {}
+    for plugin_id, raw in registrations.items():
+        if not isinstance(plugin_id, str) or not isinstance(raw, dict):
+            raise RuntimeError("plugins.registry配下はobject形式で指定してください。")
+        config_reference = raw.get("config_reference")
+        if config_reference is not None and not isinstance(config_reference, str):
+            raise RuntimeError("plugin config_reference は文字列で指定してください。")
+        parsed_registrations[plugin_id] = PluginRegistrationSettings(
+            enabled=bool(raw.get("enabled", True)),
+            config_reference=config_reference,
+        )
     interpreter = games.get("intent_interpreter", {})
     shiritori = games.get("shiritori", {})
     if not isinstance(interpreter, dict) or not isinstance(shiritori, dict):
@@ -521,7 +545,8 @@ def _load_plugin_settings(value: object) -> PluginSettings:
                 enabled=bool(shiritori.get("enabled", True)),
                 max_generation_retries=int(shiritori.get("max_generation_retries", 3)),
             ),
-        )
+        ),
+        registrations=parsed_registrations,
     )
 
 

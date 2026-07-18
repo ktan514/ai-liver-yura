@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, replace
 from queue import Queue
-from typing import cast
+from typing import Any, cast
 
 from app.core.plugins import PluginCapability, PluginManager
 from app.core.plugins.plugin import (
@@ -41,8 +41,6 @@ from app.domain.pending_confirmation import (
     ConfirmationResolutionKind,
     PendingConfirmation,
 )
-from app.domain.streaming import LifecycleOperation
-from app.domain.trace_context import TraceContext
 from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler
 from app.runtime.activity_executor_thread import ActivityExecutorThread
@@ -67,7 +65,6 @@ from app.runtime.game_input_classifier import GameInputClassifier
 from app.runtime.ongoing_activity_coordinator import OngoingActivityCoordinator
 from app.runtime.pending_confirmation import ConfirmationResolver, PendingConfirmationManager
 from app.runtime.shiritori_game_service import ShiritoriGameService
-from app.usecases.stream_lifecycle_gate import StreamLifecycleGate
 from app.utils.trace import TraceLogger
 
 
@@ -130,8 +127,14 @@ class RuntimeCoordinator:
         self._running = False
         self._thread_join_timeout_seconds = 1.0
         self._trace_logger = TraceLogger()
-        self._stream_lifecycle_gate: StreamLifecycleGate | None = None
-        self._comment_moderation_handler: Callable[[AgentEvent], Awaitable[object]] | None = None
+        self._event_subscribers: list[
+            tuple[
+                AgentEventType,
+                Callable[[AgentEvent], Awaitable[object]],
+                Callable[[AgentEvent], bool] | None,
+            ]
+        ] = []
+        self._event_enrichers: list[Callable[[AgentEvent], AgentEvent]] = []
         self._autonomous_planning_enabled = autonomous_planning_enabled
 
     @property
@@ -239,99 +242,49 @@ class RuntimeCoordinator:
             )
         )
 
-    async def execute_stream_opening(
-        self, payload: dict[str, object], trace_id: str
+    async def execute_external_event(
+        self, event: AgentEvent, *, missing_result_code: str = "activity_turn.missing"
     ) -> ActivityTurnResult:
-        """検証済み配信情報を既存のCharacter/Claim/Action出力経路へ渡す。"""
+        """Execute an outer-layer event through the shared Activity/Action pipeline."""
 
-        group = await self._handle_event(
-            AgentEvent(
-                event_type=AgentEventType.STREAM_STARTED,
-                payload=dict(payload),
-                priority=100,
-                discardable=False,
-                trace_context=TraceContext(trace_id=trace_id),
-            )
-        )
+        group = await self._handle_event(event)
         base = group.activity_turn_result
         if base is None:
-            raise RuntimeError("opening.activity_turn.missing")
+            raise RuntimeError(missing_result_code)
         return self._activity_manager.get_turn_result(base.activity_turn_id) or base
 
-    async def execute_stream_main_segment(
-        self, payload: dict[str, object], trace_id: str
-    ) -> ActivityTurnResult:
-        group = await self._handle_event(
-            AgentEvent(
-                event_type=AgentEventType.STREAM_MAIN_SEGMENT,
-                payload=dict(payload),
-                priority=100,
-                discardable=False,
-                trace_context=TraceContext(trace_id=trace_id),
-            )
-        )
+    async def execute_external_activity(self, activity: Activity) -> ActivityTurnResult:
+        """Register and execute an Activity supplied through a Core contract."""
+
+        registered = self._activity_manager.register_plugin_activity(activity)
+        group = await self._execute_explicit_activity(registered)
         base = group.activity_turn_result
         if base is None:
-            raise RuntimeError("main_segment.activity_turn.missing")
+            raise RuntimeError("activity_turn.missing")
         return self._activity_manager.get_turn_result(base.activity_turn_id) or base
 
-    async def execute_stream_comment_response(
-        self, payload: dict[str, object], trace_id: str
-    ) -> ActivityTurnResult:
-        group = await self._handle_event(
-            AgentEvent(
-                event_type=AgentEventType.STREAM_COMMENT_RESPONSE,
-                payload=dict(payload),
-                priority=100,
-                discardable=False,
-                trace_context=TraceContext(trace_id=trace_id),
-            )
-        )
-        base = group.activity_turn_result
-        if base is None:
-            raise RuntimeError("comment_response.activity_turn.missing")
-        return self._activity_manager.get_turn_result(base.activity_turn_id) or base
-
-    def cancel_stream_outputs(self) -> bool:
+    def cancel_outputs(self) -> bool:
         return self._action_scheduler.cancel_outputs()
 
-    def configure_stream_lifecycle_gate(self, gate: StreamLifecycleGate) -> None:
-        self._stream_lifecycle_gate = gate
-        self._activity_manager.set_lifecycle_gate(gate)
-        self._action_planner.set_lifecycle_gate(gate)
-        self._action_scheduler.set_lifecycle_gate(gate)
+    def configure_activity_policy(self, policy: object) -> None:
+        """Install a policy through component-owned structural contracts."""
 
-    def configure_comment_moderation(
-        self, handler: Callable[[AgentEvent], Awaitable[object]]
+        gate = cast(Any, policy)
+        self._activity_manager.set_activity_policy(gate)
+        self._action_planner.set_activity_policy(gate)
+        self._action_scheduler.set_activity_policy(gate)
+
+    def subscribe_event(
+        self,
+        event_type: AgentEventType,
+        handler: Callable[[AgentEvent], Awaitable[object]],
+        *,
+        predicate: Callable[[AgentEvent], bool] | None = None,
     ) -> None:
-        self._comment_moderation_handler = handler
+        self._event_subscribers.append((event_type, handler, predicate))
 
-    def evaluate_comment_polling(
-        self, gate: StreamLifecycleGate, session_id: str, *, continuing: bool = False
-    ) -> object:
-        return gate.evaluate(
-            LifecycleOperation.CONTINUE_COMMENT_POLLING
-            if continuing
-            else LifecycleOperation.START_COMMENT_POLLING,
-            session_id,
-        )
-
-    async def execute_stream_closing(
-        self, payload: dict[str, object], trace_id: str
-    ) -> ActivityTurnResult:
-        group = await self._handle_event(
-            AgentEvent(
-                event_type=AgentEventType.STREAM_ENDING,
-                payload=dict(payload),
-                priority=120,
-                discardable=False,
-                trace_context=TraceContext(trace_id=trace_id),
-            )
-        )
-        base = group.activity_turn_result
-        if base is None:
-            raise RuntimeError("closing.activity_turn.missing")
-        return self._activity_manager.get_turn_result(base.activity_turn_id) or base
+    def register_event_enricher(self, enricher: Callable[[AgentEvent], AgentEvent]) -> None:
+        self._event_enrichers.append(enricher)
 
     async def publish_events(self, events: list[AgentEvent]) -> None:
         self._trace_logger.write(
@@ -342,12 +295,17 @@ class RuntimeCoordinator:
             filtered_event = self._event_filter.filter(event)
             if filtered_event is None:
                 continue
-            if (
-                filtered_event.event_type == AgentEventType.YOUTUBE_COMMENT
-                and filtered_event.payload.get("moderation_status") == "not_evaluated"
-                and self._comment_moderation_handler is not None
-            ):
-                await self._comment_moderation_handler(filtered_event)
+            subscriber = next(
+                (
+                    handler
+                    for event_type, handler, predicate in self._event_subscribers
+                    if filtered_event.event_type == event_type
+                    and (predicate is None or predicate(filtered_event))
+                ),
+                None,
+            )
+            if subscriber is not None:
+                await subscriber(filtered_event)
                 continue
             if filtered_event.event_type == AgentEventType.USER_TEXT:
                 self._trace_logger.info(
@@ -1806,14 +1764,8 @@ class RuntimeCoordinator:
         )
 
     async def _handle_event(self, event: AgentEvent) -> ActionPlanGroup:
-        if (
-            self._stream_lifecycle_gate is not None
-            and event.event_type in {AgentEventType.YOUTUBE_COMMENT, AgentEventType.CURIOSITY_PEAK}
-            and not isinstance(event.payload.get("session_id"), str)
-        ):
-            session_id = self._stream_lifecycle_gate.active_session_id()
-            if session_id is not None:
-                event = replace(event, payload={**event.payload, "session_id": session_id})
+        for enricher in self._event_enrichers:
+            event = enricher(event)
         self._trace_logger.write(
             "runtime_coordinator:handle_event:start",
             event_type=event.event_type.value,

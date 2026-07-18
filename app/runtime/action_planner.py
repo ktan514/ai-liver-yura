@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from app.core.contracts.activity_policy import ActivityPolicy
 from app.core.plugins import MemoryPolicy
 from app.domain.actions import ActionPlan, ActionPlanGroup, ActionResource, ActionType
 from app.domain.activities import Activity, ActivityType
@@ -18,12 +19,10 @@ from app.domain.activity_turn_result import (
 from app.domain.character_response import (
     ActivityExecutionResult,
 )
-from app.domain.streaming import LifecycleOperation
 from app.domain.trace_context import trace_context_from
 from app.ports.response_generator import ResponseGenerator
 from app.runtime.character_response_pipeline import CharacterResponsePipeline
 from app.runtime.shiritori_game_service import ShiritoriGameService
-from app.usecases.stream_lifecycle_gate import StreamLifecycleGate
 from app.utils.llm_trace import build_llm_trace_context
 from app.utils.trace import TraceLogger
 
@@ -43,13 +42,13 @@ class ActionPlanner:
         self._character_response_pipeline = character_response_pipeline
         self._activity_is_active = activity_is_active
         self._trace_logger = TraceLogger()
-        self._lifecycle_gate: StreamLifecycleGate | None = None
+        self._lifecycle_gate: ActivityPolicy | None = None
 
-    def set_lifecycle_gate(self, gate: StreamLifecycleGate) -> None:
+    def set_activity_policy(self, gate: ActivityPolicy) -> None:
         self._lifecycle_gate = gate
 
     async def plan(self, activity: Activity) -> ActionPlanGroup:
-        self._require_lifecycle(activity, LifecycleOperation.START_LLM_GENERATION)
+        self._require_lifecycle(activity, "start_llm_generation")
         self._trace_logger.write(
             "action_planner:plan:start",
             activity_id=activity.activity_id,
@@ -171,7 +170,7 @@ class ActionPlanner:
                 response_length=len(response_text),
             )
             output_unit_id = str(uuid4())
-            self._require_lifecycle(activity, LifecycleOperation.CREATE_ACTION_PLAN)
+            self._require_lifecycle(activity, "create_action_plan")
             self._trace_logger.write(
                 "action_planner:plan:response_generated",
                 activity_id=activity.activity_id,
@@ -385,14 +384,14 @@ class ActionPlanner:
         )
         return action_plan_group
 
-    def _require_lifecycle(self, activity: Activity, operation: LifecycleOperation) -> None:
+    def _require_lifecycle(self, activity: Activity, operation: str) -> None:
         if self._lifecycle_gate is None:
             return
         payload = activity.context.get("event_payload")
         session_id = payload.get("session_id") if isinstance(payload, dict) else None
         if not isinstance(session_id, str):
             return
-        decision = self._lifecycle_gate.evaluate(
+        decision = self._lifecycle_gate.evaluate_policy(
             operation,
             session_id,
             activity_type=activity.activity_type.value,
