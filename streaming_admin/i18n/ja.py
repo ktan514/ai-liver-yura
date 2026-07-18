@@ -11,6 +11,18 @@ STATUS = {
     "degraded": "一部制限",
     "unavailable": "利用不可",
     "unknown": "不明",
+    "automatic": "自動",
+    "manual": "手動",
+    "event_driven": "イベント駆動",
+    "fresh": "最新",
+    "stale": "情報が古い",
+    "in_progress": "処理中",
+    "completed": "完了",
+    "not_started": "未実行",
+    "waiting": "人間の操作待ち",
+    "live": "配信中",
+    "ending": "終了処理中",
+    "ended": "終了済み",
 }
 
 

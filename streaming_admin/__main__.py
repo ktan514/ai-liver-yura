@@ -15,6 +15,7 @@ def main() -> int:
     config = AdminClientConfig.from_environment()
     controller = StreamPreparationController(CoreApiClient(config))
     events = EventStreamClient(config)
+    controller.add_shutdown_callback(events.stop)
     thread = threading.Thread(
         target=events.run,
         args=(controller.handle_event, controller.core_connection_changed),
@@ -25,7 +26,8 @@ def main() -> int:
     window = StreamPreparationWindow(controller)
     window.show()
     result = app.exec()
-    events.stop()
+    controller.close()
+    thread.join(timeout=config.timeout_seconds + 1)
     return result
 
 

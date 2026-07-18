@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import logging
+import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from uuid import uuid4
 
+import httpx
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from streaming_admin.client import CoreApiClient, CoreApiError
+
+logger = logging.getLogger(__name__)
 
 
 class StreamPreparationController(QObject):
@@ -29,17 +34,26 @@ class StreamPreparationController(QObject):
     busy_changed = pyqtSignal(str, bool)
     connection_changed = pyqtSignal(bool)
     error_occurred = pyqtSignal(str)
+    console_changed = pyqtSignal(object)
+    diagnostics_changed = pyqtSignal(object)
+    settings_changed = pyqtSignal(object)
 
     def __init__(self, client: CoreApiClient) -> None:
         super().__init__()
         self.client = client
         self._pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="admin-api")
         self._busy: set[str] = set()
+        self._state_lock = threading.RLock()
+        self._shutdown_callbacks: list[Callable[[], None]] = []
+        self._closing = False
         self._closed = False
         self._core_connected = False
+        self._sse_connected = False
         self._bootstrap_pending = False
 
     def load(self) -> None:
+        if self._is_stopping():
+            return
         if "load" in self._busy:
             self._bootstrap_pending = True
             return
@@ -69,6 +83,7 @@ class StreamPreparationController(QObject):
                 "moderation": optional("moderation_status"),
                 "ranking": optional("ranking_status"),
                 "comment_response": optional("comment_response_status"),
+                "console": optional("console_snapshot"),
             }
 
         self._submit("load", action, self._loaded)
@@ -78,6 +93,7 @@ class StreamPreparationController(QObject):
 
     def refresh_broadcasts(self) -> None:
         self._manual_event("reload_slots_clicked")
+
         def refresh() -> dict[str, object]:
             return {
                 "broadcasts": self.client.broadcasts(True),
@@ -87,10 +103,11 @@ class StreamPreparationController(QObject):
         self._submit("broadcasts", refresh, self._broadcasts_refreshed)
 
     def core_connection_changed(self, connected: bool) -> None:
-        """Refresh the complete UI bootstrap after Core becomes available again."""
-        was_connected = self._core_connected
-        self._core_connected = connected
-        self.connection_changed.emit(connected)
+        """Track SSE separately and use it only to trigger a REST bootstrap."""
+        if self._is_stopping():
+            return
+        was_connected = self._sse_connected
+        self._sse_connected = connected
         if connected and not was_connected:
             self.refresh_after_core_connected()
 
@@ -100,6 +117,35 @@ class StreamPreparationController(QObject):
 
     def refresh_obs(self) -> None:
         self._submit("obs", self.client.refresh_obs, self.obs_changed.emit)
+
+    def refresh_console(self) -> None:
+        callback = getattr(self.client, "console_snapshot", None)
+        if callable(callback):
+            self._submit("console", callback, self.console_changed.emit)
+
+    def refresh_youtube(self) -> None:
+        def action() -> dict[str, object]:
+            return {"auth": self.client.auth_status(), "broadcasts": self.client.broadcasts(True)}
+
+        self._submit("youtube", action, self._youtube_refreshed)
+
+    def reconnect_obs(self) -> None:
+        self.error_occurred.emit("OBS再接続capabilityは現在のCoreで提供されていません。")
+
+    def load_diagnostics(self) -> None:
+        callback = getattr(self.client, "diagnostics", None)
+        if callable(callback):
+            self._submit("diagnostics", callback, self.diagnostics_changed.emit)
+
+    def save_diagnostics(self) -> None:
+        callback = getattr(self.client, "save_diagnostics", None)
+        if callable(callback):
+            self._submit("diagnostics-save", callback, self.diagnostics_changed.emit)
+
+    def update_settings(self, payload: dict[str, Any]) -> None:
+        callback = getattr(self.client, "update_settings", None)
+        if callable(callback):
+            self._submit("settings", lambda: callback(payload), self.settings_changed.emit)
 
     def prepare(self, broadcast_id: str, run_of_show_id: str) -> None:
         self._manual_event("prepare_clicked")
@@ -187,6 +233,8 @@ class StreamPreparationController(QObject):
         )
 
     def handle_event(self, event: object) -> None:
+        if self._is_stopping():
+            return
         event_type = getattr(event, "event_type", "")
         data = getattr(event, "data", {})
         if event_type.startswith("youtube.auth."):
@@ -225,6 +273,8 @@ class StreamPreparationController(QObject):
         ):
             self._submit("lifecycle", self.client.lifecycle, self.lifecycle_changed.emit)
             self._submit("session-status", self.client.session, self.session_changed.emit)
+        if event_type != "runtime.connected":
+            self.refresh_console()
         if event_type.startswith("stream_comments."):
             self._submit("comments-status", self.client.comments_status, self.comments_changed.emit)
         if (
@@ -250,9 +300,9 @@ class StreamPreparationController(QObject):
             )
 
     def _loaded(self, value: object) -> None:
+        if self._is_stopping():
+            return
         self._manual_event("streaming_admin_connected")
-        self.connection_changed.emit(True)
-        self._core_connected = True
         self.loaded.emit(value)
         if isinstance(value, dict):
             for key, signal in (
@@ -265,6 +315,9 @@ class StreamPreparationController(QObject):
                 item = value.get(key)
                 if isinstance(item, dict):
                     signal.emit(item)
+            console = value.get("console")
+            if isinstance(console, dict):
+                self.console_changed.emit(console)
 
     def _broadcasts_refreshed(self, value: object) -> None:
         if not isinstance(value, dict):
@@ -272,26 +325,43 @@ class StreamPreparationController(QObject):
         self.broadcasts_changed.emit(value.get("broadcasts", []))
         self.run_of_shows_changed.emit(value.get("run_of_shows", []))
 
+    def _youtube_refreshed(self, value: object) -> None:
+        if not isinstance(value, dict):
+            return
+        self.auth_changed.emit(value.get("auth", {}))
+        self.broadcasts_changed.emit(value.get("broadcasts", []))
+        self.refresh_console()
+
     def _submit(
         self, operation: str, action: Callable[[], object], done: Callable[[object], None]
     ) -> None:
-        if self._closed or operation in self._busy:
-            return
-        self._busy.add(operation)
+        with self._state_lock:
+            if self._closing or self._closed or operation in self._busy:
+                return
+            self._busy.add(operation)
         self.busy_changed.emit(operation, True)
         future = self._pool.submit(action)
 
         def completed(_: object) -> None:
-            self._busy.discard(operation)
-            if self._closed:
-                return
+            with self._state_lock:
+                self._busy.discard(operation)
+                if self._closing or self._closed:
+                    return
             self.busy_changed.emit(operation, False)
             try:
-                done(future.result())
+                result = future.result()
+                if not self._core_connected:
+                    self._core_connected = True
+                    self.connection_changed.emit(True)
+                self.error_occurred.emit("")
+                done(result)
             except Exception as error:
                 if isinstance(error, CoreApiError) and error.code == "runtime.unavailable":
                     self._core_connected = False
                     self.connection_changed.emit(False)
+                elif isinstance(error, CoreApiError) and not self._core_connected:
+                    self._core_connected = True
+                    self.connection_changed.emit(True)
                 self.error_occurred.emit(str(error))
             finally:
                 if operation == "load" and self._bootstrap_pending:
@@ -301,12 +371,62 @@ class StreamPreparationController(QObject):
 
         future.add_done_callback(completed)
 
+    def add_shutdown_callback(self, callback: Callable[[], None]) -> None:
+        """Register an idempotent stop hook for an external UI worker."""
+        with self._state_lock:
+            if self._closing or self._closed:
+                callback()
+                return
+            self._shutdown_callbacks.append(callback)
+
     def close(self) -> None:
-        self._manual_event("streaming_admin_disconnected")
-        self._closed = True
-        self._pool.shutdown(wait=False, cancel_futures=True)
+        """Stop UI work exactly once; auxiliary disconnect logging is best effort."""
+        with self._state_lock:
+            if self._closing or self._closed:
+                return
+            self._closing = True
+            callbacks = tuple(self._shutdown_callbacks)
+            self._shutdown_callbacks.clear()
+            self._bootstrap_pending = False
+
+        try:
+            for callback in callbacks:
+                try:
+                    callback()
+                except Exception:
+                    logger.exception("failed to stop Streaming Admin background worker")
+
+            self._pool.shutdown(wait=True, cancel_futures=True)
+            self._try_send_manual_disconnect_event()
+
+            close_client = getattr(self.client, "close", None)
+            if callable(close_client):
+                try:
+                    close_client()
+                except Exception:
+                    logger.exception("failed to close Streaming Admin Core API client")
+        finally:
+            with self._state_lock:
+                self._closed = True
+                self._closing = False
+                self._busy.clear()
+
+    def _is_stopping(self) -> bool:
+        with self._state_lock:
+            return self._closing or self._closed
+
+    def _try_send_manual_disconnect_event(self) -> None:
+        callback = getattr(self.client, "manual_check_ui_event", None)
+        if not callable(callback):
+            return
+        try:
+            callback("streaming_admin_disconnected", None)
+        except (CoreApiError, httpx.HTTPError) as error:
+            logger.debug("manual disconnect event was not delivered: %s", error)
 
     def _manual_event(self, event: str, details: dict[str, Any] | None = None) -> None:
+        if self._is_stopping():
+            return
         callback = getattr(self.client, "manual_check_ui_event", None)
         if callable(callback):
             callback(event, details)
