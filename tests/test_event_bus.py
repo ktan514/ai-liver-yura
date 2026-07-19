@@ -1,5 +1,3 @@
-
-
 import pytest
 
 from app.domain.events import AgentEvent, AgentEventType

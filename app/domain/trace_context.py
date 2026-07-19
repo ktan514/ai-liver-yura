@@ -20,7 +20,7 @@ class TraceContext:
     character_generation_result_id: str | None = None
     output_unit_id: str | None = None
     activity_result_id: str | None = None
-    game_session_id: str | None = None
+    plugin_session_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.trace_id:

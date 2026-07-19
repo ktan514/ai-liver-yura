@@ -9,7 +9,10 @@ from app.core.application.events import ApplicationEventBroker
 
 
 def _publish_many(broker: ApplicationEventBroker, count: int) -> list[str]:
-    return [broker.publish("test.event", {"index": index}).event_id for index in range(count)]
+    return [
+        broker.publish("test.event", {"index": index}).event_id
+        for index in range(count)
+    ]
 
 
 def test_replay_is_separate_from_bounded_live_queue() -> None:
@@ -32,7 +35,9 @@ def test_replay_over_live_capacity_is_truncated_without_queue_full() -> None:
 
     assert subscription.replay_events[0].event_type == broker.RESYNC_EVENT_TYPE
     assert subscription.replay_events[0].data["reason"] == "replay_limit_exceeded"
-    assert [event.event_id for event in subscription.replay_events[1:]] == event_ids[-3:]
+    assert [event.event_id for event in subscription.replay_events[1:]] == event_ids[
+        -3:
+    ]
     assert subscription.live_queue.empty()
 
 
@@ -44,7 +49,11 @@ def test_event_published_after_replay_snapshot_is_delivered_once_as_live() -> No
     live = broker.publish("test.live", {})
     delivered = [*subscription.replay_events, subscription.live_queue.get_nowait()]
 
-    assert [event.event_id for event in delivered] == [event_ids[1], event_ids[2], live.event_id]
+    assert [event.event_id for event in delivered] == [
+        event_ids[1],
+        event_ids[2],
+        live.event_id,
+    ]
     assert len({event.event_id for event in delivered}) == 3
 
 
@@ -57,7 +66,9 @@ def test_unavailable_last_event_id_requests_bounded_resync() -> None:
     control = subscription.replay_events[0]
     assert control.event_type == broker.RESYNC_EVENT_TYPE
     assert control.data["reason"] == "last_event_id_unavailable"
-    assert [event.event_id for event in subscription.replay_events[1:]] == event_ids[-2:]
+    assert [event.event_id for event in subscription.replay_events[1:]] == event_ids[
+        -2:
+    ]
 
 
 def test_slow_live_subscriber_is_disconnected_with_resync_notice() -> None:

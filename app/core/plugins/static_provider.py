@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.core.plugins.plugin_context import PluginContext
+from app.shared.contracts.plugins.runtime import PluginContext
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,4 +21,3 @@ class StaticCapabilityProvider:
 
     def shutdown(self) -> None:
         return None
-

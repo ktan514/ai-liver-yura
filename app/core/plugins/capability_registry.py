@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
-from app.core.plugins.plugin import Plugin
+from app.shared.contracts.plugins.runtime import Plugin
 from app.utils.trace import TraceLogger
 
 
@@ -102,7 +102,10 @@ class CapabilityRegistry:
     ) -> tuple[CapabilityHealth, ...]:
         return tuple(
             health
-            for (registered_capability, registered_plugin), health in self._health.items()
+            for (
+                registered_capability,
+                registered_plugin,
+            ), health in self._health.items()
             if registered_capability == capability
             and (plugin_id is None or registered_plugin == plugin_id)
         )

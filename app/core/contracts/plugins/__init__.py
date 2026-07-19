@@ -1,28 +1,28 @@
-from app.core.contracts.plugins.errors import (
+"""Deprecated compatibility import. Use app.shared.contracts.plugins.registration."""
+
+from app.shared.contracts.plugins.registration import (
+    ActivityProvider,
+    CapabilityPolicy,
+    CapabilityRegistration,
     CapabilityUnavailable,
+    CommandHandler,
     CommandRejected,
     DuplicateCapability,
+    EventSubscription,
+    PluginActivityRequest,
+    PluginActivitySpec,
+    PluginContractError,
     PluginDependencyMissing,
+    PluginDescriptor,
+    PluginEventSubscriber,
+    PluginHealth,
+    PluginHealthStatus,
+    PluginLifecycle,
+    PluginRegistration,
     PluginStartFailed,
     PluginStopFailed,
     PluginUnavailable,
     QueryFailed,
-)
-from app.core.contracts.plugins.models import (
-    CapabilityPolicy,
-    CapabilityRegistration,
-    EventSubscription,
-    PluginActivityRequest,
-    PluginHealth,
-    PluginHealthStatus,
-    PluginRegistration,
-)
-from app.core.contracts.plugins.protocols import (
-    ActivityProvider,
-    CommandHandler,
-    PluginDescriptor,
-    PluginEventSubscriber,
-    PluginLifecycle,
     QueryHandler,
 )
 
@@ -36,6 +36,8 @@ __all__ = [
     "DuplicateCapability",
     "EventSubscription",
     "PluginActivityRequest",
+    "PluginActivitySpec",
+    "PluginContractError",
     "PluginDependencyMissing",
     "PluginDescriptor",
     "PluginEventSubscriber",

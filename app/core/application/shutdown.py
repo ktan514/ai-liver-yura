@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from app.core.application.plugins import PluginRegistry
+from app.shared.plugin_host import PluginRegistry
 
 AsyncStep = Callable[[], Awaitable[None]]
 
@@ -28,4 +28,3 @@ class ApplicationShutdownCoordinator:
         await stop_framework()
         await close_logging()
         self._completed = True
-

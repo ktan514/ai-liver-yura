@@ -27,17 +27,25 @@ def interpret_user_request(text: str) -> UserRequestInterpretation:
     if not normalized:
         return UserRequestInterpretation(UserRequestKind.AMBIGUOUS, 0.0, "empty_input")
 
-    if any(marker in normalized for marker in ("したくない", "しないで", "やめて", "不要")):
-        return UserRequestInterpretation(UserRequestKind.NEGATIVE, 0.95, "negative_expression")
-    if any(marker in normalized for marker in ("昨日", "さっき", "この前", "以前")) and any(
-        marker in normalized for marker in ("した", "やった", "していた", "だった")
+    if any(
+        marker in normalized for marker in ("したくない", "しないで", "やめて", "不要")
     ):
-        return UserRequestInterpretation(UserRequestKind.PAST_EVENT, 0.9, "past_expression")
+        return UserRequestInterpretation(
+            UserRequestKind.NEGATIVE, 0.95, "negative_expression"
+        )
+    if any(
+        marker in normalized for marker in ("昨日", "さっき", "この前", "以前")
+    ) and any(marker in normalized for marker in ("した", "やった", "していた", "だった")):
+        return UserRequestInterpretation(
+            UserRequestKind.PAST_EVENT, 0.9, "past_expression"
+        )
     hypothetical = any(
         marker in normalized for marker in ("としたら", "とすれば", "仮に")
     ) or normalized.startswith("もし")
     if hypothetical:
-        return UserRequestInterpretation(UserRequestKind.CHAT, 0.9, "hypothetical_expression")
+        return UserRequestInterpretation(
+            UserRequestKind.CHAT, 0.9, "hypothetical_expression"
+        )
     if any(
         marker in normalized
         for marker in (
@@ -52,7 +60,9 @@ def interpret_user_request(text: str) -> UserRequestInterpretation:
             "って難しい",
         )
     ):
-        return UserRequestInterpretation(UserRequestKind.KNOWLEDGE, 0.9, "knowledge_question")
+        return UserRequestInterpretation(
+            UserRequestKind.KNOWLEDGE, 0.9, "knowledge_question"
+        )
     if normalized.endswith(
         (
             "して",
@@ -77,5 +87,7 @@ def interpret_user_request(text: str) -> UserRequestInterpretation:
             "たい",
         )
     ):
-        return UserRequestInterpretation(UserRequestKind.EXECUTION, 0.85, "action_request")
+        return UserRequestInterpretation(
+            UserRequestKind.EXECUTION, 0.85, "action_request"
+        )
     return UserRequestInterpretation(UserRequestKind.CHAT, 0.7, "ordinary_conversation")

@@ -48,6 +48,7 @@ class StubPlugin:
 
     def shutdown(self) -> None:
         self.shutdown_called = True
+        self.initialized = False
 
     def available_capabilities(self) -> frozenset[str]:
         return self._available if self.initialized else frozenset()
@@ -125,3 +126,27 @@ def test_capability_health_can_be_revoked_and_restored_independently() -> None:
     manager.set_capability_availability("stub", "first", available=True)
 
     assert manager.is_capability_available("first", "stub") is True
+
+
+def test_plugin_manager_recovers_failed_plugin_and_registers_capability_again() -> None:
+    manager = PluginManager()
+    plugin = StubPlugin(fail=True)
+    manager.register(plugin)
+    manager.initialize_enabled_plugins(_context(), {"stub": True})
+    assert manager.status("stub") == PluginStatus.FAILED
+
+    plugin.fail = False
+
+    assert manager.recover_plugin("stub") is True
+    assert manager.status("stub") == PluginStatus.INITIALIZED
+    assert manager.is_capability_available("test_capability", "stub") is True
+
+
+def test_plugin_manager_does_not_recover_explicitly_disabled_plugin() -> None:
+    manager = PluginManager()
+    plugin = StubPlugin()
+    manager.register(plugin)
+    manager.initialize_enabled_plugins(_context(), {"stub": False})
+
+    assert manager.recover_plugin("stub") is False
+    assert manager.status("stub") == PluginStatus.DISABLED

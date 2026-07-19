@@ -9,9 +9,8 @@ from app.core.plugins.capability_registry import (
     CapabilityHealth,
     CapabilityRegistry,
 )
-from app.core.plugins.plugin import Plugin
-from app.core.plugins.plugin_context import PluginContext
-from app.domain.behavior import ActivityDefinition
+from app.shared.contracts.activity import ActivityDefinition
+from app.shared.contracts.plugins.runtime import Plugin, PluginContext
 from app.utils.trace import TraceLogger
 
 
@@ -27,6 +26,7 @@ class PluginManager:
     def __init__(self) -> None:
         self._plugins: dict[str, Plugin] = {}
         self._statuses: dict[str, PluginStatus] = {}
+        self._contexts: dict[str, PluginContext] = {}
         self._capabilities = CapabilityRegistry()
         self._trace_logger = TraceLogger()
 
@@ -48,6 +48,7 @@ class PluginManager:
     ) -> None:
         for plugin_id, plugin in self._plugins.items():
             if not enabled.get(plugin_id, False):
+                self._contexts.pop(plugin_id, None)
                 self._capabilities.unregister(plugin_id)
                 if self._statuses.get(plugin_id) == PluginStatus.INITIALIZED:
                     try:
@@ -59,9 +60,14 @@ class PluginManager:
                             error_type=type(error).__name__,
                         )
                 self._statuses[plugin_id] = PluginStatus.DISABLED
-                self._trace_logger.info("plugin_manager:plugin_disabled", plugin_id=plugin_id)
+                self._trace_logger.info(
+                    "plugin_manager:plugin_disabled", plugin_id=plugin_id
+                )
                 continue
-            self._trace_logger.info("plugin_manager:plugin_enabled", plugin_id=plugin_id)
+            self._contexts[plugin_id] = context
+            self._trace_logger.info(
+                "plugin_manager:plugin_enabled", plugin_id=plugin_id
+            )
             try:
                 plugin.initialize(context)
             except Exception as error:
@@ -74,7 +80,9 @@ class PluginManager:
                 )
                 continue
             self._statuses[plugin_id] = PluginStatus.INITIALIZED
-            self._trace_logger.info("plugin_manager:plugin_initialized", plugin_id=plugin_id)
+            self._trace_logger.info(
+                "plugin_manager:plugin_initialized", plugin_id=plugin_id
+            )
             declared = plugin.capabilities
             try:
                 available = plugin.available_capabilities()
@@ -108,6 +116,58 @@ class PluginManager:
             for capability in available:
                 self._capabilities.register(plugin, capability)
 
+    def recover_plugin(self, plugin_id: str) -> bool:
+        """明示的な再接続要求でPluginを再初期化し、Capabilityを再検出する。"""
+
+        plugin = self._plugins.get(plugin_id)
+        context = self._contexts.get(plugin_id)
+        status = self._statuses.get(plugin_id)
+        if plugin is None:
+            raise ValueError(f"未登録のPluginです: {plugin_id}")
+        if context is None or status in {
+            PluginStatus.REGISTERED,
+            PluginStatus.DISABLED,
+            PluginStatus.SHUTDOWN,
+        }:
+            return False
+
+        self._capabilities.unregister(plugin_id)
+        try:
+            plugin.shutdown()
+        except Exception as error:
+            self._trace_logger.warning(
+                "plugin_manager:plugin_recovery_shutdown_failed",
+                plugin_id=plugin_id,
+                error_type=type(error).__name__,
+            )
+        try:
+            plugin.initialize(context)
+            available = plugin.available_capabilities()
+            undeclared = available - plugin.capabilities
+            if undeclared:
+                raise ValueError(
+                    "Pluginが未宣言Capabilityを復旧時に公開しました: "
+                    + ",".join(sorted(undeclared))
+                )
+        except Exception as error:
+            self._statuses[plugin_id] = PluginStatus.FAILED
+            self._trace_logger.error(
+                "plugin_manager:plugin_recovery_failed",
+                plugin_id=plugin_id,
+                error_type=type(error).__name__,
+            )
+            return False
+
+        self._statuses[plugin_id] = PluginStatus.INITIALIZED
+        for capability in available:
+            self._capabilities.register(plugin, capability)
+        self._trace_logger.info(
+            "plugin_manager:plugin_recovered",
+            plugin_id=plugin_id,
+            capabilities=sorted(available),
+        )
+        return bool(available)
+
     def shutdown_plugins(self) -> None:
         for plugin_id, plugin in reversed(tuple(self._plugins.items())):
             if self._statuses.get(plugin_id) != PluginStatus.INITIALIZED:
@@ -122,7 +182,9 @@ class PluginManager:
                     error_type=type(error).__name__,
                 )
             self._statuses[plugin_id] = PluginStatus.SHUTDOWN
-            self._trace_logger.info("plugin_manager:plugin_shutdown", plugin_id=plugin_id)
+            self._trace_logger.info(
+                "plugin_manager:plugin_shutdown", plugin_id=plugin_id
+            )
 
     def get_plugin(self, plugin_id: str) -> Plugin | None:
         if self._statuses.get(plugin_id) != PluginStatus.INITIALIZED:
@@ -157,7 +219,9 @@ class PluginManager:
     def get_plugins_by_capability(self, capability: str) -> list[Plugin]:
         return self._capabilities.resolve_providers(capability)
 
-    def is_capability_available(self, capability: str, plugin_id: str | None = None) -> bool:
+    def is_capability_available(
+        self, capability: str, plugin_id: str | None = None
+    ) -> bool:
         return self._capabilities.is_available(capability, plugin_id)
 
     def set_capability_availability(
@@ -190,7 +254,10 @@ class PluginManager:
         if capability not in plugin.capabilities:
             raise ValueError(f"Pluginが宣言していないCapabilityです: {capability}")
         if self._statuses.get(plugin_id) == PluginStatus.INITIALIZED:
-            if status in {CapabilityAvailability.AVAILABLE, CapabilityAvailability.DEGRADED}:
+            if status in {
+                CapabilityAvailability.AVAILABLE,
+                CapabilityAvailability.DEGRADED,
+            }:
                 self._capabilities.register(plugin, capability)
             else:
                 self._capabilities.unregister(plugin_id, capability)

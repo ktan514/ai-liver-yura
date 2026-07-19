@@ -1,9 +1,5 @@
-from enum import Enum
+"""Deprecated compatibility import. Use Shared Contracts."""
 
+from app.shared.contracts.plugins.runtime import PluginCapability
 
-class PluginCapability(str, Enum):
-    USER_INTENT_INTERPRETER = "user_intent_interpreter"
-    COMMAND_HANDLER = "command_handler"
-    ACTIVITY_PROVIDER = "activity_provider"
-    PROMPT_CONTEXT_PROVIDER = "prompt_context_provider"
-    MEMORY_POLICY_PROVIDER = "memory_policy_provider"
+__all__ = ["PluginCapability"]
