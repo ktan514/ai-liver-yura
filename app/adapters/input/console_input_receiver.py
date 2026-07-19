@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
-from app.domain.events import AgentEvent, AgentEventType
+from app.domain.events import AgentEvent, AgentEventType, InputAuthority
 from app.runtime import EventPublisher, InputReceiver
 from app.utils.trace import TraceLogger
 
@@ -84,6 +84,7 @@ class ConsoleInputReceiver(InputReceiver):
                 AgentEvent(
                     event_type=AgentEventType.USER_TEXT,
                     payload={"text": stripped_text, "source": "console"},
+                    authority=InputAuthority.ADMINISTRATOR,
                 )
             )
             await asyncio.sleep(0.01)

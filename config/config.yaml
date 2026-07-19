@@ -38,7 +38,7 @@ services:
     timeout_seconds: 60.0
   voicevox:
     type: voicevox
-    base_url: http://127.0.0.1:50021
+    base_url: http://192.168.50.182:50021
     timeout_seconds: 30.0
   topic_memory_database:
     type: postgres
@@ -112,34 +112,34 @@ speech:
   # Voidoll（ノーマル）
   speaker_id: 89
   default_profile: neutral
-  emotion_profiles:
+  voice_intent_profiles:
     # Voidoll公式推奨値を基準にする
     neutral:
       speed_scale: 0.90
       pitch_scale: 0.03
       intonation_scale: 0.90
       volume_scale: 1.0
-    happy:
+    bright:
       speed_scale: 1.02
       pitch_scale: 0.05
       intonation_scale: 1.08
       volume_scale: 1.03
-    excited:
+    energetic:
       speed_scale: 1.15
       pitch_scale: 0.07
       intonation_scale: 1.20
       volume_scale: 1.08
-    angry:
+    restrained_anger:
       speed_scale: 1.08
       pitch_scale: 0.01
       intonation_scale: 1.15
       volume_scale: 1.10
-    sad:
+    subdued:
       speed_scale: 0.78
       pitch_scale: -0.02
       intonation_scale: 0.72
       volume_scale: 0.88
-    tired:
+    weary:
       speed_scale: 0.72
       pitch_scale: -0.03
       intonation_scale: 0.68
@@ -153,6 +153,16 @@ topic_classifier:
   model: openai_chat
 
 memory:
+  # エピソード・意味・未完了Activity・未回収話題・感情履歴の継続状態。
+  agent_memory:
+    enabled: false
+    path: data/agent_memory.json
+    max_history_entries: 64
+  # 継続的な相手ごとの関係状態。必要な環境で明示的に有効化する。
+  relationship_memory:
+    enabled: false
+    path: data/relationship_memory.json
+    max_entries: 1000
   topic_memory:
     enabled: true
     database_service: topic_memory_database
@@ -269,12 +279,9 @@ streaming:
     max_retries: 2
 
 plugins:
-  registry:
-    youtube_streaming:
-      enabled: true
-      config_reference: streaming
+  registry: {}
   games:
-    enabled: false
+    enabled: true
     intent_interpreter:
       enabled: true
       model: openai_chat
