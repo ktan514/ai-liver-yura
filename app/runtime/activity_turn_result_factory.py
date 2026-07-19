@@ -16,7 +16,9 @@ from app.domain.character_response import ActivityExecutionResult
 from app.utils.llm_trace import build_llm_trace_context
 
 
-def action_planning_failure_group(activity: Activity, error: Exception) -> ActionPlanGroup:
+def action_planning_failure_group(
+    activity: Activity, error: Exception
+) -> ActionPlanGroup:
     """Action計画例外をTurn失敗へ変換し、Runtimeを継続可能にする。"""
 
     turn = activity.context.get("activity_turn")
@@ -28,14 +30,20 @@ def action_planning_failure_group(activity: Activity, error: Exception) -> Actio
     )
     ongoing_activity_id_value = getattr(ongoing, "ongoing_activity_id", None)
     ongoing_activity_id = (
-        str(ongoing_activity_id_value) if ongoing_activity_id_value is not None else None
+        str(ongoing_activity_id_value)
+        if ongoing_activity_id_value is not None
+        else None
     )
     execution_value = activity.context.get("activity_execution_result")
     payload = activity.context.get("event_payload")
-    if not isinstance(execution_value, ActivityExecutionResult) and isinstance(payload, dict):
+    if not isinstance(execution_value, ActivityExecutionResult) and isinstance(
+        payload, dict
+    ):
         execution_value = payload.get("activity_execution_result")
     execution_result = (
-        execution_value if isinstance(execution_value, ActivityExecutionResult) else None
+        execution_value
+        if isinstance(execution_value, ActivityExecutionResult)
+        else None
     )
     now = datetime.now(timezone.utc)
     trace = build_llm_trace_context(activity).trace_context
@@ -73,9 +81,11 @@ def action_planning_failure_group(activity: Activity, error: Exception) -> Actio
     )
     aggregate = ActivityTurnResult(
         activity_turn_id=activity_turn_id,
-        activity_type=execution_result.activity_type
-        if execution_result is not None
-        else activity.activity_type.value,
+        activity_type=(
+            execution_result.activity_type
+            if execution_result is not None
+            else activity.activity_type.value
+        ),
         source_event_id=activity.source_event_id,
         ongoing_activity_id=ongoing_activity_id,
         operation=execution_result.operation if execution_result is not None else None,
@@ -107,10 +117,14 @@ def canceled_output_group(group: ActionPlanGroup, *, reason: str) -> ActionPlanG
         source_event_id=base.source_event_id,
         failure_stage="action_execution",
         error=reason,
-        activity_result_id=base.output_result.activity_result_id
-        if base.output_result is not None
-        else str(uuid4()),
-        started_at=base.output_result.started_at if base.output_result is not None else now,
+        activity_result_id=(
+            base.output_result.activity_result_id
+            if base.output_result is not None
+            else str(uuid4())
+        ),
+        started_at=(
+            base.output_result.started_at if base.output_result is not None else now
+        ),
         finished_at=now,
         trace_id=base.trace_id,
         parent_trace_id=base.parent_trace_id,

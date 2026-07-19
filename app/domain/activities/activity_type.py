@@ -5,8 +5,8 @@ class ActivityType(str, Enum):
     """継続する目的を表す Activity の種別。"""
 
     CONVERSATION_WITH_USER = "conversation_with_user"
-    GAME_WITH_USER = "game_with_user"
-    GAME_INPUT_CLASSIFICATION = "game_input_classification"
+    DIRECTED_TALK = "directed_talk"
+    PLUGIN_ACTIVITY = "plugin_activity"
     BEHAVIOR_PLANNING = "behavior_planning"
     AUTONOMOUS_TALK = "autonomous_talk"
     STARTUP_REACTION = "startup_reaction"

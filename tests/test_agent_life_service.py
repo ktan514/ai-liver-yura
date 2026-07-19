@@ -185,8 +185,9 @@ def test_agent_life_service_syncs_suspended_activity_from_activity_manager() -> 
     assert agent_state.suspended_activities[0].status == ActivityStatus.SUSPENDED
 
 
-def test_agent_life_service_plan_next_event_returns_curiosity_peak_when_internal_drive_is_strong(
-) -> None:
+def test_agent_life_service_plan_next_event_returns_curiosity_peak_when_internal_drive_is_strong() -> (
+    None
+):
     activity_manager = ActivityManager()
     now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
     agent_life_service = AgentLifeService(activity_manager, now=now)
@@ -201,7 +202,9 @@ def test_agent_life_service_plan_next_event_returns_curiosity_peak_when_internal
     assert event.replace_key == "agent_life_service:curiosity_peak"
 
 
-def test_agent_life_service_plan_next_event_returns_none_when_internal_drive_is_weak() -> None:
+def test_agent_life_service_plan_next_event_returns_none_when_internal_drive_is_weak() -> (
+    None
+):
     activity_manager = ActivityManager()
     now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
     agent_life_service = AgentLifeService(activity_manager, now=now)
@@ -209,8 +212,9 @@ def test_agent_life_service_plan_next_event_returns_none_when_internal_drive_is_
     assert agent_life_service.plan_next_event(now=now) is None
 
 
-def test_agent_life_service_plan_next_event_returns_curiosity_peak_after_elapsed_time_updates_drive(
-) -> None:
+def test_agent_life_service_plan_next_event_returns_curiosity_peak_after_elapsed_time_updates_drive() -> (
+    None
+):
     activity_manager = ActivityManager()
     initial_time = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
     agent_life_service = AgentLifeService(activity_manager, now=initial_time)
@@ -223,7 +227,9 @@ def test_agent_life_service_plan_next_event_returns_curiosity_peak_after_elapsed
     assert event.payload["reason"] == "internal_drive"
 
 
-def test_agent_life_service_plan_next_event_returns_none_when_active_activity_exists() -> None:
+def test_agent_life_service_plan_next_event_returns_none_when_active_activity_exists() -> (
+    None
+):
     activity_manager = ActivityManager()
     now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
     agent_life_service = AgentLifeService(activity_manager, now=now)
@@ -243,13 +249,17 @@ def test_agent_life_service_plan_next_event_returns_none_immediately_after_speec
     agent_life_service = AgentLifeService(activity_manager)
     agent_life_service.update_drive(DriveState(curiosity=0.9))
 
-    agent_life_service.handle_event(AgentEvent(event_type=AgentEventType.SPEECH_FINISHED))
+    agent_life_service.handle_event(
+        AgentEvent(event_type=AgentEventType.SPEECH_FINISHED)
+    )
     now = datetime.now(timezone.utc)
 
     assert agent_life_service.plan_next_event(now=now) is None
 
 
-def test_agent_life_service_plan_next_event_returns_none_immediately_after_user_input() -> None:
+def test_agent_life_service_plan_next_event_returns_none_immediately_after_user_input() -> (
+    None
+):
     activity_manager = ActivityManager()
     agent_life_service = AgentLifeService(activity_manager)
     agent_life_service.update_drive(DriveState(curiosity=0.9))
@@ -345,7 +355,9 @@ def test_interrupted_important_topic_is_evaluated_and_added_to_event() -> None:
         now=now,
     )
     service.handle_event(
-        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "続きも聞きたい"})
+        AgentEvent(
+            event_type=AgentEventType.USER_TEXT, payload={"text": "続きも聞きたい"}
+        )
     )
 
     event = service.plan_next_event(now=now + timedelta(seconds=31))
@@ -357,7 +369,9 @@ def test_interrupted_important_topic_is_evaluated_and_added_to_event() -> None:
     assert "resume_score_high" in event.payload["continuation_reasons"]
 
 
-def test_agent_life_service_plan_next_event_returns_none_when_emotion_reduces_speech() -> None:
+def test_agent_life_service_plan_next_event_returns_none_when_emotion_reduces_speech() -> (
+    None
+):
     activity_manager = ActivityManager()
     now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
     agent_life_service = AgentLifeService(activity_manager, now=now)

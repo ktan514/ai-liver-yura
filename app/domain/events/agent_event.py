@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.domain.events.agent_event_type import AgentEventType
+from app.domain.events.input_authority import InputAuthority
 from app.domain.trace_context import TraceContext
 
 
@@ -24,6 +25,7 @@ class AgentEvent:
     event_id: str = field(default_factory=lambda: str(uuid4()))
     discardable: bool = False
     replace_key: str | None = None
+    authority: InputAuthority = InputAuthority.USER
     trace_context: TraceContext = field(default_factory=TraceContext.new)
 
     def __post_init__(self) -> None:
@@ -36,6 +38,7 @@ class AgentEvent:
                 "trace_context",
                 self.trace_context.derive(
                     source_event_id=self.trace_context.source_event_id or self.event_id,
-                    activity_turn_id=self.trace_context.activity_turn_id or str(uuid4()),
+                    activity_turn_id=self.trace_context.activity_turn_id
+                    or str(uuid4()),
                 ),
             )

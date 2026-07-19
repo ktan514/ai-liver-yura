@@ -12,7 +12,12 @@ from app.domain.behavior import (
     DeterministicActivityMatch,
 )
 from app.plugins.games.plugin import GamesPlugin
-from app.runtime import behavior_planner, ongoing_input, runtime_coordinator, situation_evaluator
+from app.runtime import (
+    behavior_planner,
+    ongoing_input,
+    runtime_coordinator,
+    situation_evaluator,
+)
 from app.runtime.activity_matcher_resolver import (
     ActivityMatcherResolver,
     LegacyActivityMatcherAdapter,
@@ -28,7 +33,9 @@ class FixedMatcher:
     priority: int = 300
     constraints: dict[str, object] | None = None
 
-    def match(self, context: ActivityMatcherContext) -> DeterministicActivityMatch | None:
+    def match(
+        self, context: ActivityMatcherContext
+    ) -> DeterministicActivityMatch | None:
         if context.normalized_input != "一致":
             return None
         return DeterministicActivityMatch(

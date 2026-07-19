@@ -5,8 +5,12 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import Any
 
-from app.adapters.prompt import CharacterPromptBuilder, ResponseValidatorPromptBuilder
-from app.domain.activities import Activity, ActivityStatus, ActivityType, OngoingActivity
+from app.domain.activities import (
+    Activity,
+    ActivityStatus,
+    ActivityType,
+    OngoingActivity,
+)
 from app.domain.activity_turn_result import (
     CharacterGenerationResult,
     CharacterGenerationStatus,
@@ -19,12 +23,21 @@ from app.domain.character_response import (
     Claim,
     ClaimType,
     OngoingActivityContext,
+    ReactionPlan,
+    ReactionSegment,
     ResponseClaim,
     ResponseContext,
     ResponseValidationResult,
+    VoiceIntent,
 )
+from app.domain.short_term_memory import ShortTermMemory
+from app.domain.topic import TopicHistory
 from app.domain.trace_context import trace_context_from
 from app.ports.llm_roles import CharacterModel, ResponseValidationModel
+from app.ports.prompt_builder import (
+    CharacterRolePromptBuilder,
+    ResponseValidationPromptBuilder,
+)
 from app.runtime.response_claim_validator import (
     DeterministicFactValidator,
     IndependentClaimExtractor,
@@ -36,7 +49,13 @@ from app.utils.trace import TraceLogger
 class ResponseContextBuilder:
     """Activityの実行事実をCharacter LLMへ渡せる最小文脈へ変換する。"""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        short_term_memory: ShortTermMemory | None = None,
+        topic_history: TopicHistory | None = None,
+    ) -> None:
+        self._short_term_memory = short_term_memory
+        self._topic_history = topic_history
         self._trace_logger = TraceLogger()
 
     def build(self, activity: Activity) -> ResponseContext:
@@ -51,7 +70,9 @@ class ResponseContextBuilder:
             if isinstance(result_value, ActivityExecutionResult)
             else self._infer_result(activity, event_payload)
         )
-        ongoing_activity = self._ongoing_context(activity.context.get("ongoing_activity"))
+        ongoing_activity = self._ongoing_context(
+            activity.context.get("ongoing_activity")
+        )
         transition_value = event_payload.get(
             "ongoing_transition", activity.context.get("ongoing_transition")
         )
@@ -59,7 +80,9 @@ class ResponseContextBuilder:
         behavior_plan_value = event_payload.get(
             "behavior_plan", activity.context.get("behavior_plan")
         )
-        behavior_plan = behavior_plan_value if isinstance(behavior_plan_value, dict) else {}
+        behavior_plan = (
+            behavior_plan_value if isinstance(behavior_plan_value, dict) else {}
+        )
         situation_value = event_payload.get(
             "autonomous_situation_context",
             activity.context.get("autonomous_situation_context"),
@@ -71,7 +94,9 @@ class ResponseContextBuilder:
         )
         autonomous_analysis = analysis_value if isinstance(analysis_value, dict) else {}
         confirmation_value = event_payload.get("pending_confirmation")
-        confirmation = confirmation_value if isinstance(confirmation_value, dict) else {}
+        confirmation = (
+            confirmation_value if isinstance(confirmation_value, dict) else {}
+        )
         allowed, forbidden = self._claims_for(
             result.status,
             activity_type=result.activity_type,
@@ -81,7 +106,9 @@ class ResponseContextBuilder:
             in {ActivityStatus.ACTIVE.value, ActivityStatus.WAITING.value},
         )
         context = ResponseContext(
-            user_input=str(event_payload.get("text") or event_payload.get("comment") or ""),
+            user_input=str(
+                event_payload.get("text") or event_payload.get("comment") or ""
+            ),
             activity_type=result.activity_type,
             operation=result.operation,
             status=result.status,
@@ -90,22 +117,68 @@ class ResponseContextBuilder:
             allowed_claims=allowed,
             forbidden_claims=forbidden,
             activity_goal=activity.goal,
-            emotion=dict(activity.context.get("emotion", {}))
-            if isinstance(activity.context.get("emotion"), dict)
-            else {},
+            input_authority_role=str(
+                activity.context.get("input_authority", {}).get("role", "user")
+                if isinstance(activity.context.get("input_authority"), dict)
+                else "user"
+            ),
+            instruction_trusted=bool(
+                activity.context.get("input_authority", {}).get(
+                    "instruction_trusted", False
+                )
+                if isinstance(activity.context.get("input_authority"), dict)
+                else False
+            ),
+            emotion=(
+                dict(activity.context.get("emotion", {}))
+                if isinstance(activity.context.get("emotion"), dict)
+                else {}
+            ),
+            relationship=(
+                dict(event_payload.get("relationship", {}))
+                if isinstance(event_payload.get("relationship"), dict)
+                else (
+                    dict(situation.get("relationship_state", {}))
+                    if isinstance(situation.get("relationship_state"), dict)
+                    else {}
+                )
+            ),
+            situation=(
+                dict(event_payload.get("situation", {}))
+                if isinstance(event_payload.get("situation"), dict)
+                else {}
+            ),
+            memory=(
+                dict(event_payload.get("memory", {}))
+                if isinstance(event_payload.get("memory"), dict)
+                else {}
+            ),
             ongoing_activity=ongoing_activity,
-            ongoing_input_decision=self._optional_str(transition.get("ongoing_input_decision")),
-            current_activity_status=self._optional_str(transition.get("current_activity_status")),
-            current_activity_preserved=bool(transition.get("current_activity_preserved", False)),
-            current_activity_paused=bool(transition.get("current_activity_paused", False)),
-            current_activity_stopped=bool(transition.get("current_activity_stopped", False)),
-            requested_new_activity=self._optional_str(transition.get("requested_new_activity")),
+            ongoing_input_decision=self._optional_str(
+                transition.get("ongoing_input_decision")
+            ),
+            current_activity_status=self._optional_str(
+                transition.get("current_activity_status")
+            ),
+            current_activity_preserved=bool(
+                transition.get("current_activity_preserved", False)
+            ),
+            current_activity_paused=bool(
+                transition.get("current_activity_paused", False)
+            ),
+            current_activity_stopped=bool(
+                transition.get("current_activity_stopped", False)
+            ),
+            requested_new_activity=self._optional_str(
+                transition.get("requested_new_activity")
+            ),
             transition_result=self._optional_str(transition.get("transition_result")),
             topic=self._optional_str(
                 result.payload.get("selected_topic") or behavior_plan.get("topic")
             ),
             planning_reason=self._optional_str(
-                result.payload.get("planning_reason") or behavior_plan.get("planning_reason")
+                result.payload.get("planning_reason")
+                or behavior_plan.get("planning_reason")
             ),
             constraints=dict(result.constraints),
             drive={
@@ -117,8 +190,26 @@ class ResponseContextBuilder:
                 )
                 if isinstance(value, (int, float))
             },
-            recent_speech_summary=str(situation.get("recent_speech_summary") or ""),
-            recent_topic_summary=str(situation.get("recent_topic_summary") or ""),
+            recent_speech_summary=(
+                str(situation.get("recent_speech_summary") or "")
+                or self._short_term_memory.build_recent_speech_summary(limit=3)
+                if self._short_term_memory is not None
+                else str(situation.get("recent_speech_summary") or "")
+            ),
+            recent_conversation_summary=(
+                self._short_term_memory.build_recent_conversation_summary(limit=6)
+                if self._short_term_memory is not None
+                else ""
+            ),
+            recent_topic_summary=(
+                str(situation.get("recent_topic_summary") or "")
+                or "\n".join(
+                    entry.summary
+                    for entry in self._topic_history.recent_entries(limit=3)
+                )
+                if self._topic_history is not None
+                else str(situation.get("recent_topic_summary") or "")
+            ),
             interrupted_topic_relation=self._optional_str(
                 autonomous_analysis.get("relation_to_interrupted_topic")
             ),
@@ -157,13 +248,14 @@ class ResponseContextBuilder:
         summary_keys = (
             "plugin_id",
             "capability",
-            "game_session_id",
-            "game_type",
+            "plugin_session_id",
             "plugin_state_version",
-            "session_status",
+            "plugin_activity_status",
         )
         constraints_value = value.context.get("constraints")
-        constraints = dict(constraints_value) if isinstance(constraints_value, dict) else {}
+        constraints = (
+            dict(constraints_value) if isinstance(constraints_value, dict) else {}
+        )
         previous_output = (
             value.turns[-1].turn_result.output_result
             if value.turns
@@ -197,30 +289,50 @@ class ResponseContextBuilder:
         )
 
     @staticmethod
-    def _infer_result(activity: Activity, payload: dict[str, Any]) -> ActivityExecutionResult:
+    def _infer_result(
+        activity: Activity, payload: dict[str, Any]
+    ) -> ActivityExecutionResult:
         rejected = bool(payload.get("execution_request_unmatched"))
         plan = payload.get("behavior_plan")
         plan_data = plan if isinstance(plan, dict) else {}
         status = (
-            ActivityExecutionStatus.REJECTED if rejected else ActivityExecutionStatus.WAITING_INPUT
+            ActivityExecutionStatus.REJECTED
+            if rejected
+            else ActivityExecutionStatus.WAITING_INPUT
         )
         return ActivityExecutionResult(
-            activity_type=str(plan_data.get("activity_type") or "conversation"),
-            operation=str(plan_data.get("operation"))
-            if plan_data.get("operation") is not None
-            else None,
+            activity_type=str(
+                plan_data.get("activity_type") or activity.activity_type.value
+            ),
+            operation=(
+                str(plan_data.get("operation"))
+                if plan_data.get("operation") is not None
+                else None
+            ),
             status=status,
-            capability=str(plan_data.get("required_capability"))
-            if plan_data.get("required_capability") is not None
-            else None,
-            provider=str(plan_data.get("provider_plugin_id"))
-            if plan_data.get("provider_plugin_id") is not None
-            else None,
-            payload={"summary": "Activityを開始できなかった" if rejected else "会話を継続する"},
-            failure_reason=str(payload.get("execution_match_reason")) if rejected else None,
-            constraints=dict(plan_data.get("constraints", {}))
-            if isinstance(plan_data.get("constraints"), dict)
-            else {},
+            capability=(
+                str(plan_data.get("required_capability"))
+                if plan_data.get("required_capability") is not None
+                else None
+            ),
+            provider=(
+                str(plan_data.get("provider_plugin_id"))
+                if plan_data.get("provider_plugin_id") is not None
+                else None
+            ),
+            payload={
+                "summary": (
+                    "Activityを開始できなかった" if rejected else "会話を継続する"
+                )
+            },
+            failure_reason=(
+                str(payload.get("execution_match_reason")) if rejected else None
+            ),
+            constraints=(
+                dict(plan_data.get("constraints", {}))
+                if isinstance(plan_data.get("constraints"), dict)
+                else {}
+            ),
         )
 
     @staticmethod
@@ -369,12 +481,12 @@ class CharacterLlmService:
     def __init__(
         self,
         model: CharacterModel,
+        prompt_builder: CharacterRolePromptBuilder,
         character_profile: CharacterProfile | None = None,
-        prompt_builder: CharacterPromptBuilder | None = None,
     ) -> None:
         self._model = model
         self._character_profile = character_profile
-        self._prompt_builder = prompt_builder or CharacterPromptBuilder()
+        self._prompt_builder = prompt_builder
         self._trace_logger = TraceLogger()
 
     async def generate(
@@ -406,7 +518,9 @@ class CharacterLlmService:
                 "activity_turn_id": source.context.get("activity_turn_id"),
                 "ongoing_activity": source.context.get("ongoing_activity"),
                 "llm_attempt": attempt,
-                "activity_execution_result": source.context.get("activity_execution_result"),
+                "activity_execution_result": source.context.get(
+                    "activity_execution_result"
+                ),
             },
         )
         raw = await self._model.generate_character_response(activity)
@@ -434,25 +548,107 @@ class CharacterLlmService:
             value: Any = json.loads(raw.strip())
         except json.JSONDecodeError:
             return None
-        if not isinstance(value, dict) or not isinstance(value.get("speech"), str):
+        if not isinstance(value, dict):
             return None
         parsed_claims = CharacterLlmService._parse_claims(value.get("claims", []))
         if parsed_claims is None:
             return None
         claims, claim_details = parsed_claims
-        speech = str(value["speech"]).strip()
+        voice_intent = CharacterLlmService._parse_voice_intent(
+            value.get("voice_intent")
+        )
+        if voice_intent is None:
+            return None
+        expression = str(value.get("expression") or "smile")
+        gesture = str(value["gesture"]) if value.get("gesture") is not None else None
+        reaction_plan = CharacterLlmService._parse_reaction_plan(
+            value.get("reaction_segments"),
+            default_expression=expression,
+            default_voice_intent=voice_intent,
+        )
+        if value.get("reaction_segments") is not None and reaction_plan is None:
+            return None
+        speech_value = value.get("speech")
+        speech = str(speech_value).strip() if isinstance(speech_value, str) else ""
+        if reaction_plan is not None:
+            speech = reaction_plan.speech
+            first = reaction_plan.segments[0]
+            expression = first.expression
+            gesture = first.gesture
+            voice_intent = first.voice_intent
         if not speech:
             return None
         return CharacterResponse(
             speech=speech,
-            expression=str(value.get("expression") or "smile"),
-            gesture=str(value["gesture"]) if value.get("gesture") is not None else None,
+            expression=expression,
+            gesture=gesture,
+            voice_intent=voice_intent,
             claims=claims,
             claim_details=claim_details,
+            reaction_plan=reaction_plan,
         )
 
     @staticmethod
-    def _parse_claims(value: object) -> tuple[tuple[ResponseClaim, ...], tuple[Claim, ...]] | None:
+    def _parse_voice_intent(value: object) -> VoiceIntent | None:
+        if value is None:
+            return VoiceIntent()
+        if (
+            isinstance(value, dict)
+            and isinstance(value.get("style"), str)
+            and value["style"].strip()
+        ):
+            return VoiceIntent(style=value["style"].strip())
+        return None
+
+    @staticmethod
+    def _parse_reaction_plan(
+        value: object,
+        *,
+        default_expression: str,
+        default_voice_intent: VoiceIntent,
+    ) -> ReactionPlan | None:
+        if value is None:
+            return None
+        if not isinstance(value, list) or not 1 <= len(value) <= 8:
+            return None
+        segments: list[ReactionSegment] = []
+        for item in value:
+            if not isinstance(item, dict):
+                return None
+            speech = item.get("speech")
+            if not isinstance(speech, str) or not speech.strip():
+                return None
+            voice_intent = CharacterLlmService._parse_voice_intent(
+                item.get("voice_intent", {"style": default_voice_intent.style})
+            )
+            pause = item.get("pause_after_seconds", 0.0)
+            if (
+                voice_intent is None
+                or not isinstance(pause, (int, float))
+                or isinstance(pause, bool)
+            ):
+                return None
+            try:
+                segment = ReactionSegment(
+                    speech=speech.strip(),
+                    expression=str(item.get("expression") or default_expression),
+                    gesture=(
+                        str(item["gesture"])
+                        if item.get("gesture") is not None
+                        else None
+                    ),
+                    voice_intent=voice_intent,
+                    pause_after_seconds=float(pause),
+                )
+            except ValueError:
+                return None
+            segments.append(segment)
+        return ReactionPlan(tuple(segments))
+
+    @staticmethod
+    def _parse_claims(
+        value: object,
+    ) -> tuple[tuple[ResponseClaim, ...], tuple[Claim, ...]] | None:
         if not isinstance(value, list):
             return None
         claims: list[ResponseClaim] = []
@@ -483,12 +679,20 @@ class CharacterLlmService:
             details.append(
                 Claim(
                     claim_type=claim_type,
-                    activity_type=str(item["activity_type"])
-                    if item.get("activity_type") is not None
-                    else None,
-                    operation=str(item["operation"]) if item.get("operation") is not None else None,
+                    activity_type=(
+                        str(item["activity_type"])
+                        if item.get("activity_type") is not None
+                        else None
+                    ),
+                    operation=(
+                        str(item["operation"])
+                        if item.get("operation") is not None
+                        else None
+                    ),
                     status=status,
-                    target=str(item["target"]) if item.get("target") is not None else None,
+                    target=(
+                        str(item["target"]) if item.get("target") is not None else None
+                    ),
                     confidence=confidence,
                     evidence=str(item.get("evidence") or ""),
                 )
@@ -502,12 +706,14 @@ class ResponseValidator:
     def __init__(
         self,
         model: ResponseValidationModel | None = None,
-        prompt_builder: ResponseValidatorPromptBuilder | None = None,
+        prompt_builder: ResponseValidationPromptBuilder | None = None,
         claim_extractor: IndependentClaimExtractor | None = None,
         fact_validator: DeterministicFactValidator | None = None,
     ) -> None:
         self._model = model
-        self._prompt_builder = prompt_builder or ResponseValidatorPromptBuilder()
+        if model is not None and prompt_builder is None:
+            raise ValueError("modelを使用する場合はprompt_builderが必要です。")
+        self._prompt_builder = prompt_builder
         self._claim_extractor = claim_extractor or IndependentClaimExtractor()
         self._fact_validator = fact_validator or DeterministicFactValidator()
         self._trace_logger = TraceLogger()
@@ -537,10 +743,14 @@ class ResponseValidator:
             **trace.as_log_fields(),
             component_role="claim_extractor",
             self_reported_claims=[claim.value for claim in response.claims],
-            extracted_claim_types=[claim.claim_type.value for claim in extracted_claims],
+            extracted_claim_types=[
+                claim.claim_type.value for claim in extracted_claims
+            ],
             attempt=attempt,
         )
-        deterministic = self._fact_validator.validate(context, response, extracted_claims)
+        deterministic = self._fact_validator.validate(
+            context, response, extracted_claims
+        )
         if not deterministic.accepted:
             self._trace_result(source, deterministic)
             return deterministic
@@ -557,7 +767,7 @@ class ResponseValidator:
             goal="Character Responseと実行事実の整合性を評価する",
             source_event_id=source.source_event_id,
             context={
-                "plugin_prompt_override": self._prompt_builder.build(
+                "plugin_prompt_override": self._require_prompt_builder().build(
                     context,
                     response,
                     extracted_claims=extracted_claims,
@@ -569,7 +779,9 @@ class ResponseValidator:
                 "activity_turn_id": source.context.get("activity_turn_id"),
                 "ongoing_activity": source.context.get("ongoing_activity"),
                 "llm_attempt": attempt,
-                "activity_execution_result": source.context.get("activity_execution_result"),
+                "activity_execution_result": source.context.get(
+                    "activity_execution_result"
+                ),
             },
         )
         try:
@@ -591,7 +803,9 @@ class ResponseValidator:
             )
             self._trace_result(source, result)
             return result
-        objective_claims = self._parse_objective_claims(value.get("extracted_claims", []))
+        objective_claims = self._parse_objective_claims(
+            value.get("extracted_claims", [])
+        )
         if objective_claims is None:
             result = ResponseValidationResult(
                 False,
@@ -613,7 +827,9 @@ class ResponseValidator:
                 for claim in (*extracted_claims, *objective_claims)
             }.values()
         )
-        objective_facts = self._fact_validator.validate(context, response, merged_claims)
+        objective_facts = self._fact_validator.validate(
+            context, response, merged_claims
+        )
         if not objective_facts.accepted:
             self._trace_result(source, objective_facts)
             return objective_facts
@@ -624,6 +840,13 @@ class ResponseValidator:
         )
         self._trace_result(source, result)
         return result
+
+    def _require_prompt_builder(self) -> ResponseValidationPromptBuilder:
+        if self._prompt_builder is None:
+            raise RuntimeError(
+                "Response Validation Prompt Builderが構成されていません。"
+            )
+        return self._prompt_builder
 
     @staticmethod
     def _parse_objective_claims(value: object) -> tuple[Claim, ...] | None:
@@ -648,12 +871,20 @@ class ResponseValidator:
             claims.append(
                 Claim(
                     claim_type=claim_type,
-                    activity_type=str(item["activity_type"])
-                    if item.get("activity_type") is not None
-                    else None,
-                    operation=str(item["operation"]) if item.get("operation") is not None else None,
+                    activity_type=(
+                        str(item["activity_type"])
+                        if item.get("activity_type") is not None
+                        else None
+                    ),
+                    operation=(
+                        str(item["operation"])
+                        if item.get("operation") is not None
+                        else None
+                    ),
                     status=status,
-                    target=str(item["target"]) if item.get("target") is not None else None,
+                    target=(
+                        str(item["target"]) if item.get("target") is not None else None
+                    ),
                     confidence=confidence,
                     evidence=str(item.get("evidence") or ""),
                 )
@@ -710,7 +941,9 @@ class CharacterResponsePipeline:
                     activity,
                     context,
                     correction=(
-                        self._correction(validation, context) if validation is not None else None
+                        self._correction(validation, context)
+                        if validation is not None
+                        else None
                     ),
                     attempt=attempt + 1,
                 )
@@ -752,7 +985,9 @@ class CharacterResponsePipeline:
                 "character_response_pipeline:response_rejected",
                 reason=validation.reason,
                 attempt=attempt,
-                extracted_claims=[asdict(claim) for claim in validation.extracted_claims],
+                extracted_claims=[
+                    asdict(claim) for claim in validation.extracted_claims
+                ],
                 claim_differences=list(validation.claim_differences),
             )
             if attempt == 0:
@@ -761,14 +996,18 @@ class CharacterResponsePipeline:
                     source_activity_id=activity.activity_id,
                     reason=validation.reason,
                     invalid_claims=[claim.value for claim in validation.invalid_claims],
-                    extracted_claims=[asdict(claim) for claim in validation.extracted_claims],
+                    extracted_claims=[
+                        asdict(claim) for claim in validation.extracted_claims
+                    ],
                 )
         fallback = self._safe_fallback(context)
         self._trace_logger.warning(
             "character_response_pipeline:safe_fallback_used",
             source_activity_id=activity.activity_id,
             execution_status=context.status.value,
-            last_validation_reason=validation.reason if validation is not None else None,
+            last_validation_reason=(
+                validation.reason if validation is not None else None
+            ),
         )
         return fallback, CharacterGenerationResult(
             status=CharacterGenerationStatus.FALLBACK_USED,
@@ -801,9 +1040,15 @@ class CharacterResponsePipeline:
                 or (trace.activity_turn_id if trace is not None else None)
                 or activity.activity_id
             ),
-            str(ongoing_id or (trace.ongoing_activity_id if trace is not None else None))
-            if ongoing_id is not None or (trace is not None and trace.ongoing_activity_id)
-            else None,
+            (
+                str(
+                    ongoing_id
+                    or (trace.ongoing_activity_id if trace is not None else None)
+                )
+                if ongoing_id is not None
+                or (trace is not None and trace.ongoing_activity_id)
+                else None
+            ),
         )
 
     @staticmethod
@@ -817,7 +1062,9 @@ class CharacterResponsePipeline:
                 "invalid_self_reported_claims": [
                     claim.value for claim in validation.invalid_claims
                 ],
-                "invalid_speech_claims": [asdict(claim) for claim in validation.extracted_claims],
+                "invalid_speech_claims": [
+                    asdict(claim) for claim in validation.extracted_claims
+                ],
                 "claim_differences": list(validation.claim_differences),
                 "execution_status": context.status.value,
                 "activity_type": context.activity_type,

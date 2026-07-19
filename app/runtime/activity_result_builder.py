@@ -26,10 +26,14 @@ def build_activity_result(
                 "text": action.text,
                 "status": execution.status.value if execution is not None else None,
                 "error": execution.error if execution is not None else None,
-                "started_at": execution.started_at.isoformat() if execution is not None else None,
-                "finished_at": execution.finished_at.isoformat()
-                if execution is not None and execution.finished_at is not None
-                else None,
+                "started_at": (
+                    execution.started_at.isoformat() if execution is not None else None
+                ),
+                "finished_at": (
+                    execution.finished_at.isoformat()
+                    if execution is not None and execution.finished_at is not None
+                    else None
+                ),
             }
         )
     speech_text = next(
@@ -45,7 +49,9 @@ def build_activity_result(
         summary = speech_text
     elif action_plan_group.action_plans:
         result_type = "action_output"
-        summary = ", ".join(action.action_type.value for action in action_plan_group.action_plans)
+        summary = ", ".join(
+            action.action_type.value for action in action_plan_group.action_plans
+        )
     else:
         result_type = "no_action"
         summary = "実行Actionなし"
@@ -55,14 +61,20 @@ def build_activity_result(
         summary=summary,
         data={
             "output_unit_id": action_plan_group.group_id,
-            "activity_turn_id": output_result.activity_turn_id
-            if output_result is not None
-            else None,
-            "output_status": output_result.status.value if output_result is not None else None,
+            "activity_turn_id": (
+                output_result.activity_turn_id if output_result is not None else None
+            ),
+            "output_status": (
+                output_result.status.value if output_result is not None else None
+            ),
             "actions": actions,
         },
         succeeded=output_result is None or output_result.status.value == "completed",
         trace_id=output_result.trace_id if output_result is not None else None,
-        parent_trace_id=output_result.parent_trace_id if output_result is not None else None,
-        activity_turn_id=(output_result.activity_turn_id if output_result is not None else None),
+        parent_trace_id=(
+            output_result.parent_trace_id if output_result is not None else None
+        ),
+        activity_turn_id=(
+            output_result.activity_turn_id if output_result is not None else None
+        ),
     )

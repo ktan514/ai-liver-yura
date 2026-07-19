@@ -1,5 +1,3 @@
-
-
 import pytest
 
 from app.domain.activities import Activity, ActivityType
@@ -91,9 +89,7 @@ async def test_enrich_adds_similar_topic_memories_to_activity_context() -> None:
         topic_memory_store=topic_memory_store,
         search_limit=3,
     )
-    activity = _activity(
-        context={"event_payload": {"text": "クラゲの話をしたい"}}
-    )
+    activity = _activity(context={"event_payload": {"text": "クラゲの話をしたい"}})
 
     enriched_activity = await usecase.enrich(activity)
 
@@ -136,7 +132,9 @@ async def test_enrich_returns_original_activity_when_embedding_is_empty() -> Non
 
 
 @pytest.mark.asyncio
-async def test_enrich_returns_original_activity_when_no_similar_topic_memories_are_found() -> None:
+async def test_enrich_returns_original_activity_when_no_similar_topic_memories_are_found() -> (
+    None
+):
     embedding_generator = FakeEmbeddingGenerator(embedding=[0.1, 0.2, 0.3])
     topic_memory_store = FakeTopicMemoryStore(similar_topic_memories=[])
     usecase = EnrichActivityWithTopicMemoryUsecase(
@@ -152,7 +150,9 @@ async def test_enrich_returns_original_activity_when_no_similar_topic_memories_a
 
 
 @pytest.mark.asyncio
-async def test_enrich_returns_original_activity_when_embedding_generation_fails() -> None:
+async def test_enrich_returns_original_activity_when_embedding_generation_fails() -> (
+    None
+):
     topic_memory_store = FakeTopicMemoryStore(similar_topic_memories=[])
     usecase = EnrichActivityWithTopicMemoryUsecase(
         embedding_generator=ErrorEmbeddingGenerator(),

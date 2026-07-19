@@ -8,7 +8,10 @@ from uuid import uuid4
 from app.domain.activities.activity_result import ActivityResult
 from app.domain.activities.activity_status import ActivityStatus
 from app.domain.activities.activity_turn import ActivityTurn
-from app.domain.activity_turn_result import ActivityOutputResult, CharacterGenerationResult
+from app.domain.activity_turn_result import (
+    ActivityOutputResult,
+    CharacterGenerationResult,
+)
 from app.domain.character_response import ActivityExecutionResult
 from app.domain.trace_context import TraceContext
 
@@ -44,7 +47,9 @@ class OngoingActivity:
         return replace(
             self,
             last_result=result if result is not None else self.last_result,
-            expected_input=(expected_input if expected_input is not None else self.expected_input),
+            expected_input=(
+                expected_input if expected_input is not None else self.expected_input
+            ),
             context=context,
             turns=turns,
             updated_at=datetime.now(timezone.utc),
@@ -100,7 +105,9 @@ class OngoingActivity:
             self,
             status=ActivityStatus.WAITING if waiting_input else ActivityStatus.ACTIVE,
             last_execution_result=result,
-            expected_input=expected_input if expected_input is not None else self.expected_input,
+            expected_input=(
+                expected_input if expected_input is not None else self.expected_input
+            ),
             context={**self.context, **(context_updates or {})},
             turns=turns,
             updated_at=datetime.now(timezone.utc),

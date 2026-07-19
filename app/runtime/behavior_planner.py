@@ -23,6 +23,7 @@ from app.domain.behavior import (
     SituationAnalysis,
 )
 from app.ports.llm_roles import ResponseGeneratorRoleAdapter
+from app.ports.prompt_builder import SituationPromptBuilder
 from app.ports.response_generator import ResponseGenerator
 from app.runtime.ongoing_input import (
     OngoingActivityTransitionPolicy,
@@ -40,6 +41,7 @@ class BehaviorPlanner:
         response_generator: ResponseGenerator | None = None,
         *,
         situation_evaluator: SituationEvaluator | None = None,
+        situation_prompt_builder: SituationPromptBuilder | None = None,
         confidence_threshold: float = 0.85,
         max_semantic_attempts: int = 1,
         ongoing_input_interpreter: OngoingInputInterpreter | None = None,
@@ -47,29 +49,43 @@ class BehaviorPlanner:
         constraint_validator: ActivityConstraintValidator | None = None,
     ) -> None:
         if not 0.0 <= confidence_threshold <= 1.0:
-            raise ValueError("confidence_threshold は0.0以上1.0以下で指定してください。")
+            raise ValueError(
+                "confidence_threshold は0.0以上1.0以下で指定してください。"
+            )
         if max_semantic_attempts < 1:
             raise ValueError("max_semantic_attempts は1以上で指定してください。")
         if situation_evaluator is None:
             if response_generator is None:
-                raise ValueError("situation_evaluator または response_generator が必要です。")
+                raise ValueError(
+                    "situation_evaluator または response_generator が必要です。"
+                )
+            if situation_prompt_builder is None:
+                raise ValueError(
+                    "response_generatorを使用する場合はsituation_prompt_builderが必要です。"
+                )
             situation_evaluator = SituationEvaluator(
                 ResponseGeneratorRoleAdapter(response_generator),
+                prompt_builder=situation_prompt_builder,
                 confidence_threshold=confidence_threshold,
                 max_attempts=max_semantic_attempts,
             )
         self._situation_evaluator = situation_evaluator
         self._confidence_threshold = confidence_threshold
-        self._ongoing_input_interpreter = ongoing_input_interpreter or OngoingInputInterpreter(
-            confidence_threshold=confidence_threshold
+        self._ongoing_input_interpreter = (
+            ongoing_input_interpreter
+            or OngoingInputInterpreter(confidence_threshold=confidence_threshold)
         )
         self._ongoing_transition_policy = (
             ongoing_transition_policy or OngoingActivityTransitionPolicy()
         )
-        self._constraint_validator = constraint_validator or ActivityConstraintValidator()
+        self._constraint_validator = (
+            constraint_validator or ActivityConstraintValidator()
+        )
         self._trace_logger = TraceLogger()
 
-    async def evaluate_situation(self, context: BehaviorPlanningContext) -> SituationAnalysis:
+    async def evaluate_situation(
+        self, context: BehaviorPlanningContext
+    ) -> SituationAnalysis:
         """RuntimeCoordinator向けの明示的なSituation Evaluator境界。"""
 
         return await self._situation_evaluator.evaluate(context)
@@ -84,7 +100,9 @@ class BehaviorPlanner:
         energy = float(context.drive_state.get("energy", 0.0))
         talkativeness_value = context.emotion_state.get("talkativeness", 0.0)
         talkativeness = (
-            float(talkativeness_value) if isinstance(talkativeness_value, (int, float)) else 0.0
+            float(talkativeness_value)
+            if isinstance(talkativeness_value, (int, float))
+            else 0.0
         )
         if context.ongoing_activity is not None:
             decision = BehaviorDecision.WAIT
@@ -105,9 +123,11 @@ class BehaviorPlanner:
             decision=decision,
             activity_type=activity_type,
             goal=goal,
-            operation=ActivityOperation.START
-            if decision == BehaviorDecision.START_ACTIVITY
-            else None,
+            operation=(
+                ActivityOperation.START
+                if decision == BehaviorDecision.START_ACTIVITY
+                else None
+            ),
             constraints=dict(analysis.constraints),
             planner_constraints=(
                 "発話本文を生成しない",
@@ -120,7 +140,9 @@ class BehaviorPlanner:
             topic=analysis.topic_candidate,
             planning_reason=analysis.planning_reason,
             autonomous_action=action,
-            trace_id=(context.trace_context.trace_id if context.trace_context else None),
+            trace_id=(
+                context.trace_context.trace_id if context.trace_context else None
+            ),
             parent_trace_id=(
                 context.trace_context.parent_trace_id if context.trace_context else None
             ),
@@ -174,6 +196,22 @@ class BehaviorPlanner:
         analysis: SituationAnalysis,
     ) -> ActivityPlan:
         definition = self._resolve_definition(context, analysis.activity_candidate)
+        if analysis.evaluator_type == "administrator_direction":
+            return ActivityPlan(
+                decision=BehaviorDecision.CONVERSATION,
+                activity_type="directed_talk",
+                goal=analysis.goal,
+                operation=ActivityOperation.DISCUSS,
+                constraints=dict(analysis.constraints),
+                planner_constraints=(
+                    "指示への返事だけで終わらず、依頼されたトーク内容を実際に生成する",
+                    "OBS、YouTube、配信状態を操作・確認したとは主張しない",
+                ),
+                speech_act=analysis.speech_act,
+                confidence=analysis.confidence,
+                reason=analysis.reason,
+                planner_type=analysis.evaluator_type,
+            )
         if definition is not None:
             validation = self._constraint_validator.validate(
                 analysis.constraints,
@@ -210,7 +248,9 @@ class BehaviorPlanner:
                 constraint_errors=(),
                 constraints_schema_version=validation.schema_version,
             )
-        ongoing_interpretation = self._ongoing_input_interpreter.interpret(context, analysis)
+        ongoing_interpretation = self._ongoing_input_interpreter.interpret(
+            context, analysis
+        )
         if ongoing_interpretation is not None:
             return self._ongoing_transition_policy.plan(
                 context,
@@ -218,7 +258,10 @@ class BehaviorPlanner:
                 ongoing_interpretation,
             )
 
-        if analysis.evaluator_type == "llm" and analysis.confidence < self._confidence_threshold:
+        if (
+            analysis.evaluator_type == "llm"
+            and analysis.confidence < self._confidence_threshold
+        ):
             return ActivityPlan(
                 decision=BehaviorDecision.ASK_CONFIRMATION,
                 activity_type=(
@@ -319,7 +362,9 @@ class BehaviorPlanner:
             analysis,
         )
 
-    def fallback_after_rejection(self, rejected: ActivityPlanEvaluation) -> ActivityPlan:
+    def fallback_after_rejection(
+        self, rejected: ActivityPlanEvaluation
+    ) -> ActivityPlan:
         """拒否Resultを受け、同一Activityを再提案せず会話へ遷移する。"""
 
         return ActivityPlan(
@@ -343,11 +388,19 @@ class BehaviorPlanner:
         if activity_type is None:
             return None
         definition = next(
-            (item for item in context.activity_definitions if item.activity_type == activity_type),
+            (
+                item
+                for item in context.activity_definitions
+                if item.activity_type == activity_type
+            ),
             None,
         )
         active = context.active_activity_definition
-        if definition is None and active is not None and active.activity_type == activity_type:
+        if (
+            definition is None
+            and active is not None
+            and active.activity_type == activity_type
+        ):
             return active
         return definition
 
@@ -358,12 +411,16 @@ class ActivityPlanValidator:
     def __init__(
         self,
         capability_available: Callable[[str, str | None], bool],
-        activity_definitions: Callable[[], tuple[ActivityDefinition, ...]] | None = None,
+        activity_definitions: (
+            Callable[[], tuple[ActivityDefinition, ...]] | None
+        ) = None,
         constraint_validator: ActivityConstraintValidator | None = None,
     ) -> None:
         self._capability_available = capability_available
         self._activity_definitions = activity_definitions
-        self._constraint_validator = constraint_validator or ActivityConstraintValidator()
+        self._constraint_validator = (
+            constraint_validator or ActivityConstraintValidator()
+        )
         self._trace_logger = TraceLogger()
 
     def validate(self, plan: ActivityPlan) -> ActivityPlanEvaluation:
@@ -397,11 +454,15 @@ class ActivityPlanValidator:
                 ),
                 None,
             )
-            if definition is None or plan.operation not in definition.supported_operations:
+            if (
+                definition is None
+                or plan.operation not in definition.supported_operations
+            ):
                 return self._reject(plan, "activity_definition_not_found")
             if (
                 plan.constraints_schema_version is not None
-                and plan.constraints_schema_version != definition.constraints_schema_version
+                and plan.constraints_schema_version
+                != definition.constraints_schema_version
             ):
                 self._trace_logger.info(
                     "activity_constraints:schema_version_mismatch",
@@ -507,7 +568,9 @@ class ActivityPlanValidator:
             parent_trace_id=evaluation.plan.parent_trace_id,
             behavior_plan_id=evaluation.plan.behavior_plan_id,
             activity_type=evaluation.plan.activity_type,
-            operation=evaluation.plan.operation.value if evaluation.plan.operation else None,
+            operation=(
+                evaluation.plan.operation.value if evaluation.plan.operation else None
+            ),
             required_capability=evaluation.plan.required_capability,
             provider_plugin_id=evaluation.plan.provider_plugin_id,
             capability=evaluation.plan.required_capability,

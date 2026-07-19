@@ -19,7 +19,8 @@ class ResponseValidatorPromptBuilder:
         return "\n".join(
             [
                 "あなたはResponse Validatorです。表現の事実整合性だけを評価する。",
-                "Response Context: " + json.dumps(asdict(context), ensure_ascii=False, default=str),
+                "Response Context: "
+                + json.dumps(asdict(context), ensure_ascii=False, default=str),
                 "Character Response: "
                 + json.dumps(asdict(response), ensure_ascii=False, default=str),
                 "Speechから独立抽出済みのClaims: "

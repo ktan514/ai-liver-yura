@@ -20,7 +20,8 @@ def completed_speech_text(
         (
             action.text
             for action in group.action_plans
-            if action.action_type == ActionType.SPEAK and action.action_id in completed_ids
+            if action.action_type == ActionType.SPEAK
+            and action.action_id in completed_ids
         ),
         None,
     )

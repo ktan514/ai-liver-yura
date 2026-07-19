@@ -137,7 +137,9 @@ def test_starting_other_activity_requires_confirmation_and_preserves_current() -
     assert plan.requested_new_activity == "quiz"
 
 
-def test_explicit_switch_builds_stop_then_start_plan_without_preserving_current() -> None:
+def test_explicit_switch_builds_stop_then_start_plan_without_preserving_current() -> (
+    None
+):
     context = _context()
     analysis = SituationAnalysis(
         "quiz",

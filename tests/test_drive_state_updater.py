@@ -1,5 +1,3 @@
-
-
 from datetime import datetime, timezone
 
 from app.domain.drives import DriveState
@@ -10,7 +8,9 @@ from app.runtime.drive_state_updater import DriveStateUpdater
 def test_update_by_user_text_increases_engagement_and_curiosity() -> None:
     updater = DriveStateUpdater()
     drive = DriveState(curiosity=0.4, engagement=0.4, boredom=0.5, energy=0.8)
-    event = AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"})
+    event = AgentEvent(
+        event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"}
+    )
 
     updated_drive = updater.update_by_event(drive, event)
 

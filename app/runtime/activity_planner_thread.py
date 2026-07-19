@@ -39,8 +39,9 @@ class ActivityPlanningService:
         self,
         agent_life_service: AgentLifeService,
         activity_manager: ActivityManager,
-        enrich_activity_with_topic_memory_usecase: EnrichActivityWithTopicMemoryUsecase
-        | None = None,
+        enrich_activity_with_topic_memory_usecase: (
+            EnrichActivityWithTopicMemoryUsecase | None
+        ) = None,
         behavior_planner: BehaviorPlanner | None = None,
         autonomous_situation_evaluator: AutonomousSituationEvaluator | None = None,
         short_term_memory: ShortTermMemory | None = None,
@@ -49,7 +50,9 @@ class ActivityPlanningService:
     ) -> None:
         self._agent_life_service = agent_life_service
         self._activity_manager = activity_manager
-        self._enrich_activity_with_topic_memory_usecase = enrich_activity_with_topic_memory_usecase
+        self._enrich_activity_with_topic_memory_usecase = (
+            enrich_activity_with_topic_memory_usecase
+        )
         self._behavior_planner = behavior_planner
         self._autonomous_situation_evaluator = (
             autonomous_situation_evaluator or AutonomousSituationEvaluator()
@@ -66,7 +69,10 @@ class ActivityPlanningService:
             return None
 
         autonomous_plan = None
-        if event.event_type == AgentEventType.CURIOSITY_PEAK and self._behavior_planner is not None:
+        if (
+            event.event_type == AgentEventType.CURIOSITY_PEAK
+            and self._behavior_planner is not None
+        ):
             event, autonomous_plan = self._plan_autonomous_event(event, now=now)
             if event is None:
                 return None
@@ -78,13 +84,16 @@ class ActivityPlanningService:
             source="agent_life_service",
             planning_reason=(
                 autonomous_plan.planning_reason
-                if autonomous_plan is not None and autonomous_plan.planning_reason is not None
+                if autonomous_plan is not None
+                and autonomous_plan.planning_reason is not None
                 else event.event_type.value
             ),
             priority=activity.priority,
             planned_drive=self._agent_life_service.agent_state.current_drive,
             planned_emotion=self._agent_life_service.agent_state.current_emotion,
-            planned_topic=autonomous_plan.topic if autonomous_plan is not None else None,
+            planned_topic=(
+                autonomous_plan.topic if autonomous_plan is not None else None
+            ),
         )
 
     def _plan_autonomous_event(
@@ -107,12 +116,21 @@ class ActivityPlanningService:
             source_event_id=event.event_id,
             agent_state={
                 "attention_target": state.attention_target,
-                "active_activity": state.active_activity.activity_type.value
-                if state.active_activity is not None
-                else None,
+                "active_activity": (
+                    state.active_activity.activity_type.value
+                    if state.active_activity is not None
+                    else None
+                ),
+                "situation": state.current_situation.as_context(),
+                "memory": state.memory.as_context(),
             },
             drive_state=asdict(state.current_drive),
             emotion_state=asdict(state.current_emotion),
+            relationship_state=(
+                state.relationship_memory.current.as_context()
+                if state.relationship_memory.current is not None
+                else {}
+            ),
             topic_state=asdict(topic) if topic is not None else {},
             recent_speech_summary=(
                 self._short_term_memory.build_recent_speech_summary(limit=3)
@@ -133,9 +151,12 @@ class ActivityPlanningService:
                 else None
             ),
             available_activity_definitions=tuple(
-                str(getattr(definition, "activity_type", definition)) for definition in definitions
+                str(getattr(definition, "activity_type", definition))
+                for definition in definitions
             ),
-            current_time_context=(now or datetime.now(timezone.utc)).astimezone().isoformat(),
+            current_time_context=(now or datetime.now(timezone.utc))
+            .astimezone()
+            .isoformat(),
             event_context=dict(event.payload),
             trace_context=event.trace_context,
         )
@@ -153,7 +174,9 @@ class ActivityPlanningService:
             "behavior_plan": {
                 "decision": plan.decision.value,
                 "activity_type": plan.activity_type,
-                "operation": plan.operation.value if plan.operation is not None else None,
+                "operation": (
+                    plan.operation.value if plan.operation is not None else None
+                ),
                 "goal": plan.goal,
                 "topic": plan.topic,
                 "planning_reason": plan.planning_reason,
@@ -163,11 +186,16 @@ class ActivityPlanningService:
                 "behavior_plan_id": plan.behavior_plan_id,
             },
         }
-        return replace(
-            event,
-            payload=payload,
-            trace_context=event.trace_context.derive(behavior_plan_id=plan.behavior_plan_id),
-        ), plan
+        return (
+            replace(
+                event,
+                payload=payload,
+                trace_context=event.trace_context.derive(
+                    behavior_plan_id=plan.behavior_plan_id
+                ),
+            ),
+            plan,
+        )
 
     def _create_activity(self, event: AgentEvent) -> Activity:
         """Event から Activity を生成し、AgentState にも同期する。"""
@@ -183,10 +211,14 @@ class ActivityPlanningService:
         if self._enrich_activity_with_topic_memory_usecase is None:
             return activity
 
-        return asyncio.run(self._enrich_activity_with_topic_memory_usecase.enrich(activity))
+        return asyncio.run(
+            self._enrich_activity_with_topic_memory_usecase.enrich(activity)
+        )
 
     def cancel_planned_activity(self, planned: PlannedActivity, *, reason: str) -> None:
-        self._activity_manager.cancel_activity(planned.activity.activity_id, reason=reason)
+        self._activity_manager.cancel_activity(
+            planned.activity.activity_id, reason=reason
+        )
         self._agent_life_service.sync_from_activity_manager()
 
 
@@ -257,7 +289,9 @@ class ActivityPlannerThread(threading.Thread):
                     if self._canceling_trace_context is not None
                     else None
                 ),
-                canceled_trace_id=(canceled_trace.trace_id if canceled_trace is not None else None),
+                canceled_trace_id=(
+                    canceled_trace.trace_id if canceled_trace is not None else None
+                ),
                 planned_activity_id=planned_activity.planned_activity_id,
                 activity_id=planned_activity.activity.activity_id,
                 reason="user_text_received_during_planning",

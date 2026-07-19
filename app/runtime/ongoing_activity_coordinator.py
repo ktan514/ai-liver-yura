@@ -130,7 +130,7 @@ class OngoingActivityCoordinator:
         ongoing = self._activity_manager.ongoing_activity
         if ongoing is None:
             return None
-        expected_session_id = ongoing.context.get("game_session_id")
+        expected_session_id = ongoing.context.get("plugin_session_id")
         expected_plugin_id = ongoing.context.get("plugin_id")
         if expected_plugin_id != plugin_id or (
             expected_session_id is not None and expected_session_id != session_id
@@ -149,5 +149,7 @@ class OngoingActivityCoordinator:
             ActivityStatus.WAITING,
             ActivityStatus.SUSPENDED,
         }:
-            raise RuntimeError(f"継続できないOngoingActivity状態です: {ongoing.status.value}")
+            raise RuntimeError(
+                f"継続できないOngoingActivity状態です: {ongoing.status.value}"
+            )
         return ongoing

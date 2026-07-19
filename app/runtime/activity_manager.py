@@ -13,23 +13,20 @@ from app.domain.activities import (
 from app.domain.activity_turn_result import ActivityOutputResult, ActivityTurnResult
 from app.domain.character_response import ActivityExecutionResult
 from app.domain.events import AgentEvent, AgentEventType
-from app.domain.games import GameSession
 from app.domain.trace_context import TraceContext
-from app.runtime.game_engine import GameEngine
 from app.utils.trace import TraceLogger
 
 
 class ActivityManager:
     """Activity の生成・前面化・保留・一時停止を管理する。"""
 
-    def __init__(self, game_engine: GameEngine | None = None) -> None:
+    def __init__(self) -> None:
         self._activities: dict[str, Activity] = {}
         self._foreground_activity_id: str | None = None
         self._ongoing_activity: OngoingActivity | None = None
         self._ongoing_activity_history: list[OngoingActivity] = []
         self._last_activity_result: ActivityResult | None = None
         self._turn_results: dict[str, ActivityTurnResult] = {}
-        self._game_engine = game_engine
         self._lock = threading.RLock()
         self._trace_logger = TraceLogger()
         self._lifecycle_gate: ActivityPolicy | None = None
@@ -48,73 +45,11 @@ class ActivityManager:
         with self._lock:
             return self._activities.get(activity_id)
 
-    @property
-    def game_engine(self) -> GameEngine:
-        if self._game_engine is None:
-            self._game_engine = GameEngine()
-        return self._game_engine
-
     def register_plugin_activity(self, activity: Activity) -> Activity:
         """Pluginが要求した汎用ActivityをCoreのライフサイクルへ登録する。"""
 
         with self._lock:
             return self._resolve_activity(activity)
-
-    def start_game_activity(
-        self,
-        game_type: str,
-        *,
-        goal: str,
-        priority: int = 100,
-        metadata: dict[str, object] | None = None,
-    ) -> tuple[GameSession, Activity]:
-        """明示的な呼び出しでSessionを開始し、既存Runtime用Activityへ接続する。"""
-
-        with self._lock:
-            session = self.game_engine.start_game(game_type, metadata=metadata)
-            return session, self.create_game_activity(
-                session,
-                goal=goal,
-                priority=priority,
-            )
-
-    def create_game_activity(
-        self,
-        session: GameSession,
-        *,
-        goal: str,
-        priority: int = 100,
-        context_updates: dict[str, object] | None = None,
-    ) -> Activity:
-        """GameSessionを参照するActivityを通常のActivity管理へ登録する。"""
-
-        with self._lock:
-            current_session = self.game_engine.get_current_session()
-            if current_session is None or current_session.session_id != session.session_id:
-                raise ValueError("GameEngineが管理していないSessionのActivityは作成できません。")
-            activity = Activity(
-                activity_type=ActivityType.GAME_WITH_USER,
-                goal=goal,
-                priority=priority,
-                context={
-                    "game_session_id": session.session_id,
-                    "game_type": session.game_type,
-                    "game_status": session.status.value,
-                    "game_metadata": dict(session.metadata),
-                    "game_current_turn": session.current_turn,
-                    **(context_updates or {}),
-                },
-                interruptible=False,
-            )
-            resolved = self._resolve_activity(activity)
-            self._trace_logger.info(
-                "activity_manager:game_activity:created",
-                activity_id=resolved.activity_id,
-                activity_status=resolved.status.value,
-                session_id=session.session_id,
-                game_type=session.game_type,
-            )
-            return resolved
 
     @property
     def ongoing_activity(self) -> OngoingActivity | None:
@@ -179,8 +114,12 @@ class ActivityManager:
                 "activity_manager:ongoing_activity:updated",
                 ongoing_activity_id=updated.ongoing_activity_id,
                 ongoing_activity_type=updated.activity_type,
-                result_type=updated.last_result.result_type if updated.last_result else None,
-                result_succeeded=updated.last_result.succeeded if updated.last_result else None,
+                result_type=(
+                    updated.last_result.result_type if updated.last_result else None
+                ),
+                result_succeeded=(
+                    updated.last_result.succeeded if updated.last_result else None
+                ),
                 expected_input=updated.expected_input,
                 updated_context_keys=sorted((context_updates or {}).keys()),
             )
@@ -270,18 +209,26 @@ class ActivityManager:
                 "activity_manager:activity_turn:result_recorded",
                 activity_turn_id=result.activity_turn_id,
                 ongoing_activity_id=result.ongoing_activity_id,
-                activity_execution_result_id=result.execution_result.result_id
-                if result.execution_result is not None
-                else None,
-                character_generation_result_id=result.character_result.result_id
-                if result.character_result is not None
-                else None,
-                output_unit_id=result.output_result.output_unit_id
-                if result.output_result is not None
-                else None,
-                activity_result_id=result.output_result.activity_result_id
-                if result.output_result is not None
-                else None,
+                activity_execution_result_id=(
+                    result.execution_result.result_id
+                    if result.execution_result is not None
+                    else None
+                ),
+                character_generation_result_id=(
+                    result.character_result.result_id
+                    if result.character_result is not None
+                    else None
+                ),
+                output_unit_id=(
+                    result.output_result.output_unit_id
+                    if result.output_result is not None
+                    else None
+                ),
+                activity_result_id=(
+                    result.output_result.activity_result_id
+                    if result.output_result is not None
+                    else None
+                ),
                 final_status=result.final_status,
                 failure_stage=result.failure_stage,
             )
@@ -413,7 +360,9 @@ class ActivityManager:
                 operation, session_id, trace_id=event.trace_context.trace_id
             )
             if not decision.allowed:
-                raise RuntimeError(decision.reason_code or "lifecycle.operation_not_allowed")
+                raise RuntimeError(
+                    decision.reason_code or "lifecycle.operation_not_allowed"
+                )
         prepared = self._find_by_source_event(event.event_id)
         if prepared is not None:
             self._trace_logger.info(
@@ -537,7 +486,8 @@ class ActivityManager:
                 activity
                 for activity in self._activities.values()
                 if activity.activity_type == ActivityType.AUTONOMOUS_TALK
-                and activity.status in {ActivityStatus.PENDING, ActivityStatus.SUSPENDED}
+                and activity.status
+                in {ActivityStatus.PENDING, ActivityStatus.SUSPENDED}
             ]
             discarded: list[Activity] = []
             for activity in targets:
@@ -555,7 +505,9 @@ class ActivityManager:
     def complete_foreground_activity(self) -> Activity | None:
         foreground = self.foreground_activity
         if foreground is None:
-            self._trace_logger.write("activity_manager:complete_foreground_activity:no_foreground")
+            self._trace_logger.write(
+                "activity_manager:complete_foreground_activity:no_foreground"
+            )
             return None
 
         self._trace_logger.write(
@@ -565,7 +517,10 @@ class ActivityManager:
             activity_status=foreground.status.value,
         )
 
-        if foreground.activity_type == ActivityType.CONVERSATION_WITH_USER:
+        if foreground.activity_type in {
+            ActivityType.CONVERSATION_WITH_USER,
+            ActivityType.DIRECTED_TALK,
+        }:
             self.discard_deferred_autonomous(reason="conversation_response_completed")
         completed = self.complete_activity(foreground.activity_id)
         self.resume_next_pending()
@@ -586,16 +541,19 @@ class ActivityManager:
                 result is not None
                 and activity is not None
                 and ongoing is not None
-                and activity.context.get("ongoing_activity_id") == ongoing.ongoing_activity_id
+                and activity.context.get("ongoing_activity_id")
+                == ongoing.ongoing_activity_id
             ):
                 self.update_ongoing_activity(result=result)
             if result is not None:
                 self._last_activity_result = result
-            if (
-                activity is not None
-                and activity.activity_type == ActivityType.CONVERSATION_WITH_USER
-            ):
-                self.discard_deferred_autonomous(reason="conversation_response_completed")
+            if activity is not None and activity.activity_type in {
+                ActivityType.CONVERSATION_WITH_USER,
+                ActivityType.DIRECTED_TALK,
+            }:
+                self.discard_deferred_autonomous(
+                    reason="conversation_response_completed"
+                )
             was_foreground = self._foreground_activity_id == activity_id
             completed = self.complete_activity(activity_id)
             if was_foreground:
@@ -603,23 +561,75 @@ class ActivityManager:
             return completed
 
     def resume_next_pending(self) -> Activity | None:
-        pending_activities = self.pending_activities()
-        if not pending_activities:
-            self._trace_logger.write("activity_manager:resume_next_pending:no_pending")
-            return None
+        """互換API。未開始または中断中の次Activityを再開する。"""
 
-        next_activity = max(pending_activities, key=lambda activity: activity.priority)
-        self._trace_logger.write(
-            "activity_manager:resume_next_pending:selected",
+        return self.resume_next_deferred(reason="foreground_completed")
+
+    def resume_next_deferred(self, *, reason: str) -> Activity | None:
+        with self._lock:
+            return self._resume_next_deferred_locked(reason=reason)
+
+    def _resume_next_deferred_locked(self, *, reason: str) -> Activity | None:
+        if self.foreground_activity is not None:
+            self._trace_logger.warning(
+                "activity_manager:resume_next_deferred:foreground_exists",
+                foreground_activity_id=self._foreground_activity_id,
+                reason=reason,
+            )
+            return None
+        candidates = [*self.pending_activities(), *self.suspended_activities()]
+        if not candidates:
+            self._trace_logger.write(
+                "activity_manager:resume_next_deferred:no_candidate",
+                reason=reason,
+            )
+            return None
+        next_activity = max(
+            candidates,
+            key=lambda activity: (
+                activity.priority,
+                activity.status == ActivityStatus.SUSPENDED,
+                -activity.created_at.timestamp(),
+            ),
+        )
+        previous_status = next_activity.status
+        self._trace_logger.info(
+            "activity_manager:resume_next_deferred:selected",
             activity_id=next_activity.activity_id,
             activity_type=next_activity.activity_type.value,
             activity_priority=next_activity.priority,
-            pending_activity_count=len(pending_activities),
+            previous_status=previous_status.value,
+            candidate_count=len(candidates),
+            reason=reason,
         )
         return self._activate(next_activity)
 
+    def resume_activity(self, activity_id: str, *, reason: str) -> Activity | None:
+        """明示されたpending/suspended Activityを、競合がない場合だけ再開する。"""
+
+        with self._lock:
+            if self.foreground_activity is not None:
+                return None
+            activity = self._activities.get(activity_id)
+            if activity is None or activity.status not in {
+                ActivityStatus.PENDING,
+                ActivityStatus.SUSPENDED,
+            }:
+                return None
+            self._trace_logger.info(
+                "activity_manager:activity_resumed",
+                activity_id=activity.activity_id,
+                activity_type=activity.activity_type.value,
+                previous_status=activity.status.value,
+                reason=reason,
+            )
+            return self._activate(activity)
+
     def _create_activity_from_event(self, event: AgentEvent) -> Activity:
-        if event.event_type in (AgentEventType.USER_TEXT, AgentEventType.YOUTUBE_COMMENT):
+        if event.event_type in (
+            AgentEventType.USER_TEXT,
+            AgentEventType.YOUTUBE_COMMENT,
+        ):
             ongoing = self._ongoing_activity
             if ongoing is not None:
                 ongoing = ongoing.begin_turn(
@@ -630,9 +640,15 @@ class ActivityManager:
                 self._ongoing_activity = ongoing
             context: dict[str, object] = {
                 "event_payload": event.payload,
+                "input_authority": {
+                    "role": event.authority.role,
+                    "instruction_trusted": event.authority.instruction_trusted,
+                },
                 "is_ongoing_activity_input": ongoing is not None,
                 "trace_context": (
-                    ongoing.turns[-1].trace_context if ongoing is not None else event.trace_context
+                    ongoing.turns[-1].trace_context
+                    if ongoing is not None
+                    else event.trace_context
                 ),
             }
             goal = "ユーザー入力に応答する"
@@ -642,6 +658,26 @@ class ActivityManager:
                 context["activity_turn"] = ongoing.turns[-1]
                 goal = f"複数ターン活動「{ongoing.activity_type}」を継続する"
             context["is_ongoing_activity_input"] = ongoing is not None
+            behavior_plan_value = event.payload.get("behavior_plan")
+            behavior_plan = (
+                behavior_plan_value if isinstance(behavior_plan_value, dict) else {}
+            )
+            if (
+                ongoing is None
+                and event.authority.instruction_trusted
+                and behavior_plan.get("planner_type") == "administrator_direction"
+            ):
+                return Activity(
+                    activity_type=ActivityType.DIRECTED_TALK,
+                    goal=str(
+                        behavior_plan.get("goal")
+                        or "管理者の自然文による進行指示に沿ってトークする"
+                    ),
+                    priority=140 + event.priority,
+                    context=context,
+                    interruptible=False,
+                    source_event_id=event.event_id,
+                )
             return Activity(
                 activity_type=ActivityType.CONVERSATION_WITH_USER,
                 goal=goal,
@@ -652,11 +688,25 @@ class ActivityManager:
             )
 
         if event.event_type == AgentEventType.APP_STARTED:
+            startup_focuses = (
+                "今の気分を一言だけこぼす",
+                "好きなものへの小さな連想から話し始める",
+                "これから話したいことを軽く予告する",
+                "静かな独り言のように場を開く",
+                "最近の記憶へ短く触れて話を始める",
+            )
+            startup_focus = startup_focuses[
+                sum(event.event_id.encode("utf-8")) % len(startup_focuses)
+            ]
             return Activity(
                 activity_type=ActivityType.STARTUP_REACTION,
-                goal="起動直後の状況に反応し、配信準備中であることを自然に伝える",
+                goal="起動した現在の気分を短く表し、その時らしい自然な最初の一言を話す",
                 priority=90 + event.priority,
-                context={"event_payload": event.payload, "trace_context": event.trace_context},
+                context={
+                    "event_payload": event.payload,
+                    "trace_context": event.trace_context,
+                    "startup_focus": startup_focus,
+                },
                 interruptible=False,
                 source_event_id=event.event_id,
             )
@@ -666,7 +716,10 @@ class ActivityManager:
                 activity_type=ActivityType.STREAM_OPENING_GREETING,
                 goal="配信開始時のあいさつをして、これから話し始める雰囲気を作る",
                 priority=95 + event.priority,
-                context={"event_payload": event.payload, "trace_context": event.trace_context},
+                context={
+                    "event_payload": event.payload,
+                    "trace_context": event.trace_context,
+                },
                 interruptible=False,
                 source_event_id=event.event_id,
             )
@@ -678,7 +731,10 @@ class ActivityManager:
                 activity_type=ActivityType.STREAM_MAIN_SEGMENT,
                 goal=f"本編Segment「{title or 'main'}」の意図に沿って1回だけ話す",
                 priority=94 + event.priority,
-                context={"event_payload": event.payload, "trace_context": event.trace_context},
+                context={
+                    "event_payload": event.payload,
+                    "trace_context": event.trace_context,
+                },
                 interruptible=False,
                 source_event_id=event.event_id,
             )
@@ -688,7 +744,10 @@ class ActivityManager:
                 activity_type=ActivityType.STREAM_COMMENT_RESPONSE,
                 goal="予約済みの安全化された視聴者コメントへ、配信の流れを壊さず短く返答する",
                 priority=93 + event.priority,
-                context={"event_payload": event.payload, "trace_context": event.trace_context},
+                context={
+                    "event_payload": event.payload,
+                    "trace_context": event.trace_context,
+                },
                 interruptible=False,
                 source_event_id=event.event_id,
             )
@@ -698,17 +757,25 @@ class ActivityManager:
                 activity_type=ActivityType.STREAM_CLOSING_GREETING,
                 goal="配信終了前のあいさつをして、視聴者に自然に別れを伝える",
                 priority=110 + event.priority,
-                context={"event_payload": event.payload, "trace_context": event.trace_context},
+                context={
+                    "event_payload": event.payload,
+                    "trace_context": event.trace_context,
+                },
                 interruptible=False,
                 source_event_id=event.event_id,
             )
 
         if event.event_type == AgentEventType.CURIOSITY_PEAK:
             behavior_plan_value = event.payload.get("behavior_plan")
-            behavior_plan = behavior_plan_value if isinstance(behavior_plan_value, dict) else {}
+            behavior_plan = (
+                behavior_plan_value if isinstance(behavior_plan_value, dict) else {}
+            )
             return Activity(
                 activity_type=ActivityType.AUTONOMOUS_TALK,
-                goal=str(behavior_plan.get("goal") or "内的関心に基づいて自律的に話題を出して話す"),
+                goal=str(
+                    behavior_plan.get("goal")
+                    or "内的関心に基づいて自律的に話題を出して話す"
+                ),
                 priority=55 + event.priority,
                 context={
                     "event_payload": event.payload,
@@ -723,12 +790,18 @@ class ActivityManager:
                         event.payload.get("autonomous_situation_context", {}).get(
                             "emotion_state", {}
                         )
-                        if isinstance(event.payload.get("autonomous_situation_context"), dict)
+                        if isinstance(
+                            event.payload.get("autonomous_situation_context"), dict
+                        )
                         else {}
                     ),
                     "drive": (
-                        event.payload.get("autonomous_situation_context", {}).get("drive_state", {})
-                        if isinstance(event.payload.get("autonomous_situation_context"), dict)
+                        event.payload.get("autonomous_situation_context", {}).get(
+                            "drive_state", {}
+                        )
+                        if isinstance(
+                            event.payload.get("autonomous_situation_context"), dict
+                        )
                         else {}
                     ),
                     "trace_context": event.trace_context,
@@ -742,7 +815,10 @@ class ActivityManager:
                 activity_type=ActivityType.IDLE_OBSERVATION,
                 goal="配信中の間を観察する",
                 priority=15 + event.priority,
-                context={"event_payload": event.payload, "trace_context": event.trace_context},
+                context={
+                    "event_payload": event.payload,
+                    "trace_context": event.trace_context,
+                },
                 interruptible=True,
                 source_event_id=event.event_id,
             )
@@ -751,7 +827,10 @@ class ActivityManager:
             activity_type=ActivityType.IDLE_OBSERVATION,
             goal="状態を観察する",
             priority=10 + event.priority,
-            context={"event_payload": event.payload, "trace_context": event.trace_context},
+            context={
+                "event_payload": event.payload,
+                "trace_context": event.trace_context,
+            },
             interruptible=True,
             source_event_id=event.event_id,
         )
@@ -764,9 +843,13 @@ class ActivityManager:
             new_activity_type=new_activity.activity_type.value,
             new_activity_priority=new_activity.priority,
             current_activity_id=current.activity_id if current is not None else None,
-            current_activity_type=current.activity_type.value if current is not None else None,
+            current_activity_type=(
+                current.activity_type.value if current is not None else None
+            ),
             current_activity_priority=current.priority if current is not None else None,
-            current_interruptible=current.interruptible if current is not None else None,
+            current_interruptible=(
+                current.interruptible if current is not None else None
+            ),
         )
 
         if current is None:
@@ -785,7 +868,9 @@ class ActivityManager:
                 new_activity_id=new_activity.activity_id,
                 new_activity_type=new_activity.activity_type.value,
             )
-            self._activities[current.activity_id] = current.with_status(ActivityStatus.SUSPENDED)
+            self._activities[current.activity_id] = current.with_status(
+                ActivityStatus.SUSPENDED
+            )
             return self._activate(new_activity)
 
         pending = new_activity.with_status(ActivityStatus.PENDING)
@@ -823,7 +908,9 @@ class ActivityManager:
         self._trace_logger.write(
             "activity_manager:should_activate:result",
             should_activate=should_activate,
-            reason="new_priority_higher" if should_activate else "new_priority_not_higher",
+            reason=(
+                "new_priority_higher" if should_activate else "new_priority_not_higher"
+            ),
             current_priority=current.priority,
             new_priority=new_activity.priority,
         )

@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+from app.adapters.prompt import CharacterPromptBuilder, ResponseValidatorPromptBuilder
 from app.domain.activities import Activity, ActivityType, OngoingActivity
 from app.domain.character_response import (
     ActivityExecutionResult,
@@ -21,6 +22,9 @@ from app.runtime.character_response_pipeline import (
     ResponseValidator,
 )
 from app.runtime.response_claim_validator import IndependentClaimExtractor
+
+CHARACTER_PROMPT = CharacterPromptBuilder()
+VALIDATION_PROMPT = ResponseValidatorPromptBuilder()
 
 
 class StubRoleModel:
@@ -83,7 +87,7 @@ def test_response_context_contains_safe_structured_ongoing_activity_summary() ->
         context={
             "plugin_id": "games",
             "capability": "games.shiritori",
-            "game_session_id": "session-1",
+            "plugin_session_id": "session-1",
             "game_type": "shiritori",
             "plugin_state_version": 2,
             "constraints": {"theme": "深海生物"},
@@ -103,7 +107,7 @@ def test_response_context_contains_safe_structured_ongoing_activity_summary() ->
         constraints={"theme": "深海生物"},
     )
     activity = Activity(
-        activity_type=ActivityType.GAME_WITH_USER,
+        activity_type=ActivityType.PLUGIN_ACTIVITY,
         goal="ゲームの応答を表現する",
         context={
             "ongoing_activity": ongoing,
@@ -117,12 +121,17 @@ def test_response_context_contains_safe_structured_ongoing_activity_summary() ->
     assert context.ongoing_activity.ongoing_activity_id == ongoing.ongoing_activity_id
     assert context.ongoing_activity.turn_count == 1
     assert context.ongoing_activity.constraints == {"theme": "深海生物"}
-    assert context.ongoing_activity.plugin_context_summary["game_session_id"] == "session-1"
+    assert (
+        context.ongoing_activity.plugin_context_summary["plugin_session_id"]
+        == "session-1"
+    )
     assert "game_state" not in context.ongoing_activity.plugin_context_summary
     assert ResponseClaim.ACTIVITY_STARTED in context.allowed_claims
 
 
-def test_response_context_exposes_confirmation_target_and_forbids_execution_claims() -> None:
+def test_response_context_exposes_confirmation_target_and_forbids_execution_claims() -> (
+    None
+):
     result = ActivityExecutionResult(
         activity_type="confirmation",
         operation="start",
@@ -259,11 +268,15 @@ async def test_self_reported_claims_and_speech_must_be_consistent(
     result = await ResponseValidator().validate(activity, context, response)
 
     assert result.accepted is False
-    assert expected_reason in result.claim_differences or result.reason == expected_reason
+    assert (
+        expected_reason in result.claim_differences or result.reason == expected_reason
+    )
 
 
 @pytest.mark.asyncio
-async def test_structured_self_reported_claim_metadata_must_match_execution_fact() -> None:
+async def test_structured_self_reported_claim_metadata_must_match_execution_fact() -> (
+    None
+):
     parsed = CharacterLlmService.parse(
         json.dumps(
             {
@@ -298,10 +311,12 @@ async def test_structured_self_reported_claim_metadata_must_match_execution_fact
 @pytest.mark.asyncio
 async def test_validator_llm_cannot_override_deterministic_rejection() -> None:
     model = StubRoleModel(['{"accepted":true,"reason":"valid"}'])
-    activity = _activity(ActivityExecutionStatus.REJECTED, activity_type="stream_control")
+    activity = _activity(
+        ActivityExecutionStatus.REJECTED, activity_type="stream_control"
+    )
     context = ResponseContextBuilder().build(activity)
 
-    result = await ResponseValidator(model).validate(
+    result = await ResponseValidator(model, VALIDATION_PROMPT).validate(
         activity,
         context,
         _response("配信を開始したよ", (ResponseClaim.ACTIVITY_STARTED,)),
@@ -338,7 +353,7 @@ async def test_validator_llm_extracted_claim_is_deterministically_revalidated() 
     activity = _activity(ActivityExecutionStatus.REJECTED, activity_type="search")
     context = ResponseContextBuilder().build(activity)
 
-    result = await ResponseValidator(model).validate(
+    result = await ResponseValidator(model, VALIDATION_PROMPT).validate(
         activity,
         context,
         _response("探していた情報が手元に届いたよ"),
@@ -351,10 +366,12 @@ async def test_validator_llm_extracted_claim_is_deterministically_revalidated() 
 @pytest.mark.asyncio
 async def test_deterministically_valid_response_reaches_validator_llm() -> None:
     model = StubRoleModel(['{"accepted":true,"reason":"facts_consistent"}'])
-    activity = _activity(ActivityExecutionStatus.WAITING_INPUT, activity_type="conversation")
+    activity = _activity(
+        ActivityExecutionStatus.WAITING_INPUT, activity_type="conversation"
+    )
     context = ResponseContextBuilder().build(activity)
 
-    result = await ResponseValidator(model).validate(
+    result = await ResponseValidator(model, VALIDATION_PROMPT).validate(
         activity,
         context,
         _response("検索の仕組みについて説明するね", (ResponseClaim.CONVERSATION_ONLY,)),
@@ -367,7 +384,9 @@ async def test_deterministically_valid_response_reaches_validator_llm() -> None:
 
 
 @pytest.mark.asyncio
-async def test_regeneration_runs_claim_extractor_again_and_adopts_corrected_response() -> None:
+async def test_regeneration_runs_claim_extractor_again_and_adopts_corrected_response() -> (
+    None
+):
     character = StubRoleModel(
         [
             '{"speech":"配信を開始したよ","claims":[]}',
@@ -377,7 +396,7 @@ async def test_regeneration_runs_claim_extractor_again_and_adopts_corrected_resp
     extractor = CountingClaimExtractor()
     pipeline = CharacterResponsePipeline(
         ResponseContextBuilder(),
-        CharacterLlmService(character),
+        CharacterLlmService(character, CHARACTER_PROMPT),
         ResponseValidator(claim_extractor=extractor),
     )
 
@@ -403,7 +422,7 @@ async def test_second_invalid_response_is_replaced_with_safe_fallback() -> None:
     )
     pipeline = CharacterResponsePipeline(
         ResponseContextBuilder(),
-        CharacterLlmService(character),
+        CharacterLlmService(character, CHARACTER_PROMPT),
         ResponseValidator(),
     )
 
@@ -417,7 +436,9 @@ async def test_second_invalid_response_is_replaced_with_safe_fallback() -> None:
 
 
 @pytest.mark.asyncio
-async def test_claim_extractor_failure_uses_safe_fallback_after_one_regeneration() -> None:
+async def test_claim_extractor_failure_uses_safe_fallback_after_one_regeneration() -> (
+    None
+):
     character = StubRoleModel(
         [
             json.dumps({"speech": "普通に話すね", "claims": ["conversation_only"]}),
@@ -427,7 +448,7 @@ async def test_claim_extractor_failure_uses_safe_fallback_after_one_regeneration
     extractor = CountingClaimExtractor(fail=True)
     pipeline = CharacterResponsePipeline(
         ResponseContextBuilder(),
-        CharacterLlmService(character),
+        CharacterLlmService(character, CHARACTER_PROMPT),
         ResponseValidator(claim_extractor=extractor),
     )
 
@@ -441,13 +462,18 @@ async def test_claim_extractor_failure_uses_safe_fallback_after_one_regeneration
 
 @pytest.mark.asyncio
 async def test_ordinary_conversation_does_not_require_external_success_result() -> None:
-    activity = _activity(ActivityExecutionStatus.WAITING_INPUT, activity_type="conversation")
+    activity = _activity(
+        ActivityExecutionStatus.WAITING_INPUT, activity_type="conversation"
+    )
     context = ResponseContextBuilder().build(activity)
 
     result = await ResponseValidator().validate(
         activity,
         context,
-        _response("しりとりは、最後の文字をつなぐ言葉遊びだよ", (ResponseClaim.CONVERSATION_ONLY,)),
+        _response(
+            "しりとりは、最後の文字をつなぐ言葉遊びだよ",
+            (ResponseClaim.CONVERSATION_ONLY,),
+        ),
     )
 
     assert result.accepted is True

@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -65,7 +63,9 @@ def test_validate_embedding_dimension_accepts_expected_dimension() -> None:
     store._validate_embedding_dimension([0.1, 0.2, 0.3])
 
 
-def test_validate_embedding_dimension_raises_error_when_dimension_is_different() -> None:
+def test_validate_embedding_dimension_raises_error_when_dimension_is_different() -> (
+    None
+):
     store = _create_store(embedding_dimension=3)
 
     with pytest.raises(

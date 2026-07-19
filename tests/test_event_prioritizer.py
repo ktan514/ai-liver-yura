@@ -1,8 +1,6 @@
-
-
 from __future__ import annotations
 
-from app.domain.events import AgentEvent, AgentEventType
+from app.domain.events import AgentEvent, AgentEventType, InputAuthority
 from app.runtime.event_prioritizer import DefaultEventPrioritizer
 
 
@@ -40,3 +38,22 @@ def test_camera_frame_priority_boost_is_small() -> None:
     prioritized = DefaultEventPrioritizer().prioritize(event)
 
     assert prioritized.priority == 13
+
+
+def test_administrator_input_outranks_viewer_input() -> None:
+    admin = AgentEvent(
+        AgentEventType.USER_TEXT,
+        {"text": "本題に入って"},
+        authority=InputAuthority.ADMINISTRATOR,
+    )
+    viewer = AgentEvent(
+        AgentEventType.YOUTUBE_COMMENT,
+        {"comment": "本題に入って"},
+        authority=InputAuthority.VIEWER,
+    )
+
+    prioritizer = DefaultEventPrioritizer()
+
+    assert (
+        prioritizer.prioritize(admin).priority > prioritizer.prioritize(viewer).priority
+    )

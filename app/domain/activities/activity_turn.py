@@ -69,7 +69,9 @@ class ActivityTurn:
 
     def with_character_result(self, result: CharacterGenerationResult) -> ActivityTurn:
         aggregate = self._aggregate().with_character(result)
-        return replace(self, turn_result=aggregate, updated_at=datetime.now(timezone.utc))
+        return replace(
+            self, turn_result=aggregate, updated_at=datetime.now(timezone.utc)
+        )
 
     def with_output_result(self, result: ActivityOutputResult) -> ActivityTurn:
         aggregate = self._aggregate().with_output(result)
@@ -91,13 +93,17 @@ class ActivityTurn:
             return self.turn_result
         return ActivityTurnResult(
             activity_turn_id=self.turn_id,
-            activity_type=self.execution_result.activity_type
-            if self.execution_result is not None
-            else "unknown",
+            activity_type=(
+                self.execution_result.activity_type
+                if self.execution_result is not None
+                else "unknown"
+            ),
             source_event_id=self.source_event_id,
-            ongoing_activity_id=self.execution_result.ongoing_activity_id
-            if self.execution_result is not None
-            else None,
+            ongoing_activity_id=(
+                self.execution_result.ongoing_activity_id
+                if self.execution_result is not None
+                else None
+            ),
             operation=self.operation,
             execution_result=self.execution_result,
             trace_id=self.trace_context.trace_id,

@@ -1,6 +1,7 @@
 import pytest
 
 from app.domain.emotions import EmotionState, MoodType
+from app.runtime.autonomous_activity_policy import AutonomousActivityPolicy
 
 
 def test_default_emotion_state_is_neutral() -> None:
@@ -12,25 +13,28 @@ def test_default_emotion_state_is_neutral() -> None:
     assert emotion_state.talkativeness == 0.5
 
 
-def test_angry_emotion_reduces_speech() -> None:
+def test_autonomous_policy_defers_talking_for_angry_emotion() -> None:
     emotion_state = EmotionState(mood=MoodType.ANGRY)
+    policy = AutonomousActivityPolicy()
 
-    assert emotion_state.should_reduce_speech()
-    assert emotion_state.speech_pause_seconds() == 5.0
+    assert policy.should_defer_talking(emotion_state)
+    assert policy.minimum_talk_interval_seconds(emotion_state) == 5.0
 
 
-def test_excited_emotion_increases_reaction() -> None:
+def test_autonomous_policy_shortens_activity_interval_for_excited_emotion() -> None:
     emotion_state = EmotionState(mood=MoodType.EXCITED)
+    policy = AutonomousActivityPolicy()
 
-    assert emotion_state.should_increase_reaction()
-    assert emotion_state.speech_pause_seconds() == 0.5
+    assert not policy.should_defer_talking(emotion_state)
+    assert policy.minimum_talk_interval_seconds(emotion_state) == 0.5
 
 
 def test_low_talkativeness_reduces_speech() -> None:
     emotion_state = EmotionState(talkativeness=0.2)
+    policy = AutonomousActivityPolicy()
 
-    assert emotion_state.should_reduce_speech()
-    assert emotion_state.speech_pause_seconds() == 3.0
+    assert policy.should_defer_talking(emotion_state)
+    assert policy.minimum_talk_interval_seconds(emotion_state) == 3.0
 
 
 def test_invalid_arousal_raises_error() -> None:

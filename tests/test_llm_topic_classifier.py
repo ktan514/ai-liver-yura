@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import pytest
@@ -23,13 +21,17 @@ async def test_llm_topic_classifier_returns_category_from_model_response() -> No
     model = FakeTopicClassificationModel(response="sea_life")
     classifier = LlmTopicClassifier(model=model)
 
-    category = await classifier.classify("透明な体でゆらゆら漂う生き物って不思議だよね。")
+    category = await classifier.classify(
+        "透明な体でゆらゆら漂う生き物って不思議だよね。"
+    )
 
     assert category == TopicCategory.SEA_LIFE
 
 
 @pytest.mark.asyncio
-async def test_llm_topic_classifier_accepts_response_with_surrounding_whitespace() -> None:
+async def test_llm_topic_classifier_accepts_response_with_surrounding_whitespace() -> (
+    None
+):
     model = FakeTopicClassificationModel(response="\n game \n")
     classifier = LlmTopicClassifier(model=model)
 
@@ -39,7 +41,9 @@ async def test_llm_topic_classifier_accepts_response_with_surrounding_whitespace
 
 
 @pytest.mark.asyncio
-async def test_llm_topic_classifier_extracts_category_when_response_contains_extra_text() -> None:
+async def test_llm_topic_classifier_extracts_category_when_response_contains_extra_text() -> (
+    None
+):
     model = FakeTopicClassificationModel(response="カテゴリは technology です。")
     classifier = LlmTopicClassifier(model=model)
 
@@ -59,7 +63,9 @@ async def test_llm_topic_classifier_returns_other_when_response_is_unknown() -> 
 
 
 @pytest.mark.asyncio
-async def test_llm_topic_classifier_builds_prompt_with_categories_and_input_text() -> None:
+async def test_llm_topic_classifier_builds_prompt_with_categories_and_input_text() -> (
+    None
+):
     model = FakeTopicClassificationModel(response="streaming")
     classifier = LlmTopicClassifier(model=model)
 

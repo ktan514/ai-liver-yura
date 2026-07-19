@@ -1,4 +1,7 @@
-from app.domain.character_response import ActivityExecutionResult, ActivityExecutionStatus
+from app.domain.character_response import (
+    ActivityExecutionResult,
+    ActivityExecutionStatus,
+)
 from app.runtime.activity_manager import ActivityManager
 from app.runtime.ongoing_activity_coordinator import OngoingActivityCoordinator
 

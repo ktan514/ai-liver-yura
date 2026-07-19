@@ -1,4 +1,7 @@
-from app.adapters.topic.llm_topic_classifier import LlmTopicClassifier, TopicClassificationModel
+from app.adapters.topic.llm_topic_classifier import (
+    LlmTopicClassifier,
+    TopicClassificationModel,
+)
 from app.adapters.topic.ollama_topic_classification_model import (
     OllamaTopicClassificationConfig,
     OllamaTopicClassificationModel,

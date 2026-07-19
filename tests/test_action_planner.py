@@ -8,7 +8,12 @@ from app.domain.activity_turn_result import (
     CharacterGenerationResult,
     CharacterGenerationStatus,
 )
-from app.domain.character_response import CharacterResponse
+from app.domain.character_response import (
+    CharacterResponse,
+    ReactionPlan,
+    ReactionSegment,
+    VoiceIntent,
+)
 from app.runtime.action_planner import ActionPlanner
 
 
@@ -40,13 +45,47 @@ class FakeCharacterResponsePipeline:
     ) -> tuple[CharacterResponse, CharacterGenerationResult]:
         self.activities.append(activity)
         return (
-            CharacterResponse(speech="Characterが生成した自律発話", expression="happy"),
+            CharacterResponse(
+                speech="Characterが生成した自律発話",
+                expression="happy",
+                voice_intent=VoiceIntent(style="bright"),
+            ),
             CharacterGenerationResult(
                 status=CharacterGenerationStatus.VALIDATED,
                 activity_turn_id=activity.activity_id,
                 source_event_id=activity.source_event_id,
                 adopted_text="Characterが生成した自律発話",
             ),
+        )
+
+
+class SegmentedCharacterResponsePipeline(FakeCharacterResponsePipeline):
+    async def generate_with_result(
+        self, activity: Activity
+    ) -> tuple[CharacterResponse, CharacterGenerationResult]:
+        response = CharacterResponse(
+            speech="驚いたでも安心した",
+            reaction_plan=ReactionPlan(
+                (
+                    ReactionSegment(
+                        "驚いた",
+                        expression="surprised",
+                        gesture="lean_back",
+                        voice_intent=VoiceIntent("startled"),
+                        pause_after_seconds=0.2,
+                    ),
+                    ReactionSegment(
+                        "でも安心した",
+                        expression="soft_smile",
+                        voice_intent=VoiceIntent("warm"),
+                    ),
+                )
+            ),
+        )
+        return response, CharacterGenerationResult(
+            status=CharacterGenerationStatus.VALIDATED,
+            activity_turn_id=activity.activity_id,
+            adopted_text=response.speech,
         )
 
 
@@ -71,15 +110,46 @@ async def test_action_planner_uses_response_generator_for_conversation() -> None
         ActionType.CHANGE_EXPRESSION,
     ]
     assert action_plan_group.action_plans[0].text == "generated: ユーザー入力に応答する"
-    assert action_plan_group.action_plans[0].required_resources == {ActionResource.MOUTH}
+    assert action_plan_group.action_plans[0].required_resources == {
+        ActionResource.MOUTH
+    }
+    assert action_plan_group.action_plans[0].metadata["voice_intent"] == VoiceIntent()
     assert action_plan_group.action_plans[1].text == "generated: ユーザー入力に応答する"
-    assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
+    assert action_plan_group.action_plans[1].required_resources == {
+        ActionResource.SUBTITLE
+    }
     assert action_plan_group.action_plans[2].text == "smile"
     assert action_plan_group.action_plans[2].required_resources == {ActionResource.FACE}
 
 
 @pytest.mark.asyncio
-async def test_action_planner_uses_safe_fallback_only_after_generation_failure() -> None:
+async def test_action_planner_expands_reaction_segments_without_engine_parameters() -> (
+    None
+):
+    activity = Activity(
+        activity_type=ActivityType.AUTONOMOUS_TALK,
+        goal="感情の変化を表現する",
+    )
+    planner = ActionPlanner(
+        response_generator=FakeResponseGenerator(),
+        character_response_pipeline=SegmentedCharacterResponsePipeline(),
+    )
+
+    group = await planner.plan(activity)
+    speaks = [
+        plan for plan in group.action_plans if plan.action_type == ActionType.SPEAK
+    ]
+
+    assert [plan.text for plan in speaks] == ["驚いた", "でも安心した"]
+    assert speaks[0].metadata["voice_intent"] == VoiceIntent("startled")
+    assert speaks[0].metadata["pause_after_seconds"] == 0.2
+    assert [plan.metadata["reaction_segment_index"] for plan in speaks] == [0, 1]
+
+
+@pytest.mark.asyncio
+async def test_action_planner_uses_safe_fallback_only_after_generation_failure() -> (
+    None
+):
     fallback = "今はそれを一緒にできないんだ。別のお話をしよう。"
     activity = Activity(
         activity_type=ActivityType.CONVERSATION_WITH_USER,
@@ -111,16 +181,26 @@ async def test_action_planner_uses_response_generator_for_startup_reaction() -> 
         ActionType.UPDATE_SUBTITLE,
         ActionType.CHANGE_EXPRESSION,
     ]
-    assert action_plan_group.action_plans[0].text == "generated: 起動直後の状況に反応する"
-    assert action_plan_group.action_plans[0].required_resources == {ActionResource.MOUTH}
-    assert action_plan_group.action_plans[1].text == "generated: 起動直後の状況に反応する"
-    assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
+    assert (
+        action_plan_group.action_plans[0].text == "generated: 起動直後の状況に反応する"
+    )
+    assert action_plan_group.action_plans[0].required_resources == {
+        ActionResource.MOUTH
+    }
+    assert (
+        action_plan_group.action_plans[1].text == "generated: 起動直後の状況に反応する"
+    )
+    assert action_plan_group.action_plans[1].required_resources == {
+        ActionResource.SUBTITLE
+    }
     assert action_plan_group.action_plans[2].text == "smile"
     assert action_plan_group.action_plans[2].required_resources == {ActionResource.FACE}
 
 
 @pytest.mark.asyncio
-async def test_action_planner_uses_response_generator_for_stream_opening_greeting() -> None:
+async def test_action_planner_uses_response_generator_for_stream_opening_greeting() -> (
+    None
+):
     activity = Activity(
         activity_type=ActivityType.STREAM_OPENING_GREETING,
         goal="配信開始時のあいさつをする",
@@ -135,16 +215,28 @@ async def test_action_planner_uses_response_generator_for_stream_opening_greetin
         ActionType.UPDATE_SUBTITLE,
         ActionType.CHANGE_EXPRESSION,
     ]
-    assert action_plan_group.action_plans[0].text == "generated: 配信開始時のあいさつをする"
-    assert action_plan_group.action_plans[0].required_resources == {ActionResource.MOUTH}
-    assert action_plan_group.action_plans[1].text == "generated: 配信開始時のあいさつをする"
-    assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
+    assert (
+        action_plan_group.action_plans[0].text
+        == "generated: 配信開始時のあいさつをする"
+    )
+    assert action_plan_group.action_plans[0].required_resources == {
+        ActionResource.MOUTH
+    }
+    assert (
+        action_plan_group.action_plans[1].text
+        == "generated: 配信開始時のあいさつをする"
+    )
+    assert action_plan_group.action_plans[1].required_resources == {
+        ActionResource.SUBTITLE
+    }
     assert action_plan_group.action_plans[2].text == "smile"
     assert action_plan_group.action_plans[2].required_resources == {ActionResource.FACE}
 
 
 @pytest.mark.asyncio
-async def test_action_planner_uses_response_generator_for_stream_closing_greeting() -> None:
+async def test_action_planner_uses_response_generator_for_stream_closing_greeting() -> (
+    None
+):
     activity = Activity(
         activity_type=ActivityType.STREAM_CLOSING_GREETING,
         goal="配信終了前のあいさつをする",
@@ -159,11 +251,21 @@ async def test_action_planner_uses_response_generator_for_stream_closing_greetin
         ActionType.UPDATE_SUBTITLE,
         ActionType.CHANGE_EXPRESSION,
     ]
-    assert action_plan_group.action_plans[0].text == "generated: 配信終了前のあいさつをする"
-    assert action_plan_group.action_plans[0].required_resources == {ActionResource.MOUTH}
-    assert action_plan_group.action_plans[1].text == "generated: 配信終了前のあいさつをする"
-    assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
-    assert action_plan_group.action_plans[2].text == "soft_smile"
+    assert (
+        action_plan_group.action_plans[0].text
+        == "generated: 配信終了前のあいさつをする"
+    )
+    assert action_plan_group.action_plans[0].required_resources == {
+        ActionResource.MOUTH
+    }
+    assert (
+        action_plan_group.action_plans[1].text
+        == "generated: 配信終了前のあいさつをする"
+    )
+    assert action_plan_group.action_plans[1].required_resources == {
+        ActionResource.SUBTITLE
+    }
+    assert action_plan_group.action_plans[2].text == "smile"
     assert action_plan_group.action_plans[2].required_resources == {ActionResource.FACE}
 
 
@@ -190,20 +292,27 @@ async def test_action_planner_uses_character_pipeline_for_autonomous_talk() -> N
         ActionType.CHANGE_EXPRESSION,
     ]
     assert action_plan_group.action_plans[0].text == "Characterが生成した自律発話"
-    assert action_plan_group.action_plans[0].required_resources == {ActionResource.MOUTH}
+    assert action_plan_group.action_plans[0].required_resources == {
+        ActionResource.MOUTH
+    }
+    assert action_plan_group.action_plans[0].metadata["voice_intent"] == VoiceIntent(
+        style="bright"
+    )
     assert action_plan_group.action_plans[1].text == "Characterが生成した自律発話"
-    assert action_plan_group.action_plans[1].required_resources == {ActionResource.SUBTITLE}
+    assert action_plan_group.action_plans[1].required_resources == {
+        ActionResource.SUBTITLE
+    }
     assert action_plan_group.action_plans[2].text == "happy"
     assert response_generator.call_count == 0
     assert character_pipeline.activities == [activity]
 
 
 @pytest.mark.asyncio
-async def test_action_planner_uses_existing_output_path_for_game_activity() -> None:
+async def test_action_planner_uses_existing_output_path_for_plugin_activity() -> None:
     activity = Activity(
-        activity_type=ActivityType.GAME_WITH_USER,
-        goal="ゲーム状態を表現する",
-        context={"game_session_id": "session-1", "game_type": "fake_game"},
+        activity_type=ActivityType.PLUGIN_ACTIVITY,
+        goal="Plugin状態を表現する",
+        context={"plugin_session_id": "session-1", "plugin_id": "fake"},
     )
     planner = ActionPlanner(response_generator=FakeResponseGenerator())
 
@@ -214,7 +323,7 @@ async def test_action_planner_uses_existing_output_path_for_game_activity() -> N
         ActionType.UPDATE_SUBTITLE,
         ActionType.CHANGE_EXPRESSION,
     ]
-    assert action_plan_group.action_plans[0].text == "generated: ゲーム状態を表現する"
+    assert action_plan_group.action_plans[0].text == "generated: Plugin状態を表現する"
     assert action_plan_group.output_priority == 100
 
 

@@ -66,7 +66,9 @@ def _create_activity(
 
 
 # Thread 起動直後のタイミング差を吸収するため、起動状態になるまで待つ。
-def _wait_until_running(thread: ActivityExecutorThread, timeout_seconds: float = 1.0) -> bool:
+def _wait_until_running(
+    thread: ActivityExecutorThread, timeout_seconds: float = 1.0
+) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if thread.is_running:
@@ -143,7 +145,9 @@ async def test_run_once_plans_and_executes_next_activity() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_once_does_not_execute_autonomous_activity_suspended_by_user_input() -> None:
+async def test_run_once_does_not_execute_autonomous_activity_suspended_by_user_input() -> (
+    None
+):
     queue = PlannedActivityQueue()
     activity_manager = ActivityManager()
     autonomous = activity_manager.handle_event(

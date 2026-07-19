@@ -44,7 +44,9 @@ class ConstraintValidationResult:
     def as_validated(self) -> ValidatedConstraints | None:
         if not self.valid:
             return None
-        return ValidatedConstraints(dict(self.normalized_constraints), self.schema_version)
+        return ValidatedConstraints(
+            dict(self.normalized_constraints), self.schema_version
+        )
 
 
 class LegacyConstraintSchemaAdapter:
@@ -64,7 +66,9 @@ class LegacyConstraintSchemaAdapter:
         }
     )
 
-    def adapt(self, schema: Mapping[str, object]) -> tuple[ConstraintSchema, tuple[str, ...]]:
+    def adapt(
+        self, schema: Mapping[str, object]
+    ) -> tuple[ConstraintSchema, tuple[str, ...]]:
         if self._schema_keywords.intersection(schema):
             return dict(schema), ()
         if not schema:
@@ -127,12 +131,14 @@ class ActivityConstraintValidator:
         expected_types = (
             tuple(str(item) for item in expected)
             if isinstance(expected, list)
-            else (str(expected),)
-            if expected is not None
-            else ()
+            else (str(expected),) if expected is not None else ()
         )
-        if expected_types and not any(self._matches_type(value, item) for item in expected_types):
-            self._error(errors, path, "invalid_type", expected, self._actual_type(value))
+        if expected_types and not any(
+            self._matches_type(value, item) for item in expected_types
+        ):
+            self._error(
+                errors, path, "invalid_type", expected, self._actual_type(value)
+            )
             return value
         enum = schema.get("enum")
         if isinstance(enum, list) and value not in enum:
@@ -162,7 +168,11 @@ class ActivityConstraintValidator:
             if isinstance(item_schema, dict):
                 return [
                     self._validate_value(
-                        item, item_schema, self._join(path, str(index)), errors, defaults
+                        item,
+                        item_schema,
+                        self._join(path, str(index)),
+                        errors,
+                        defaults,
                     )
                     for index, item in enumerate(value)
                 ]
@@ -190,7 +200,9 @@ class ActivityConstraintValidator:
                     normalized[name] = field_schema["default"]
                     defaults[self._join(path, name)] = field_schema["default"]
                 else:
-                    self._error(errors, self._join(path, str(name)), "required", True, None)
+                    self._error(
+                        errors, self._join(path, str(name)), "required", True, None
+                    )
         for name, field_schema in properties.items():
             if not isinstance(name, str) or not isinstance(field_schema, dict):
                 continue
@@ -199,17 +211,27 @@ class ActivityConstraintValidator:
                 defaults[self._join(path, name)] = field_schema["default"]
             if name in normalized:
                 normalized[name] = self._validate_value(
-                    normalized[name], field_schema, self._join(path, name), errors, defaults
+                    normalized[name],
+                    field_schema,
+                    self._join(path, name),
+                    errors,
+                    defaults,
                 )
         additional = schema.get("additionalProperties", True)
         for name in tuple(normalized):
             if name in properties:
                 continue
             if additional is False:
-                self._error(errors, self._join(path, name), "additional_property", False, name)
+                self._error(
+                    errors, self._join(path, name), "additional_property", False, name
+                )
             elif isinstance(additional, dict):
                 normalized[name] = self._validate_value(
-                    normalized[name], additional, self._join(path, name), errors, defaults
+                    normalized[name],
+                    additional,
+                    self._join(path, name),
+                    errors,
+                    defaults,
                 )
         return normalized
 

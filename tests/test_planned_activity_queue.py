@@ -20,7 +20,9 @@ def _create_activity(
     )
 
 
-def test_planned_activity_uses_activity_priority_when_priority_is_not_specified() -> None:
+def test_planned_activity_uses_activity_priority_when_priority_is_not_specified() -> (
+    None
+):
     activity = _create_activity(priority=42)
 
     planned_activity = PlannedActivity(activity=activity)
@@ -77,7 +79,9 @@ def test_queue_get_returns_highest_priority_activity_first() -> None:
 def test_queue_get_uses_explicit_priority_before_activity_priority() -> None:
     queue = PlannedActivityQueue()
     activity_high = PlannedActivity(activity=_create_activity(priority=90))
-    explicit_high = PlannedActivity(activity=_create_activity(priority=10), priority=100)
+    explicit_high = PlannedActivity(
+        activity=_create_activity(priority=10), priority=100
+    )
 
     queue.put(activity_high)
     queue.put(explicit_high)

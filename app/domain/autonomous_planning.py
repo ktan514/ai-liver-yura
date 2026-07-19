@@ -21,6 +21,7 @@ class AutonomousSituationContext:
     ongoing_activity: dict[str, object] | None
     available_activity_definitions: tuple[str, ...]
     current_time_context: str
+    relationship_state: dict[str, object] = field(default_factory=dict)
     event_context: dict[str, object] = field(default_factory=dict)
     trace_context: TraceContext | None = None
 

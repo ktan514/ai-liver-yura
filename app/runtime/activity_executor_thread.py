@@ -68,7 +68,10 @@ class ActivityExecutorThread(threading.Thread):
         current_activity = self._activity_manager.get_activity(
             planned_activity.activity.activity_id
         )
-        if current_activity is not None and current_activity.status != ActivityStatus.ACTIVE:
+        if (
+            current_activity is not None
+            and current_activity.status != ActivityStatus.ACTIVE
+        ):
             self._trace_logger.debug(
                 "activity_executor_thread:run_once:activity_skipped",
                 planned_activity_id=planned_activity.planned_activity_id,
@@ -91,11 +94,17 @@ class ActivityExecutorThread(threading.Thread):
             )
 
         try:
-            action_plan_group = await self._action_planner.plan(planned_activity.activity)
+            action_plan_group = await self._action_planner.plan(
+                planned_activity.activity
+            )
         except Exception as error:
-            action_plan_group = action_planning_failure_group(planned_activity.activity, error)
+            action_plan_group = action_planning_failure_group(
+                planned_activity.activity, error
+            )
             if action_plan_group.activity_turn_result is not None:
-                self._activity_manager.record_turn_result(action_plan_group.activity_turn_result)
+                self._activity_manager.record_turn_result(
+                    action_plan_group.activity_turn_result
+                )
             self._activity_manager.complete_processed_activity(
                 planned_activity.activity.activity_id
             )
@@ -118,18 +127,25 @@ class ActivityExecutorThread(threading.Thread):
         current_activity = self._activity_manager.get_activity(
             planned_activity.activity.activity_id
         )
-        if current_activity is not None and current_activity.status != ActivityStatus.ACTIVE:
+        if (
+            current_activity is not None
+            and current_activity.status != ActivityStatus.ACTIVE
+        ):
             self._trace_logger.info(
                 "activity_executor_thread:run_once:actions_canceled",
                 planned_activity_id=planned_activity.planned_activity_id,
                 activity_id=current_activity.activity_id,
                 activity_status=current_activity.status.value,
-                action_ids=[action.action_id for action in action_plan_group.action_plans],
+                action_ids=[
+                    action.action_id for action in action_plan_group.action_plans
+                ],
                 action_types=[
-                    action.action_type.value for action in action_plan_group.action_plans
+                    action.action_type.value
+                    for action in action_plan_group.action_plans
                 ],
                 source_activity_ids=[
-                    action.source_activity_id for action in action_plan_group.action_plans
+                    action.source_activity_id
+                    for action in action_plan_group.action_plans
                 ],
                 reason="activity_not_active_before_action_execution",
             )
@@ -138,11 +154,16 @@ class ActivityExecutorThread(threading.Thread):
                 reason="activity_not_active_before_action_execution",
             )
             if canceled_group.activity_turn_result is not None:
-                self._activity_manager.record_turn_result(canceled_group.activity_turn_result)
+                self._activity_manager.record_turn_result(
+                    canceled_group.activity_turn_result
+                )
             return canceled_group
 
         output_result = await self._action_scheduler.execute(action_plan_group)
-        if output_result is not None and action_plan_group.activity_turn_result is not None:
+        if (
+            output_result is not None
+            and action_plan_group.activity_turn_result is not None
+        ):
             self._activity_manager.record_output_result(
                 action_plan_group.activity_turn_result, output_result
             )
@@ -163,18 +184,22 @@ class ActivityExecutorThread(threading.Thread):
                 self._trace_logger.info(
                     "activity_executor_thread:autonomous_memory_saved",
                     activity_id=planned_activity.activity.activity_id,
-                    output_unit_id=output_result.output_unit_id
-                    if output_result is not None
-                    else action_plan_group.group_id,
+                    output_unit_id=(
+                        output_result.output_unit_id
+                        if output_result is not None
+                        else action_plan_group.group_id
+                    ),
                     reason="speak_completed",
                 )
             else:
                 self._trace_logger.info(
                     "activity_executor_thread:autonomous_memory_not_saved",
                     activity_id=planned_activity.activity.activity_id,
-                    output_unit_id=output_result.output_unit_id
-                    if output_result is not None
-                    else action_plan_group.group_id,
+                    output_unit_id=(
+                        output_result.output_unit_id
+                        if output_result is not None
+                        else action_plan_group.group_id
+                    ),
                     reason="speak_not_completed",
                 )
         self._trace_logger.write(
@@ -201,15 +226,24 @@ class ActivityExecutorThread(threading.Thread):
             planned_activity_id=planned_activity.planned_activity_id,
             activity_id=planned_activity.activity.activity_id,
             completed=completed_activity is not None,
-            completed_activity_id=completed_activity.activity_id
-            if completed_activity is not None
-            else None,
-            completed_activity_type=completed_activity.activity_type.value
-            if completed_activity is not None
-            else None,
-            active_activity_exists=self._agent_life_service.agent_state.active_activity is not None,
-            pending_activity_count=len(self._agent_life_service.agent_state.pending_activities),
-            suspended_activity_count=len(self._agent_life_service.agent_state.suspended_activities),
+            completed_activity_id=(
+                completed_activity.activity_id
+                if completed_activity is not None
+                else None
+            ),
+            completed_activity_type=(
+                completed_activity.activity_type.value
+                if completed_activity is not None
+                else None
+            ),
+            active_activity_exists=self._agent_life_service.agent_state.active_activity
+            is not None,
+            pending_activity_count=len(
+                self._agent_life_service.agent_state.pending_activities
+            ),
+            suspended_activity_count=len(
+                self._agent_life_service.agent_state.suspended_activities
+            ),
         )
 
         return action_plan_group
@@ -286,5 +320,7 @@ class ActivityExecutorThread(threading.Thread):
         """継続実行中かどうかを返す。"""
 
         return (
-            self.is_alive() and self._started_running.is_set() and not self._stop_requested.is_set()
+            self.is_alive()
+            and self._started_running.is_set()
+            and not self._stop_requested.is_set()
         )

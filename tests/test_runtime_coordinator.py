@@ -17,7 +17,6 @@ from app.domain.character import CharacterProfile
 from app.domain.character_response import CharacterResponse
 from app.domain.drives import DriveState
 from app.domain.events import AgentEvent, AgentEventType
-from app.domain.games import ShiritoriGameDefinition, ShiritoriPlayer, ShiritoriState
 from app.ports.response_generator import ResponseGenerator
 from app.runtime import (
     ActionPlanner,
@@ -33,10 +32,7 @@ from app.runtime.activity_planner_thread import (
     ActivityPlanningRequest,
     ActivityPlanningService,
 )
-from app.runtime.game_engine import GameEngine
-from app.runtime.game_input_classifier import GameInputClassifier
 from app.runtime.planned_activity_queue import PlannedActivityQueue
-from app.runtime.shiritori_game_service import ShiritoriGameService
 
 
 class BlockingAutonomousResponseGenerator:
@@ -87,32 +83,13 @@ class FakeActionExecutor:
             print(f"[{action_plan.action_type.value}] {action_plan.text}")
 
 
-class ShiritoriResponseGenerator:
-    async def generate_response(self, activity: Activity) -> str:
-        if activity.activity_type == ActivityType.GAME_WITH_USER:
-            return '{"game_action":"play_word","word":"ずこう","utterance":"ずこう！"}'
-        return f"会話応答: {activity.context['event_payload']['text']}"
-
-
-class NaturalGameStartResponseGenerator:
-    def __init__(self, game_responses: list[str]) -> None:
-        self.game_responses = list(game_responses)
-        self.game_call_count = 0
-        self.conversation_call_count = 0
+class CapturingResponseGenerator:
+    def __init__(self) -> None:
+        self.activities: list[Activity] = []
 
     async def generate_response(self, activity: Activity) -> str:
-        if activity.activity_type == ActivityType.GAME_WITH_USER:
-            self.game_call_count += 1
-            return self.game_responses.pop(0)
-        self.conversation_call_count += 1
-        return "ゲーム開始に失敗したよ。"
-
-
-class FailingGameStartResponseGenerator:
-    async def generate_response(self, activity: Activity) -> str:
-        if activity.activity_type == ActivityType.GAME_WITH_USER:
-            raise RuntimeError("generation failed")
-        return "ごめん、今はしりとりを始められなかったよ。"
+        self.activities.append(activity)
+        return "応答"
 
 
 def _create_character_profile() -> CharacterProfile:
@@ -131,8 +108,6 @@ def _create_runtime(
     activity_manager: ActivityManager | None = None,
     agent_life_service: AgentLifeService | None = None,
     response_generator: ResponseGenerator | None = None,
-    game_input_classifier: GameInputClassifier | None = None,
-    shiritori_game_service: ShiritoriGameService | None = None,
 ) -> RuntimeCoordinator:
     activity_manager = activity_manager or ActivityManager()
     agent_life_service = agent_life_service or AgentLifeService(activity_manager)
@@ -144,7 +119,6 @@ def _create_runtime(
     )
     action_planner = ActionPlanner(
         response_generator=response_generator,
-        shiritori_game_service=shiritori_game_service,
         character_response_pipeline=(
             BlockingCharacterPipeline(response_generator)  # type: ignore[arg-type]
             if isinstance(response_generator, BlockingAutonomousResponseGenerator)
@@ -178,8 +152,6 @@ def _create_runtime(
         activity_planner_thread=activity_planner_thread,
         activity_executor_thread=activity_executor_thread,
         agent_life_service=agent_life_service,
-        shiritori_game_service=shiritori_game_service,
-        game_input_classifier=game_input_classifier,
     )
 
 
@@ -199,189 +171,6 @@ async def _drain_runtime(runtime: RuntimeCoordinator) -> list[str]:
         texts.extend(action_plan.text for action_plan in speak_plans)
 
     return texts
-
-
-def test_runtime_coordinator_uses_activity_manager_game_engine_by_default() -> None:
-    game_engine = GameEngine()
-    activity_manager = ActivityManager(game_engine=game_engine)
-
-    runtime = _create_runtime(activity_manager=activity_manager)
-
-    assert runtime.game_engine is game_engine
-
-
-def _create_game_routing_runtime() -> tuple[RuntimeCoordinator, GameEngine]:
-    engine = GameEngine([ShiritoriGameDefinition()])
-    engine.start_game(
-        "shiritori",
-        metadata={
-            "shiritori_state": ShiritoriState(
-                current_turn=ShiritoriPlayer.USER,
-                last_word="はさみ",
-                expected_head="み",
-                used_words=("はさみ",),
-                turn_count=1,
-            )
-        },
-    )
-    manager = ActivityManager(game_engine=engine)
-    generator = ShiritoriResponseGenerator()
-    service = ShiritoriGameService(engine)
-    runtime = _create_runtime(
-        activity_manager=manager,
-        response_generator=generator,
-        game_input_classifier=GameInputClassifier(engine, generator),
-        shiritori_game_service=service,
-    )
-    return runtime, engine
-
-
-def _create_natural_game_start_runtime(
-    generator: ResponseGenerator,
-) -> tuple[RuntimeCoordinator, GameEngine, ActivityManager]:
-    engine = GameEngine([ShiritoriGameDefinition()])
-    manager = ActivityManager(game_engine=engine)
-    service = ShiritoriGameService(engine)
-    runtime = _create_runtime(
-        activity_manager=manager,
-        response_generator=generator,
-        game_input_classifier=GameInputClassifier(engine, generator),
-        shiritori_game_service=service,
-    )
-    return runtime, engine, manager
-
-
-@pytest.mark.asyncio
-async def test_natural_language_start_creates_session_before_single_game_response() -> None:
-    generator = NaturalGameStartResponseGenerator(
-        [
-            '{"game_action":"play_word","word":"うみ",'
-            '"utterance":"いいね、しりとりしよう！ 『うみ』、次は『み』だよ。"}'
-        ]
-    )
-    runtime, engine, manager = _create_natural_game_start_runtime(generator)
-
-    await runtime.publish_event(
-        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "しりとりしましょ"})
-    )
-
-    session = engine.get_active_session()
-    assert session is not None
-    state = session.metadata["shiritori_state"]
-    assert isinstance(state, ShiritoriState)
-    assert state.last_word == "うみ"
-    assert state.expected_head == "み"
-    assert state.used_words == ("うみ",)
-    assert state.current_turn == ShiritoriPlayer.USER
-    assert state.turn_count == 1
-    assert generator.game_call_count == 1
-    assert generator.conversation_call_count == 0
-    assert manager.ongoing_activity is None
-    assert await runtime.run_once() is None
-
-
-@pytest.mark.asyncio
-async def test_game_move_after_natural_start_uses_active_session() -> None:
-    generator = NaturalGameStartResponseGenerator(
-        [
-            '{"game_action":"play_word","word":"うみ","utterance":"うみ！"}',
-            '{"game_action":"play_word","word":"あさ","utterance":"あさ！"}',
-        ]
-    )
-    runtime, engine, _ = _create_natural_game_start_runtime(generator)
-    await runtime.publish_event(
-        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "しりとりしよう"})
-    )
-
-    await runtime.publish_event(
-        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "ミトコンドリア"})
-    )
-
-    result = runtime.last_game_input_classification
-    assert result is not None
-    assert result.classification.value == "game_move"
-    session = engine.get_active_session()
-    assert session is not None
-    state = session.metadata["shiritori_state"]
-    assert isinstance(state, ShiritoriState)
-    assert state.used_words == ("うみ", "みとこんどりあ", "あさ")
-    assert state.current_turn == ShiritoriPlayer.USER
-    assert state.expected_head == "さ"
-    assert generator.game_call_count == 2
-    assert generator.conversation_call_count == 0
-
-
-@pytest.mark.asyncio
-async def test_game_start_generation_failure_cancels_session_and_uses_conversation() -> None:
-    generator = FailingGameStartResponseGenerator()
-    runtime, engine, _ = _create_natural_game_start_runtime(generator)
-
-    await runtime.publish_event(
-        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "しりとりしよう"})
-    )
-
-    assert engine.get_active_session() is None
-    session = engine.get_current_session()
-    assert session is not None
-    assert session.status.value == "canceled"
-    group = await runtime.run_once()
-    assert group is not None
-    speak = next(plan for plan in group.action_plans if plan.action_type == ActionType.SPEAK)
-    assert "始められなかった" in speak.text
-    assert speak.metadata["skip_topic_memory"] is True
-
-
-@pytest.mark.asyncio
-async def test_game_move_is_routed_to_shiritori_service() -> None:
-    runtime, engine = _create_game_routing_runtime()
-
-    await runtime.publish_event(
-        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "みず"})
-    )
-
-    session = engine.get_active_session()
-    assert session is not None
-    state = session.metadata["shiritori_state"]
-    assert isinstance(state, ShiritoriState)
-    assert state.used_words == ("はさみ", "みず", "ずこう")
-    assert state.current_turn == ShiritoriPlayer.USER
-    assert await runtime.run_once() is None
-
-
-@pytest.mark.asyncio
-async def test_normal_chat_preserves_active_game_and_is_queued_as_conversation() -> None:
-    runtime, engine = _create_game_routing_runtime()
-    before = engine.get_current_session()
-
-    await runtime.publish_event(
-        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "今日は暑いね"})
-    )
-    group = await runtime.run_once()
-
-    assert group is not None
-    assert any(plan.text == "会話応答: 今日は暑いね" for plan in group.action_plans)
-    assert engine.get_current_session() == before
-
-
-@pytest.mark.asyncio
-async def test_mixed_input_is_structured_but_not_executed_yet() -> None:
-    runtime, engine = _create_game_routing_runtime()
-    before = engine.get_current_session()
-
-    await runtime.publish_event(
-        AgentEvent(
-            event_type=AgentEventType.USER_TEXT,
-            payload={"text": "みかん。そういえば果物は好き？"},
-        )
-    )
-
-    result = runtime.last_game_input_classification
-    assert result is not None
-    assert result.classification.value == "mixed"
-    assert result.game_word == "みかん"
-    assert result.chat_text == "そういえば果物は好き？"
-    assert engine.get_current_session() == before
-    assert await runtime.run_once() is None
 
 
 @pytest.mark.asyncio
@@ -433,9 +222,14 @@ async def test_publish_user_text_immediately_suspends_foreground_autonomous() ->
     assert activity.status.value == "canceled"
     assert agent_life_service.autonomous_topic is not None
     assert agent_life_service.autonomous_topic.status.value == "interrupted"
-    assert agent_life_service.autonomous_topic.source_activity_id == autonomous.activity_id
+    assert (
+        agent_life_service.autonomous_topic.source_activity_id == autonomous.activity_id
+    )
     assert activity_manager.foreground_activity is not None
-    assert activity_manager.foreground_activity.activity_type.value == "conversation_with_user"
+    assert (
+        activity_manager.foreground_activity.activity_type.value
+        == "conversation_with_user"
+    )
 
     action_group = await runtime.run_once()
     assert action_group is not None
@@ -446,10 +240,14 @@ async def test_publish_user_text_immediately_suspends_foreground_autonomous() ->
 
 
 @pytest.mark.asyncio
-async def test_user_input_during_autonomous_planning_prevents_autonomous_actions() -> None:
+async def test_user_input_during_autonomous_planning_prevents_autonomous_actions() -> (
+    None
+):
     response_generator = BlockingAutonomousResponseGenerator()
     runtime = _create_runtime(response_generator=response_generator)
-    await runtime.publish_event(AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, priority=8))
+    await runtime.publish_event(
+        AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, priority=8)
+    )
     autonomous_task = asyncio.create_task(runtime.run_once())
     await response_generator.autonomous_started.wait()
 
@@ -495,7 +293,8 @@ async def test_publish_events_replaces_camera_frame_with_latest_only() -> None:
 
     assert first_action is not None
     assert any(
-        action_plan.action_type == ActionType.OBSERVE for action_plan in first_action.action_plans
+        action_plan.action_type == ActionType.OBSERVE
+        for action_plan in first_action.action_plans
     )
     assert second_action is None
 
@@ -536,7 +335,8 @@ async def test_publish_events_keeps_user_text_and_latest_camera_frame() -> None:
 
     assert second_action is not None
     assert any(
-        action_plan.action_type == ActionType.OBSERVE for action_plan in second_action.action_plans
+        action_plan.action_type == ActionType.OBSERVE
+        for action_plan in second_action.action_plans
     )
 
     assert third_action is None
@@ -594,10 +394,65 @@ async def test_run_once_updates_agent_life_loop_state() -> None:
         )
     )
 
+    assert agent_life_service.agent_state.last_user_input_at is not None
+    relationship = agent_life_service.agent_state.relationship_memory.current
+    assert relationship is not None
+    assert relationship.interaction_count == 1
+
     await runtime.run_once()
 
     assert agent_life_service.agent_state.last_user_input_at is not None
+    assert agent_life_service.agent_state.relationship_memory.current == relationship
     assert agent_life_service.agent_state.active_activity is None
+
+
+@pytest.mark.asyncio
+async def test_runtime_carries_previewed_relationship_into_response_activity() -> None:
+    activity_manager = ActivityManager()
+    agent_life_service = AgentLifeService(activity_manager)
+    generator = CapturingResponseGenerator()
+    runtime = _create_runtime(
+        activity_manager=activity_manager,
+        agent_life_service=agent_life_service,
+        response_generator=generator,
+    )
+    event = AgentEvent(
+        event_type=AgentEventType.USER_TEXT,
+        payload={
+            "text": "また来たよ",
+            "source": "console",
+            "counterpart_id": "local:primary-user",
+            "counterpart_name": "Kei",
+        },
+    )
+
+    await runtime.publish_event(event)
+    await runtime.run_once()
+
+    payload = generator.activities[0].context["event_payload"]
+    assert isinstance(payload, dict)
+    assert payload["relationship"] == {
+        "counterpart_id": "local:primary-user",
+        "display_name": "Kei",
+        "role": "user",
+        "familiarity": 0.02,
+        "trust": 0.5,
+        "affinity": 0.0,
+        "interaction_count": 1,
+        "last_interaction_at": event.occurred_at.isoformat(),
+    }
+    assert agent_life_service.agent_state.relationship_memory.current is not None
+    diagnostic = runtime.diagnostic_snapshot()
+    assert diagnostic["relationship"] == {
+        "present": True,
+        "role": "user",
+        "familiarity": 0.02,
+        "trust": 0.5,
+        "affinity": 0.0,
+        "interaction_count": 1,
+    }
+    assert "また来たよ" not in str(diagnostic)
+    assert "Kei" not in str(diagnostic)
 
 
 @pytest.mark.asyncio
@@ -640,7 +495,9 @@ async def test_run_once_plans_autonomous_event_when_event_queue_is_empty() -> No
 
 
 @pytest.mark.asyncio
-async def test_run_once_plans_autonomous_event_even_when_event_queue_has_event() -> None:
+async def test_run_once_plans_autonomous_event_even_when_event_queue_has_event() -> (
+    None
+):
     activity_manager = ActivityManager()
     agent_life_service = AgentLifeService(activity_manager)
     agent_life_service.update_drive(DriveState(curiosity=0.9))
@@ -669,7 +526,9 @@ async def test_run_once_plans_autonomous_event_even_when_event_queue_has_event()
 
 
 @pytest.mark.asyncio
-async def test_run_once_does_not_plan_autonomous_event_when_active_activity_exists() -> None:
+async def test_run_once_does_not_plan_autonomous_event_when_active_activity_exists() -> (
+    None
+):
     activity_manager = ActivityManager()
     agent_life_service = AgentLifeService(activity_manager)
     runtime = _create_runtime(

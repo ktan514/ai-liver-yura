@@ -6,6 +6,10 @@ from queue import Queue
 
 import pytest
 
+from app.adapters.prompt import (
+    ResponseValidatorPromptBuilder,
+    SituationEvaluatorPromptBuilder,
+)
 from app.domain.actions import ActionPlan, ActionPlanGroup, ActionType
 from app.domain.activities import Activity, ActivityType
 from app.domain.activity_turn_result import (
@@ -34,7 +38,10 @@ from app.runtime.agent_life_service import AgentLifeService
 from app.runtime.agent_state import AgentState
 from app.runtime.autonomous_activity_execution import prepare_autonomous_execution
 from app.runtime.behavior_planner import BehaviorPlanner
-from app.runtime.character_response_pipeline import ResponseContextBuilder, ResponseValidator
+from app.runtime.character_response_pipeline import (
+    ResponseContextBuilder,
+    ResponseValidator,
+)
 from app.runtime.planned_activity_queue import PlannedActivity, PlannedActivityQueue
 
 
@@ -160,7 +167,9 @@ def _autonomous_activity(topic: str = "深海生物の発光") -> Activity:
     return activity
 
 
-def test_autonomous_planning_builds_situation_and_behavior_plan_without_speech() -> None:
+def test_autonomous_planning_builds_situation_and_behavior_plan_without_speech() -> (
+    None
+):
     event = AgentEvent(
         event_type=AgentEventType.CURIOSITY_PEAK,
         payload={
@@ -172,7 +181,10 @@ def test_autonomous_planning_builds_situation_and_behavior_plan_without_speech()
     life = PlanningLifeStub(event)
     memory = ShortTermMemory()
     memory.add_speech("さっきはクラゲについて話した")
-    planner = BehaviorPlanner(response_generator=ForbiddenLegacyGenerator())
+    planner = BehaviorPlanner(
+        response_generator=ForbiddenLegacyGenerator(),
+        situation_prompt_builder=SituationEvaluatorPromptBuilder(),
+    )
     service = ActivityPlanningService(
         agent_life_service=life,  # type: ignore[arg-type]
         activity_manager=manager,
@@ -260,7 +272,9 @@ async def test_autonomous_topic_drift_is_rejected_deterministically() -> None:
     )
 
     model = AlwaysAcceptValidatorModel()
-    result = await ResponseValidator(model).validate(activity, context, response)
+    result = await ResponseValidator(model, ResponseValidatorPromptBuilder()).validate(
+        activity, context, response
+    )
 
     assert result.accepted is False
     assert "autonomous_topic_drift" in result.claim_differences

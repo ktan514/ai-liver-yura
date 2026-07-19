@@ -10,13 +10,17 @@ from app.utils.trace import TraceLogger
 class AutonomousSituationEvaluator:
     """内的状態を発話本文を伴わない自律行動候補へ正規化する。"""
 
-    def evaluate(self, context: AutonomousSituationContext) -> AutonomousSituationAnalysis:
+    def evaluate(
+        self, context: AutonomousSituationContext
+    ) -> AutonomousSituationAnalysis:
         event = context.event_context
         continuation = str(event.get("continuation_decision") or "")
         selected_topic = str(event.get("selected_topic") or "").strip()
         interrupted = context.interrupted_topic
         interrupted_text = (
-            str(interrupted.get("original_text") or "").strip() if interrupted is not None else ""
+            str(interrupted.get("original_text") or "").strip()
+            if interrupted is not None
+            else ""
         )
         if continuation in {"resume_original", "resume_with_reframing"}:
             action = "topic_continue"

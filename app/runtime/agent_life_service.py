@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
+from dataclasses import asdict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from typing import Any
@@ -9,16 +11,31 @@ from uuid import uuid4
 from app.domain.drives import DriveState
 from app.domain.emotions import EmotionState
 from app.domain.events import AgentEvent, AgentEventType
+from app.domain.memory import (
+    EmotionHistoryEntry,
+    EpisodicMemory,
+    SemanticMemory,
+    UnfinishedActivityMemory,
+    UnrecoveredTopicMemory,
+)
+from app.domain.relationships import RelationshipMemory, RelationshipState
+from app.domain.short_term_memory import ShortTermMemory
 from app.domain.topic import (
     InterruptedTopic,
     TopicContinuationDecision,
     TopicContinuationResult,
     TopicLifecycleStatus,
 )
+from app.ports.relationship_memory_store import RelationshipMemoryStore
 from app.runtime.activity_manager import ActivityManager
 from app.runtime.agent_state import AgentState
+from app.runtime.autonomous_activity_policy import AutonomousActivityPolicy
 from app.runtime.drive_state_updater import DriveStateUpdater
+from app.runtime.emotion_appraiser import EmotionAppraiser
+from app.runtime.emotion_state_updater import EmotionStateUpdater
+from app.runtime.relationship_state_updater import RelationshipStateUpdater
 from app.runtime.topic_continuation_evaluator import TopicContinuationEvaluator
+from app.shared.contracts.memory import AgentMemoryStore
 from app.utils.trace import TraceLogger
 
 
@@ -35,15 +52,30 @@ class AgentLifeService:
         activity_manager: ActivityManager,
         initial_state: AgentState | None = None,
         drive_state_updater: DriveStateUpdater | None = None,
+        emotion_appraiser: EmotionAppraiser | None = None,
+        emotion_state_updater: EmotionStateUpdater | None = None,
+        relationship_state_updater: RelationshipStateUpdater | None = None,
+        relationship_memory_store: RelationshipMemoryStore | None = None,
+        short_term_memory: ShortTermMemory | None = None,
         now: datetime | None = None,
         conversation_idle_timeout_seconds: float = 30.0,
         topic_continuation_evaluator: TopicContinuationEvaluator | None = None,
         pending_confirmation_provider: Callable[[], bool] | None = None,
+        autonomous_activity_policy: AutonomousActivityPolicy | None = None,
+        agent_memory_store: AgentMemoryStore | None = None,
     ) -> None:
         self._activity_manager = activity_manager
         self._agent_state = initial_state or AgentState()
         self._drive_state_updater = drive_state_updater or DriveStateUpdater()
         self._last_drive_updated_at = now or datetime.now(timezone.utc)
+        self._emotion_appraiser = emotion_appraiser or EmotionAppraiser()
+        self._emotion_state_updater = emotion_state_updater or EmotionStateUpdater()
+        self._relationship_state_updater = (
+            relationship_state_updater or RelationshipStateUpdater()
+        )
+        self._relationship_memory_store = relationship_memory_store
+        self._short_term_memory = short_term_memory
+        self._last_emotion_updated_at = self._last_drive_updated_at
         self._last_autonomous_talk_planned_at: datetime | None = None
         self._conversation_idle_timeout_seconds = conversation_idle_timeout_seconds
         self._observed_ongoing_activity_id: str | None = None
@@ -53,7 +85,15 @@ class AgentLifeService:
         )
         self._autonomous_topic: InterruptedTopic | None = None
         self._recent_autonomous_texts: list[str] = []
-        self._pending_confirmation_provider = pending_confirmation_provider or (lambda: False)
+        self._pending_confirmation_provider = pending_confirmation_provider or (
+            lambda: False
+        )
+        self._autonomous_activity_policy = (
+            autonomous_activity_policy or AutonomousActivityPolicy()
+        )
+        self._agent_memory_store = agent_memory_store
+        self._processed_event_ids: deque[str] = deque(maxlen=1024)
+        self._processed_event_id_set: set[str] = set()
         self._trace_logger = TraceLogger()
 
     @property
@@ -77,15 +117,25 @@ class AgentLifeService:
         if not isinstance(metrics, dict):
             metrics = {}
         existing = self._autonomous_topic
-        same_activity = existing is not None and existing.source_activity_id == activity_id
+        same_activity = (
+            existing is not None and existing.source_activity_id == activity_id
+        )
         topic = InterruptedTopic(
-            topic_id=existing.topic_id if same_activity and existing is not None else str(uuid4()),
+            topic_id=(
+                existing.topic_id
+                if same_activity and existing is not None
+                else str(uuid4())
+            ),
             source_activity_id=activity_id,
             original_text=text,
-            status=existing.status
-            if same_activity and existing is not None
-            else TopicLifecycleStatus.ACTIVE,
-            importance=self._metric(metrics, "importance", self._estimate_importance(text)),
+            status=(
+                existing.status
+                if same_activity and existing is not None
+                else TopicLifecycleStatus.ACTIVE
+            ),
+            importance=self._metric(
+                metrics, "importance", self._estimate_importance(text)
+            ),
             interest=self._metric(
                 metrics,
                 "interest",
@@ -95,10 +145,18 @@ class AgentLifeService:
             incompleteness=self._metric(
                 metrics, "incompleteness", self._estimate_incompleteness(text)
             ),
-            exhaustion=self._metric(metrics, "exhaustion", self._estimate_exhaustion(text)),
-            interrupted_at=existing.interrupted_at if same_activity and existing else None,
-            interruption_turns=existing.interruption_turns if same_activity and existing else 0,
-            interruption_topics=existing.interruption_topics if same_activity and existing else (),
+            exhaustion=self._metric(
+                metrics, "exhaustion", self._estimate_exhaustion(text)
+            ),
+            interrupted_at=(
+                existing.interrupted_at if same_activity and existing else None
+            ),
+            interruption_turns=(
+                existing.interruption_turns if same_activity and existing else 0
+            ),
+            interruption_topics=(
+                existing.interruption_topics if same_activity and existing else ()
+            ),
         )
         self._autonomous_topic = topic
         self._trace_logger.info(
@@ -145,7 +203,8 @@ class AgentLifeService:
         if (
             topic is None
             or topic.source_activity_id != activity_id
-            or topic.status in {TopicLifecycleStatus.INTERRUPTED, TopicLifecycleStatus.SUSPENDED}
+            or topic.status
+            in {TopicLifecycleStatus.INTERRUPTED, TopicLifecycleStatus.SUSPENDED}
         ):
             return
         self._autonomous_topic = topic.with_status(TopicLifecycleStatus.COMPLETED)
@@ -159,6 +218,7 @@ class AgentLifeService:
 
         now = now or datetime.now(timezone.utc)
         self._update_drive_by_elapsed_time(now)
+        self._update_emotion_by_elapsed_time(now)
         self.sync_from_activity_manager()
         self._trace_logger.write(
             "agent_life_service:plan_next_event:start",
@@ -229,13 +289,17 @@ class AgentLifeService:
         }:
             self._trace_logger.debug(
                 "agent_life_service:topic_continuation:no_event",
-                topic_id=self._autonomous_topic.topic_id if self._autonomous_topic else None,
+                topic_id=(
+                    self._autonomous_topic.topic_id if self._autonomous_topic else None
+                ),
                 decision=continuation_result.decision.value,
                 reasons=list(continuation_result.reasons),
             )
             return None
 
-        if self._agent_state.current_emotion.should_reduce_speech():
+        if self._autonomous_activity_policy.should_defer_talking(
+            self._agent_state.current_emotion
+        ):
             self._trace_logger.write(
                 "agent_life_service:plan_next_event:skipped",
                 reason="emotion_reduces_speech",
@@ -255,7 +319,11 @@ class AgentLifeService:
             )
             return None
 
-        minimum_pause_seconds = self._agent_state.current_emotion.speech_pause_seconds()
+        minimum_pause_seconds = (
+            self._autonomous_activity_policy.minimum_talk_interval_seconds(
+                self._agent_state.current_emotion
+            )
+        )
 
         if self._is_within_pause(
             since=self._agent_state.last_speech_finished_at,
@@ -332,9 +400,11 @@ class AgentLifeService:
                     "continuation_reasons": list(continuation_result.reasons),
                     "reintroduction_required": continuation_result.reintroduction_required,
                     "selected_topic": continuation_result.selected_topic,
-                    "interrupted_topic": self._autonomous_topic.original_text
-                    if self._autonomous_topic is not None
-                    else None,
+                    "interrupted_topic": (
+                        self._autonomous_topic.original_text
+                        if self._autonomous_topic is not None
+                        else None
+                    ),
                 }
             )
 
@@ -360,10 +430,13 @@ class AgentLifeService:
             return f"conversation_ended:{self._explicit_resume_reason}"
         if self._observed_ongoing_activity_id is not None:
             return f"ongoing_activity_completed:{self._observed_ongoing_activity_id}"
-        if self._agent_state.last_user_input_at is not None and not self._is_within_pause(
-            since=self._agent_state.last_user_input_at,
-            now=now,
-            pause_seconds=self._conversation_idle_timeout_seconds,
+        if (
+            self._agent_state.last_user_input_at is not None
+            and not self._is_within_pause(
+                since=self._agent_state.last_user_input_at,
+                now=now,
+                pause_seconds=self._conversation_idle_timeout_seconds,
+            )
         ):
             return "conversation_idle_timeout"
         if self._agent_state.last_user_input_at is None:
@@ -373,7 +446,22 @@ class AgentLifeService:
     def handle_event(self, event: AgentEvent) -> AgentState:
         """Event を受け取り、AgentState に反映する。"""
 
+        if event.event_id in self._processed_event_id_set:
+            self._trace_logger.debug(
+                "agent_life_service:handle_event:duplicate_skipped",
+                event_id=event.event_id,
+                event_type=event.event_type.value,
+            )
+            return self.sync_from_activity_manager()
+        if len(self._processed_event_ids) == self._processed_event_ids.maxlen:
+            oldest = self._processed_event_ids[0]
+            self._processed_event_id_set.discard(oldest)
+        self._processed_event_ids.append(event.event_id)
+        self._processed_event_id_set.add(event.event_id)
+
         before_drive = self._agent_state.current_drive
+        before_emotion = self._agent_state.current_emotion
+        before_relationship = self._agent_state.relationship_memory.current
 
         self._agent_state = self._agent_state.with_drive(
             self._drive_state_updater.update_by_event(
@@ -396,6 +484,93 @@ class AgentLifeService:
             after_energy=after_drive.energy,
         )
 
+        appraisal = self._emotion_appraiser.appraise(event)
+        self._agent_state = self._agent_state.with_emotion(
+            self._emotion_state_updater.apply(before_emotion, appraisal)
+        )
+        self._last_emotion_updated_at = max(
+            self._last_emotion_updated_at,
+            event.occurred_at,
+        )
+        after_emotion = self._agent_state.current_emotion
+        self._trace_logger.info(
+            "agent_life_service:handle_event:emotion_updated",
+            event_type=event.event_type.value,
+            source_event_id=event.event_id,
+            appraisal_reason=appraisal.reason,
+            before_arousal=before_emotion.arousal,
+            before_valence=before_emotion.valence,
+            before_talkativeness=before_emotion.talkativeness,
+            after_arousal=after_emotion.arousal,
+            after_valence=after_emotion.valence,
+            after_talkativeness=after_emotion.talkativeness,
+        )
+
+        relationship_memory = self._relationship_state_updater.update(
+            self._agent_state.relationship_memory,
+            event,
+        )
+        self._agent_state = self._agent_state.with_relationship_memory(
+            relationship_memory
+        )
+        after_relationship = relationship_memory.current
+        relationship_changed = (
+            after_relationship is not None and after_relationship != before_relationship
+        )
+        if relationship_changed and after_relationship is not None:
+            self._trace_logger.info(
+                "agent_life_service:relationship_updated",
+                source_event_id=event.event_id,
+                counterpart_id=after_relationship.counterpart_id,
+                role=after_relationship.role,
+                familiarity=after_relationship.familiarity,
+                interaction_count=after_relationship.interaction_count,
+            )
+            self._persist_relationship_memory(relationship_memory, event.event_id)
+
+        attention_target = (
+            after_relationship.counterpart_id
+            if relationship_changed and after_relationship is not None
+            else self._agent_state.attention_target
+        )
+        source = event.payload.get("source")
+        input_source = source if isinstance(source, str) and source.strip() else None
+        self._agent_state = self._agent_state.with_attention_target(attention_target)
+        self._agent_state = self._agent_state.with_memory(
+            self._agent_state.memory.remember_episode(
+                EpisodicMemory(
+                    event_id=event.event_id,
+                    event_type=event.event_type.value,
+                    occurred_at=event.occurred_at,
+                    activity_id=(
+                        self._agent_state.active_activity.activity_id
+                        if self._agent_state.active_activity is not None
+                        else None
+                    ),
+                    counterpart_id=attention_target,
+                )
+            ).record_emotion(
+                EmotionHistoryEntry(
+                    source_event_id=event.event_id,
+                    before=asdict(before_emotion),
+                    after=asdict(after_emotion),
+                    reason=appraisal.reason,
+                    recorded_at=event.occurred_at,
+                )
+            )
+        )
+        self._persist_agent_memory()
+        self._agent_state = self._agent_state.with_situation(
+            self._agent_state.current_situation.observe_event(
+                event_id=event.event_id,
+                event_type=event.event_type.value,
+                occurred_at=event.occurred_at,
+                input_source=input_source,
+                input_authority_role=event.authority.role,
+                attention_target=attention_target,
+            )
+        )
+
         if event.event_type in (
             AgentEventType.USER_TEXT,
             AgentEventType.YOUTUBE_COMMENT,
@@ -403,8 +578,25 @@ class AgentLifeService:
         ):
             self._agent_state = self._agent_state.mark_user_input_received()
             text = event.payload.get("text") or event.payload.get("comment")
+            if self._short_term_memory is not None and isinstance(text, str):
+                self._short_term_memory.add_user_input(
+                    text,
+                    counterpart_id=(
+                        after_relationship.counterpart_id
+                        if after_relationship is not None
+                        else None
+                    ),
+                    display_name=(
+                        after_relationship.display_name
+                        if after_relationship is not None
+                        else None
+                    ),
+                    created_at=event.occurred_at,
+                )
             if self._autonomous_topic is not None and isinstance(text, str):
-                self._autonomous_topic = self._autonomous_topic.add_interruption_topic(text)
+                self._autonomous_topic = self._autonomous_topic.add_interruption_topic(
+                    text
+                )
 
         if event.event_type == AgentEventType.SPEECH_STARTED:
             self._agent_state = self._agent_state.mark_speech_started()
@@ -414,16 +606,133 @@ class AgentLifeService:
 
         return self.sync_from_activity_manager()
 
+    def _persist_relationship_memory(
+        self,
+        memory: RelationshipMemory,
+        source_event_id: str,
+    ) -> None:
+        if self._relationship_memory_store is None:
+            return
+        try:
+            self._relationship_memory_store.save(memory)
+        except Exception as error:
+            self._trace_logger.error(
+                "agent_life_service:relationship_persistence:failed",
+                source_event_id=source_event_id,
+                error_type=type(error).__name__,
+            )
+
+    def preview_relationship(self, event: AgentEvent) -> RelationshipState | None:
+        """副作用なしで、このEvent適用後の相手との関係を返す。"""
+
+        return self._relationship_state_updater.preview(
+            self._agent_state.relationship_memory,
+            event,
+        )
+
     def sync_from_activity_manager(self) -> AgentState:
         """ActivityManager の状態を AgentState に同期する。"""
 
+        before_memory = self._agent_state.memory
+        pending = self._activity_manager.pending_activities()
+        suspended = self._activity_manager.suspended_activities()
+        foreground = self._activity_manager.foreground_activity
+        ongoing = self._activity_manager.ongoing_activity
+        unfinished = tuple(
+            UnfinishedActivityMemory(
+                activity_id=activity.activity_id,
+                activity_type=activity.activity_type.value,
+                goal=activity.goal,
+                status=activity.status.value,
+                priority=activity.priority,
+                updated_at=activity.updated_at,
+            )
+            for activity in self._activity_manager.list_activities()
+            if activity.status.value in {"pending", "active", "waiting", "suspended"}
+        )
+        topic = self._autonomous_topic
+        unrecovered_topic = (
+            UnrecoveredTopicMemory(
+                topic_id=topic.topic_id,
+                source_activity_id=topic.source_activity_id,
+                summary=topic.original_text,
+                status=topic.status.value,
+                importance=topic.importance,
+                interrupted_at=topic.interrupted_at,
+            )
+            if topic is not None
+            and topic.status
+            in {TopicLifecycleStatus.INTERRUPTED, TopicLifecycleStatus.SUSPENDED}
+            else None
+        )
         self._agent_state = (
-            self._agent_state.with_active_activity(self._activity_manager.foreground_activity)
-            .with_pending_activities(self._activity_manager.pending_activities())
-            .with_suspended_activities(self._activity_manager.suspended_activities())
+            self._agent_state.with_active_activity(
+                self._activity_manager.foreground_activity
+            )
+            .with_pending_activities(pending)
+            .with_suspended_activities(suspended)
+            .with_memory(
+                self._agent_state.memory.with_unfinished_activities(
+                    unfinished
+                ).with_unrecovered_topic(unrecovered_topic)
+            )
+            .with_situation(
+                self._agent_state.current_situation.with_activity_snapshot(
+                    active_activity_id=(
+                        foreground.activity_id if foreground is not None else None
+                    ),
+                    active_activity_type=(
+                        foreground.activity_type.value
+                        if foreground is not None
+                        else None
+                    ),
+                    pending_activity_count=len(pending),
+                    suspended_activity_count=len(suspended),
+                    ongoing_activity_id=(
+                        ongoing.ongoing_activity_id if ongoing is not None else None
+                    ),
+                    ongoing_activity_type=(
+                        ongoing.activity_type if ongoing is not None else None
+                    ),
+                    ongoing_activity_status=(
+                        ongoing.status.value if ongoing is not None else None
+                    ),
+                )
+            )
         )
 
+        if self._agent_state.memory != before_memory:
+            self._persist_agent_memory()
+
         return self._agent_state
+
+    def learn_semantic_fact(
+        self,
+        *,
+        subject: str,
+        fact: str,
+        importance: float = 0.5,
+    ) -> AgentState:
+        """意味記憶を短期会話ログやエピソード履歴と分けて保存する。"""
+
+        self._agent_state = self._agent_state.with_memory(
+            self._agent_state.memory.learn(
+                SemanticMemory(subject=subject, fact=fact, importance=importance)
+            )
+        )
+        self._persist_agent_memory()
+        return self._agent_state
+
+    def _persist_agent_memory(self) -> None:
+        if self._agent_memory_store is None:
+            return
+        try:
+            self._agent_memory_store.save(self._agent_state.memory.to_snapshot())
+        except Exception as error:
+            self._trace_logger.error(
+                "agent_life_service:agent_memory_persistence:failed",
+                error_type=type(error).__name__,
+            )
 
     def update_emotion(self, emotion: EmotionState) -> AgentState:
         """感情・気分状態を更新する。"""
@@ -437,7 +746,9 @@ class AgentLifeService:
         self._agent_state = self._agent_state.with_drive(drive)
         return self._agent_state
 
-    def _evaluate_topic_continuation(self, now: datetime) -> TopicContinuationResult | None:
+    def _evaluate_topic_continuation(
+        self, now: datetime
+    ) -> TopicContinuationResult | None:
         topic = self._autonomous_topic
         if topic is None or topic.status not in {
             TopicLifecycleStatus.INTERRUPTED,
@@ -456,7 +767,9 @@ class AgentLifeService:
             TopicContinuationDecision.START_NEW_TOPIC: TopicLifecycleStatus.ABANDONED,
             TopicContinuationDecision.WAIT: topic.status,
         }
-        next_status = status_by_decision.get(result.decision, TopicLifecycleStatus.ACTIVE)
+        next_status = status_by_decision.get(
+            result.decision, TopicLifecycleStatus.ACTIVE
+        )
         self._autonomous_topic = topic.with_status(next_status)
         self._trace_logger.info(
             "agent_life_service:topic_continuation:evaluated",
@@ -520,12 +833,38 @@ class AgentLifeService:
             after_energy=after_drive.energy,
         )
 
+    def _update_emotion_by_elapsed_time(self, now: datetime) -> None:
+        before = self._agent_state.current_emotion
+        elapsed_seconds = max(
+            0.0, (now - self._last_emotion_updated_at).total_seconds()
+        )
+        after = self._emotion_state_updater.decay(
+            before, elapsed_seconds=elapsed_seconds
+        )
+        self._agent_state = self._agent_state.with_emotion(after)
+        self._last_emotion_updated_at = max(self._last_emotion_updated_at, now)
+        if after != before:
+            self._trace_logger.debug(
+                "agent_life_service:emotion_decayed",
+                elapsed_seconds=elapsed_seconds,
+                before_mood=before.mood.value,
+                after_mood=after.mood.value,
+                before_arousal=before.arousal,
+                after_arousal=after.arousal,
+                before_valence=before.valence,
+                after_valence=after.valence,
+                before_talkativeness=before.talkativeness,
+                after_talkativeness=after.talkativeness,
+            )
+
     def _autonomous_talk_interval_seconds(self) -> float:
         """テンションから次の自律発話までの最低間隔を決める。"""
 
         emotion = self._agent_state.current_emotion
         drive = self._agent_state.current_drive
-        tension = emotion.arousal * 0.45 + emotion.talkativeness * 0.45 + drive.energy * 0.10
+        tension = (
+            emotion.arousal * 0.45 + emotion.talkativeness * 0.45 + drive.energy * 0.10
+        )
         tension = max(0.0, min(1.0, tension))
 
         minimum_interval_seconds = 8.0

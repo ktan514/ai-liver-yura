@@ -92,7 +92,9 @@ class PlannedActivityQueue:
         with self._lock:
             return self._discard_expired_locked(now=now)
 
-    def discard_where(self, predicate: Callable[[PlannedActivity], bool]) -> list[PlannedActivity]:
+    def discard_where(
+        self, predicate: Callable[[PlannedActivity], bool]
+    ) -> list[PlannedActivity]:
         """条件に一致する未実行ActivityをQueueから取り除いて返す。"""
 
         with self._lock:
@@ -138,7 +140,9 @@ class PlannedActivityQueue:
             reverse=True,
         )
 
-    def _discard_expired_locked(self, now: datetime | None = None) -> list[PlannedActivity]:
+    def _discard_expired_locked(
+        self, now: datetime | None = None
+    ) -> list[PlannedActivity]:
         """Lock 取得済みの状態で期限切れ Activity を除外する。"""
 
         expired_items: list[PlannedActivity] = []

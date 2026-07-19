@@ -14,6 +14,7 @@ def test_agent_state_has_default_values() -> None:
     assert agent_state.running_actions == []
     assert agent_state.prepared_actions == []
     assert agent_state.current_drive == DriveState()
+    assert agent_state.memory.episodic == ()
     assert agent_state.attention_target is None
     assert agent_state.stream_status == "idle"
 

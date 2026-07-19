@@ -168,6 +168,4 @@ class TopicHistory:
         if not self.is_stagnating(category=latest_category, threshold=threshold):
             return None
 
-        return (
-            f"直近で {latest_category.value} 系の話題が続いているため、次は別カテゴリへ自然に広げる"
-        )
+        return f"直近で {latest_category.value} 系の話題が続いているため、次は別カテゴリへ自然に広げる"

@@ -6,15 +6,15 @@ from dataclasses import asdict, replace
 from queue import Queue
 from typing import Any, cast
 
-from app.core.plugins import PluginCapability, PluginManager
-from app.core.plugins.plugin import (
-    CommandHandler,
-    PlannedActivityInterpreter,
-    UserIntentInterpreter,
-)
+from app.core.plugins import PluginManager
 from app.core.plugins.user_request import UserRequestKind, interpret_user_request
 from app.domain.actions import ActionPlanGroup
-from app.domain.activities import Activity, ActivityStatus, ActivityType, OngoingActivity
+from app.domain.activities import (
+    Activity,
+    ActivityStatus,
+    ActivityType,
+    OngoingActivity,
+)
 from app.domain.activity_turn_result import ActivityTurnResult
 from app.domain.behavior import (
     ActivityOperation,
@@ -28,15 +28,7 @@ from app.domain.character_response import (
     ActivityExecutionResult,
     ActivityExecutionStatus,
 )
-from app.domain.events import AgentEvent, AgentEventType
-from app.domain.games import (
-    GameControl,
-    GameInputClassification,
-    GameInputClassificationResult,
-    ShiritoriPlayer,
-    ShiritoriState,
-    ShiritoriWordResult,
-)
+from app.domain.events import AgentEvent, AgentEventType, InputAuthority
 from app.domain.pending_confirmation import (
     ConfirmationResolutionKind,
     PendingConfirmation,
@@ -45,7 +37,10 @@ from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler
 from app.runtime.activity_executor_thread import ActivityExecutorThread
 from app.runtime.activity_manager import ActivityManager
-from app.runtime.activity_planner_thread import ActivityPlannerThread, ActivityPlanningRequest
+from app.runtime.activity_planner_thread import (
+    ActivityPlannerThread,
+    ActivityPlanningRequest,
+)
 from app.runtime.activity_registry import ActivityRegistry
 from app.runtime.activity_result_builder import build_activity_result
 from app.runtime.activity_turn_result_factory import (
@@ -53,6 +48,7 @@ from app.runtime.activity_turn_result_factory import (
     canceled_output_group,
 )
 from app.runtime.agent_life_service import AgentLifeService
+from app.runtime.agent_state import AgentState
 from app.runtime.autonomous_activity_execution import prepare_autonomous_execution
 from app.runtime.autonomous_output import completed_speech_text
 from app.runtime.behavior_planner import ActivityPlanValidator, BehaviorPlanner
@@ -60,11 +56,19 @@ from app.runtime.event_buffer import EventBuffer
 from app.runtime.event_filter import DefaultEventFilter, EventFilter
 from app.runtime.event_prioritizer import DefaultEventPrioritizer, EventPrioritizer
 from app.runtime.event_queue import EventQueue
-from app.runtime.game_engine import GameEngine
-from app.runtime.game_input_classifier import GameInputClassifier
 from app.runtime.ongoing_activity_coordinator import OngoingActivityCoordinator
-from app.runtime.pending_confirmation import ConfirmationResolver, PendingConfirmationManager
-from app.runtime.shiritori_game_service import ShiritoriGameService
+from app.runtime.pending_confirmation import (
+    ConfirmationResolver,
+    PendingConfirmationManager,
+)
+from app.shared.contracts.plugins.runtime import (
+    CommandHandler,
+    PlannedActivityInterpreter,
+    PluginActivityState,
+    PluginActivityStatus,
+    PluginCapability,
+    UserIntentInterpreter,
+)
 from app.utils.trace import TraceLogger
 
 
@@ -84,9 +88,6 @@ class RuntimeCoordinator:
         event_prioritizer: EventPrioritizer | None = None,
         event_buffer: EventBuffer | None = None,
         agent_life_service: AgentLifeService | None = None,
-        game_engine: GameEngine | None = None,
-        shiritori_game_service: ShiritoriGameService | None = None,
-        game_input_classifier: GameInputClassifier | None = None,
         plugin_manager: PluginManager | None = None,
         behavior_planner: BehaviorPlanner | None = None,
         activity_plan_validator: ActivityPlanValidator | None = None,
@@ -105,23 +106,18 @@ class RuntimeCoordinator:
         self._event_filter = event_filter or DefaultEventFilter()
         self._event_prioritizer = event_prioritizer or DefaultEventPrioritizer()
         self._event_buffer = event_buffer or EventBuffer()
-        self._agent_life_service = agent_life_service or AgentLifeService(activity_manager)
-        self._game_engine = (
-            cast(GameEngine, None)
-            if plugin_manager is not None
-            else game_engine or activity_manager.game_engine
+        self._agent_life_service = agent_life_service or AgentLifeService(
+            activity_manager
         )
-        self._shiritori_game_service = shiritori_game_service
-        self._game_input_classifier = game_input_classifier
         self._plugin_manager = plugin_manager
         self._behavior_planner = behavior_planner
         self._activity_plan_validator = activity_plan_validator
         self._activity_registry = activity_registry
         self._pending_confirmation_manager = pending_confirmation_manager
         self._confirmation_resolver = confirmation_resolver or ConfirmationResolver()
-        self._ongoing_activity_coordinator = OngoingActivityCoordinator(activity_manager)
-        self._last_game_input_classification: GameInputClassificationResult | None = None
-        self._last_started_game_session_id: str | None = None
+        self._ongoing_activity_coordinator = OngoingActivityCoordinator(
+            activity_manager
+        )
         self._last_behavior_evaluation: ActivityPlanEvaluation | None = None
         self._last_behavior_fallback_plan: ActivityPlan | None = None
         self._running = False
@@ -142,20 +138,99 @@ class RuntimeCoordinator:
         return self._autonomous_planning_enabled
 
     @property
-    def game_engine(self) -> GameEngine:
-        return self._game_engine
-
-    @property
-    def last_game_input_classification(self) -> GameInputClassificationResult | None:
-        return self._last_game_input_classification
-
-    @property
     def plugin_manager(self) -> PluginManager | None:
         return self._plugin_manager
 
     @property
     def activity_manager(self) -> ActivityManager:
         return self._activity_manager
+
+    @property
+    def agent_state(self) -> AgentState:
+        """管理・診断用途のimmutableな現在状態スナップショット。"""
+
+        return self._agent_life_service.agent_state
+
+    def diagnostic_snapshot(self) -> dict[str, object]:
+        """会話本文や外部秘密を含めず、Coreの現在状態を診断用に返す。"""
+
+        state = self._agent_life_service.agent_state
+        foreground = self._activity_manager.foreground_activity
+        ongoing = self._activity_manager.ongoing_activity
+        relationship = state.relationship_memory.current
+        manager = self._plugin_manager
+        plugin_statuses: dict[str, str] = {}
+        if manager is not None:
+            for plugin in manager.list_plugins():
+                status = manager.status(plugin.plugin_id)
+                plugin_statuses[plugin.plugin_id] = (
+                    status.value if status is not None else "unknown"
+                )
+        return {
+            "emotion": asdict(state.current_emotion),
+            "drive": asdict(state.current_drive),
+            "relationship": (
+                {
+                    "present": True,
+                    "role": relationship.role,
+                    "familiarity": relationship.familiarity,
+                    "trust": relationship.trust,
+                    "affinity": relationship.affinity,
+                    "interaction_count": relationship.interaction_count,
+                }
+                if relationship is not None
+                else {"present": False}
+            ),
+            "relationship_count": len(state.relationship_memory.relationships),
+            "memory": {
+                "episodic_count": len(state.memory.episodic),
+                "semantic_count": len(state.memory.semantic),
+                "unfinished_activity_count": len(state.memory.unfinished_activities),
+                "unrecovered_topic_count": len(state.memory.unrecovered_topics),
+                "emotion_history_count": len(state.memory.emotion_history),
+            },
+            "situation": {
+                "last_event_type": state.current_situation.last_event_type,
+                "last_event_at": (
+                    state.current_situation.last_event_at.isoformat()
+                    if state.current_situation.last_event_at is not None
+                    else None
+                ),
+                "input_source": state.current_situation.input_source,
+                "active_activity_type": state.current_situation.active_activity_type,
+                "pending_activity_count": state.current_situation.pending_activity_count,
+                "suspended_activity_count": state.current_situation.suspended_activity_count,
+                "ongoing_activity_type": state.current_situation.ongoing_activity_type,
+                "ongoing_activity_status": state.current_situation.ongoing_activity_status,
+            },
+            "activity": {
+                "foreground_id": (
+                    foreground.activity_id if foreground is not None else None
+                ),
+                "foreground_type": (
+                    foreground.activity_type.value if foreground is not None else None
+                ),
+                "foreground_status": (
+                    foreground.status.value if foreground is not None else None
+                ),
+                "pending_count": len(self._activity_manager.pending_activities()),
+                "suspended_count": len(self._activity_manager.suspended_activities()),
+                "ongoing_id": (
+                    ongoing.ongoing_activity_id if ongoing is not None else None
+                ),
+                "ongoing_type": ongoing.activity_type if ongoing is not None else None,
+                "ongoing_status": ongoing.status.value if ongoing is not None else None,
+            },
+            "plugins": (
+                {
+                    "statuses": plugin_statuses,
+                    "available_capabilities": sorted(manager.list_capabilities()),
+                }
+                if manager is not None
+                else {"statuses": {}, "available_capabilities": []}
+            ),
+            "stream_status": state.stream_status,
+        }
 
     @property
     def last_behavior_evaluation(self) -> ActivityPlanEvaluation | None:
@@ -170,39 +245,6 @@ class RuntimeCoordinator:
         manager = self._pending_confirmation_manager
         return manager.current() if manager is not None else None
 
-    async def start_shiritori(
-        self,
-        *,
-        started_by: ShiritoriPlayer = ShiritoriPlayer.AI,
-    ) -> ActionPlanGroup:
-        """自然言語分類を介さず、しりとりSessionとActivityを明示的に開始する。"""
-
-        if self._shiritori_game_service is None:
-            raise RuntimeError("ShiritoriGameServiceが設定されていません。")
-        session, activity = self._shiritori_game_service.start_game(
-            self._activity_manager,
-            started_by=started_by,
-        )
-        try:
-            return await self._execute_explicit_activity(activity)
-        except Exception:
-            self._activity_manager.complete_processed_activity(activity.activity_id)
-            current = self._game_engine.get_active_session()
-            if current is not None and current.session_id == session.session_id:
-                self._game_engine.cancel_game("shiritori_start_failed")
-            raise
-
-    async def submit_shiritori_word(self, word: str) -> tuple[ShiritoriWordResult, ActionPlanGroup]:
-        """明示的にゲーム入力と確定した単語をしりとりへ渡す。"""
-
-        if self._shiritori_game_service is None:
-            raise RuntimeError("ShiritoriGameServiceが設定されていません。")
-        result, activity = self._shiritori_game_service.submit_user_word(
-            self._activity_manager,
-            word,
-        )
-        return result, await self._execute_explicit_activity(activity)
-
     async def _execute_explicit_activity(self, activity: Activity) -> ActionPlanGroup:
         prepare_autonomous_execution(activity)
         try:
@@ -210,7 +252,9 @@ class RuntimeCoordinator:
         except Exception as error:
             action_plan_group = action_planning_failure_group(activity, error)
             if action_plan_group.activity_turn_result is not None:
-                self._activity_manager.record_turn_result(action_plan_group.activity_turn_result)
+                self._activity_manager.record_turn_result(
+                    action_plan_group.activity_turn_result
+                )
             self._trace_logger.warning(
                 "runtime_coordinator:action_planning:failed",
                 activity_id=activity.activity_id,
@@ -221,7 +265,10 @@ class RuntimeCoordinator:
             self._agent_life_service.sync_from_activity_manager()
             raise
         output_result = await self._action_scheduler.execute(action_plan_group)
-        if output_result is not None and action_plan_group.activity_turn_result is not None:
+        if (
+            output_result is not None
+            and action_plan_group.activity_turn_result is not None
+        ):
             self._activity_manager.record_output_result(
                 action_plan_group.activity_turn_result, output_result
             )
@@ -232,13 +279,20 @@ class RuntimeCoordinator:
     async def publish_event(self, event: AgentEvent) -> None:
         await self.publish_events([event])
 
-    async def submit_user_text(self, text: str, *, source: str = "external") -> None:
+    async def submit_user_text(
+        self,
+        text: str,
+        *,
+        source: str = "external",
+        authority: InputAuthority = InputAuthority.USER,
+    ) -> None:
         """本番入力AdapterからUSER_TEXTを共通ルーティングへ投入する公開入口。"""
 
         await self.publish_event(
             AgentEvent(
                 event_type=AgentEventType.USER_TEXT,
                 payload={"text": text, "source": source},
+                authority=authority,
             )
         )
 
@@ -283,7 +337,9 @@ class RuntimeCoordinator:
     ) -> None:
         self._event_subscribers.append((event_type, handler, predicate))
 
-    def register_event_enricher(self, enricher: Callable[[AgentEvent], AgentEvent]) -> None:
+    def register_event_enricher(
+        self, enricher: Callable[[AgentEvent], AgentEvent]
+    ) -> None:
         self._event_enrichers.append(enricher)
 
     async def publish_events(self, events: list[AgentEvent]) -> None:
@@ -295,6 +351,7 @@ class RuntimeCoordinator:
             filtered_event = self._event_filter.filter(event)
             if filtered_event is None:
                 continue
+            self._agent_life_service.handle_event(filtered_event)
             subscriber = next(
                 (
                     handler
@@ -324,20 +381,17 @@ class RuntimeCoordinator:
                     activity_turn_id=filtered_event.trace_context.activity_turn_id,
                     confirmation_id=filtered_event.trace_context.confirmation_id,
                 )
-                if self._behavior_planner is not None and self._activity_plan_validator is not None:
+                if (
+                    self._behavior_planner is not None
+                    and self._activity_plan_validator is not None
+                ):
                     routed_event = await self._route_behavior(filtered_event)
-                elif self._has_plugin_capability(PluginCapability.USER_INTENT_INTERPRETER.value):
+                elif self._has_plugin_capability(
+                    PluginCapability.USER_INTENT_INTERPRETER.value
+                ):
                     routed_event = await self._route_plugin_user_input(filtered_event)
-                elif self._game_input_classifier is not None:
-                    routed_event = await self._route_game_input(filtered_event)
                 else:
                     routed_event = self._with_plugin_availability(filtered_event)
-                if self._last_game_input_classification is not None:
-                    self._write_user_text_routing_finished(
-                        filtered_event,
-                        self._last_game_input_classification,
-                        routed_event,
-                    )
                 if routed_event is None:
                     continue
                 filtered_event = routed_event
@@ -348,7 +402,9 @@ class RuntimeCoordinator:
             )
             prioritized_event = self._event_prioritizer.prioritize(filtered_event)
             foreground_before_input = self._activity_manager.foreground_activity
-            prepared_activity = self._activity_manager.prepare_user_input(prioritized_event)
+            prepared_activity = self._activity_manager.prepare_user_input(
+                prioritized_event
+            )
             if prioritized_event.event_type == AgentEventType.USER_TEXT:
                 self._activity_planner_thread.cancel_inflight_autonomous(
                     source_event_id=prioritized_event.event_id,
@@ -356,7 +412,8 @@ class RuntimeCoordinator:
                 )
                 if (
                     foreground_before_input is not None
-                    and foreground_before_input.activity_type == ActivityType.AUTONOMOUS_TALK
+                    and foreground_before_input.activity_type
+                    == ActivityType.AUTONOMOUS_TALK
                 ):
                     self._agent_life_service.interrupt_autonomous_topic(
                         activity_id=foreground_before_input.activity_id,
@@ -373,14 +430,18 @@ class RuntimeCoordinator:
                     self._trace_logger.info(
                         "runtime_coordinator:user_input:pending_autonomous_canceled",
                         event_id=prioritized_event.event_id,
-                        planned_activity_ids=[item.planned_activity_id for item in canceled],
+                        planned_activity_ids=[
+                            item.planned_activity_id for item in canceled
+                        ],
                         activity_ids=[item.activity.activity_id for item in canceled],
                     )
                 if discarded_deferred:
                     self._trace_logger.info(
                         "runtime_coordinator:user_input:deferred_autonomous_discarded",
                         event_id=prioritized_event.event_id,
-                        activity_ids=[activity.activity_id for activity in discarded_deferred],
+                        activity_ids=[
+                            activity.activity_id for activity in discarded_deferred
+                        ],
                         reason="restart_with_fresh_context_after_conversation",
                     )
             if prepared_activity is not None:
@@ -425,20 +486,46 @@ class RuntimeCoordinator:
             return self._with_plugin_availability(event)
         agent_state = self._agent_life_service.agent_state
         ongoing = self._activity_manager.ongoing_activity
+        relationship = self._agent_life_service.preview_relationship(event)
+        relationship_context = (
+            relationship.as_context() if relationship is not None else {}
+        )
+        situation_context = agent_state.current_situation.as_context()
+        memory_context = agent_state.memory.as_context()
+        event = replace(
+            event,
+            payload={
+                **event.payload,
+                "input_authority": {
+                    "role": event.authority.role,
+                    "instruction_trusted": event.authority.instruction_trusted,
+                },
+                "relationship": relationship_context,
+                "situation": situation_context,
+                "memory": memory_context,
+            },
+        )
         planning_context = BehaviorPlanningContext(
             user_text=str(event.payload.get("text") or ""),
             source_event_id=event.event_id,
             available_capabilities=manager.list_capabilities(),
+            authority_role=event.authority.role,
+            instruction_trusted=event.authority.instruction_trusted,
             activity_definitions=(
                 self._activity_registry.list_definitions()
                 if self._activity_registry is not None
                 else manager.list_activity_definitions()
             ),
             active_activity_definition=manager.active_activity_definition(),
-            ongoing_activity_type=ongoing.activity_type if ongoing is not None else None,
+            ongoing_activity_type=(
+                ongoing.activity_type if ongoing is not None else None
+            ),
             ongoing_activity=self._ongoing_planning_context(ongoing),
             drive=asdict(agent_state.current_drive),
             emotion=asdict(agent_state.current_emotion),
+            relationship=relationship_context,
+            situation=situation_context,
+            memory=memory_context,
             last_activity_result=self._activity_manager.last_activity_result,
             trace_context=event.trace_context,
         )
@@ -455,7 +542,9 @@ class RuntimeCoordinator:
                     confirmation_id=pending.confirmation_id,
                 ),
             )
-            planning_context = replace(planning_context, trace_context=event.trace_context)
+            planning_context = replace(
+                planning_context, trace_context=event.trace_context
+            )
             assert pending_manager is not None
             resolution = self._confirmation_resolver.resolve(
                 planning_context.user_text,
@@ -479,7 +568,9 @@ class RuntimeCoordinator:
                 plan = self._confirmed_plan(resolved.candidate_plan)
                 snapshot_analysis = resolved.context_snapshot.get("situation_analysis")
                 situation_payload = (
-                    dict(snapshot_analysis) if isinstance(snapshot_analysis, dict) else {}
+                    dict(snapshot_analysis)
+                    if isinstance(snapshot_analysis, dict)
+                    else {}
                 )
                 confirmation_payload = self._confirmation_payload(
                     resolved,
@@ -519,7 +610,9 @@ class RuntimeCoordinator:
                     event,
                     revised or pending,
                     resolution=(
-                        resolution.kind.value if revised is not None else "max_attempts_reached"
+                        resolution.kind.value
+                        if revised is not None
+                        else "max_attempts_reached"
                     ),
                     waiting=revised is not None,
                 )
@@ -551,13 +644,17 @@ class RuntimeCoordinator:
         plan = evaluation.plan
         event = replace(
             event,
-            trace_context=event.trace_context.derive(behavior_plan_id=plan.behavior_plan_id),
+            trace_context=event.trace_context.derive(
+                behavior_plan_id=plan.behavior_plan_id
+            ),
         )
         self._last_behavior_evaluation = evaluation
         self._last_behavior_fallback_plan = None
         self._trace_logger.info(
             "behavior_planner:activity_plan_evaluated",
-            **event.trace_context.derive(behavior_plan_id=plan.behavior_plan_id).as_log_fields(),
+            **event.trace_context.derive(
+                behavior_plan_id=plan.behavior_plan_id
+            ).as_log_fields(),
             decision=plan.decision.value,
             activity_type=plan.activity_type,
             operation=plan.operation.value if plan.operation else None,
@@ -576,7 +673,9 @@ class RuntimeCoordinator:
                 current_status=ongoing.status.value if ongoing is not None else None,
             ),
             **confirmation_payload,
-            "trace_context": event.trace_context.derive(behavior_plan_id=plan.behavior_plan_id),
+            "trace_context": event.trace_context.derive(
+                behavior_plan_id=plan.behavior_plan_id
+            ),
         }
         if not evaluation.accepted:
             behavior_payload["activity_execution_result"] = ActivityExecutionResult(
@@ -586,7 +685,9 @@ class RuntimeCoordinator:
                 capability=plan.required_capability,
                 provider=plan.provider_plugin_id,
                 payload={"summary": evaluation.result.summary},
-                failure_reason=str(evaluation.result.data.get("reason") or "activity_rejected"),
+                failure_reason=str(
+                    evaluation.result.data.get("reason") or "activity_rejected"
+                ),
                 constraints=plan.constraints,
                 source_event_id=event.event_id,
                 trace_id=event.trace_context.trace_id,
@@ -595,7 +696,9 @@ class RuntimeCoordinator:
             )
             fallback_plan = planner.fallback_after_rejection(evaluation)
             self._last_behavior_fallback_plan = fallback_plan
-            behavior_payload["behavior_fallback_plan"] = self._plan_payload(fallback_plan)
+            behavior_payload["behavior_fallback_plan"] = self._plan_payload(
+                fallback_plan
+            )
             fallback_event = self._with_execution_fallback(
                 event,
                 contexts=[{"activity_plan_result": asdict(evaluation.result)}],
@@ -623,7 +726,7 @@ class RuntimeCoordinator:
             routed = self._with_plugin_availability(event)
             execution_rejected = bool(routed.payload.get("execution_request_unmatched"))
             behavior_payload["activity_execution_result"] = ActivityExecutionResult(
-                activity_type="conversation",
+                activity_type=plan.activity_type,
                 operation=plan.operation.value if plan.operation else None,
                 status=(
                     ActivityExecutionStatus.REJECTED
@@ -663,15 +766,21 @@ class RuntimeCoordinator:
         return replace(
             plan,
             decision=decision,
-            activity_type="conversation"
-            if decision == BehaviorDecision.CONVERSATION
-            else plan.activity_type,
-            required_capability=None
-            if decision == BehaviorDecision.CONVERSATION
-            else plan.required_capability,
-            provider_plugin_id=None
-            if decision == BehaviorDecision.CONVERSATION
-            else plan.provider_plugin_id,
+            activity_type=(
+                "conversation"
+                if decision == BehaviorDecision.CONVERSATION
+                else plan.activity_type
+            ),
+            required_capability=(
+                None
+                if decision == BehaviorDecision.CONVERSATION
+                else plan.required_capability
+            ),
+            provider_plugin_id=(
+                None
+                if decision == BehaviorDecision.CONVERSATION
+                else plan.provider_plugin_id
+            ),
             planner_constraints=tuple(
                 item
                 for item in plan.planner_constraints
@@ -691,11 +800,17 @@ class RuntimeCoordinator:
         waiting: bool,
     ) -> AgentEvent:
         payload = self._confirmation_payload(pending, resolution=resolution)
-        summary = pending.question if waiting else self._confirmation_resolution_summary(resolution)
-        conversation_plan = ActivityPlan(
-            decision=BehaviorDecision.ASK_CONFIRMATION
+        summary = (
+            pending.question
             if waiting
-            else BehaviorDecision.CONVERSATION,
+            else self._confirmation_resolution_summary(resolution)
+        )
+        conversation_plan = ActivityPlan(
+            decision=(
+                BehaviorDecision.ASK_CONFIRMATION
+                if waiting
+                else BehaviorDecision.CONVERSATION
+            ),
             activity_type="confirmation" if waiting else "conversation",
             goal=summary,
             operation=ActivityOperation.DISCUSS,
@@ -759,11 +874,14 @@ class RuntimeCoordinator:
                 "max_attempts": pending.max_attempts,
                 "resolution": resolution,
                 "final_behavior_plan": (
-                    RuntimeCoordinator._plan_payload(final_plan) if final_plan is not None else None
+                    RuntimeCoordinator._plan_payload(final_plan)
+                    if final_plan is not None
+                    else None
                 ),
                 "final_behavior_plan_id": (
                     f"{pending.confirmation_id}:{pending.resolution_event_id}"
-                    if final_plan is not None and pending.resolution_event_id is not None
+                    if final_plan is not None
+                    and pending.resolution_event_id is not None
                     else None
                 ),
                 "original_trace_id": pending.original_trace_id,
@@ -802,7 +920,9 @@ class RuntimeCoordinator:
                 )
                 return self._with_execution_fallback(
                     event,
-                    contexts=[{"activity_plan_result": asdict(immediate_evaluation.result)}],
+                    contexts=[
+                        {"activity_plan_result": asdict(immediate_evaluation.result)}
+                    ],
                     reason=str(
                         immediate_evaluation.result.data.get("reason")
                         or "activity_plan_rejected_before_execution"
@@ -832,7 +952,9 @@ class RuntimeCoordinator:
                         **event.payload,
                         "plugin_contexts": [dict(intent_result.conversation_context)],
                         **dict(intent_result.conversation_context),
-                        "available_plugin_capabilities": sorted(manager.list_capabilities()),
+                        "available_plugin_capabilities": sorted(
+                            manager.list_capabilities()
+                        ),
                         "execution_performed": False,
                     },
                 )
@@ -878,7 +1000,9 @@ class RuntimeCoordinator:
             if operation != "start":
                 try:
                     ongoing = self._ongoing_activity_coordinator.verify_context(
-                        session_id=self._optional_context_str(session_before, "session_id"),
+                        session_id=self._optional_context_str(
+                            session_before, "session_id"
+                        ),
                         plugin_id=plugin.plugin_id,
                     )
                     if ongoing is None:
@@ -887,9 +1011,13 @@ class RuntimeCoordinator:
                         input_text=text,
                         source_event_id=event.event_id,
                         operation=operation,
-                        constraints=ongoing.context.get("constraints", constraints)
-                        if isinstance(ongoing.context.get("constraints", constraints), dict)
-                        else constraints,
+                        constraints=(
+                            ongoing.context.get("constraints", constraints)
+                            if isinstance(
+                                ongoing.context.get("constraints", constraints), dict
+                            )
+                            else constraints
+                        ),
                     )
                     turn_started = True
                 except RuntimeError as error:
@@ -924,27 +1052,30 @@ class RuntimeCoordinator:
             if execution.handled and execution.activity_request is not None:
                 request = execution.activity_request
                 try:
-                    execution_result, ongoing_snapshot = self._synchronize_plugin_activity(
-                        plugin=plugin,
-                        request_context=dict(request.context),
-                        activity_kind=request.activity_kind,
-                        activity_type=(
-                            activity_plan.activity_type
-                            if activity_plan is not None
-                            else request.activity_kind
-                        ),
-                        response_text=request.response_text,
-                        capability=required_capability,
-                        operation=operation,
-                        constraints=constraints,
-                        goal=(
-                            activity_plan.goal
-                            if activity_plan is not None
-                            else f"Plugin {request.plugin_id} の継続Activityを実行する"
-                        ),
-                        input_text=text,
-                        source_event_id=event.event_id,
-                        turn_started=turn_started,
+                    execution_result, ongoing_snapshot = (
+                        self._synchronize_plugin_activity(
+                            plugin=plugin,
+                            activity_state=request.state,
+                            request_context=dict(request.context),
+                            activity_kind=request.activity_kind,
+                            activity_type=(
+                                activity_plan.activity_type
+                                if activity_plan is not None
+                                else request.activity_kind
+                            ),
+                            response_text=request.response_text,
+                            capability=required_capability,
+                            operation=operation,
+                            constraints=constraints,
+                            goal=(
+                                activity_plan.goal
+                                if activity_plan is not None
+                                else f"Plugin {request.plugin_id} の継続Activityを実行する"
+                            ),
+                            input_text=text,
+                            source_event_id=event.event_id,
+                            turn_started=turn_started,
+                        )
                     )
                 except Exception as error:
                     self._trace_logger.error(
@@ -960,7 +1091,7 @@ class RuntimeCoordinator:
                         confidence=intent_result.confidence,
                     )
                 activity = Activity(
-                    activity_type=ActivityType.GAME_WITH_USER,
+                    activity_type=ActivityType.PLUGIN_ACTIVITY,
                     goal=f"Plugin {request.plugin_id} のActivityを実行する",
                     priority=request.priority,
                     context={
@@ -1009,14 +1140,31 @@ class RuntimeCoordinator:
                         failure_reason=execution.reason or "execution_not_completed",
                         constraints=constraints,
                     )
-                    failure_session_status = self._optional_context_str(
-                        dict(execution.conversation_context), "session_status"
+                    failure_state = execution.activity_state
+                    can_continue = (
+                        failure_state is not None
+                        and failure_state.status
+                        in {
+                            PluginActivityStatus.WAITING_INPUT,
+                            PluginActivityStatus.SUSPENDED,
+                        }
                     )
-                    can_continue = failure_session_status in {"playing", "paused"}
+                    failure_context = dict(execution.conversation_context)
+                    if failure_state is not None:
+                        failure_context.update(
+                            {
+                                "plugin_session_id": failure_state.session_id,
+                                "plugin_activity_status": failure_state.status.value,
+                            }
+                        )
                     self._ongoing_activity_coordinator.record_execution(
                         failed_result,
-                        context_updates=dict(execution.conversation_context),
-                        expected_input="ゲームの次の入力" if can_continue else "",
+                        context_updates=failure_context,
+                        expected_input=(
+                            failure_state.expected_input
+                            if can_continue and failure_state is not None
+                            else ""
+                        ),
                         waiting_input=can_continue,
                     )
                     if not can_continue:
@@ -1036,7 +1184,9 @@ class RuntimeCoordinator:
                     "plugin_contexts": [dict(execution.conversation_context)],
                     **dict(execution.conversation_context),
                     "plugin_intent_reason": intent_result.reason,
-                    "available_plugin_capabilities": sorted(manager.list_capabilities()),
+                    "available_plugin_capabilities": sorted(
+                        manager.list_capabilities()
+                    ),
                     "execution_performed": False,
                 },
             )
@@ -1046,6 +1196,7 @@ class RuntimeCoordinator:
         self,
         *,
         plugin: object,
+        activity_state: PluginActivityState,
         request_context: dict[str, object],
         activity_kind: str,
         activity_type: str,
@@ -1058,21 +1209,23 @@ class RuntimeCoordinator:
         source_event_id: str,
         turn_started: bool,
     ) -> tuple[ActivityExecutionResult, OngoingActivity]:
-        plugin_id = str(request_context.get("plugin_id") or getattr(plugin, "plugin_id", ""))
-        session_id = self._optional_context_str(request_context, "session_id")
-        session_status = self._optional_context_str(request_context, "session_status")
-        game_type = self._optional_context_str(request_context, "game_type")
-        if session_id is None:
-            self._rollback_plugin_and_ongoing(plugin, reason="missing_plugin_session_id")
-            raise RuntimeError("Plugin Activityにsession_idがありません。")
-
-        is_terminal = session_status in {"completed", "canceled"}
+        plugin_id = str(
+            request_context.get("plugin_id") or getattr(plugin, "plugin_id", "")
+        )
+        session_id = activity_state.session_id
+        session_status = activity_state.status
+        is_terminal = session_status in {
+            PluginActivityStatus.COMPLETED,
+            PluginActivityStatus.CANCELED,
+        }
         result_status = (
             ActivityExecutionStatus.CANCELED
-            if session_status == "canceled"
-            else ActivityExecutionStatus.SUCCEEDED
-            if session_status == "completed"
-            else ActivityExecutionStatus.WAITING_INPUT
+            if session_status == PluginActivityStatus.CANCELED
+            else (
+                ActivityExecutionStatus.SUCCEEDED
+                if session_status == PluginActivityStatus.COMPLETED
+                else ActivityExecutionStatus.WAITING_INPUT
+            )
         )
         execution_result = ActivityExecutionResult(
             activity_type=activity_type,
@@ -1090,10 +1243,9 @@ class RuntimeCoordinator:
         context_updates = {
             "plugin_id": plugin_id,
             "capability": capability,
-            "game_session_id": session_id,
-            "game_type": game_type,
+            "plugin_session_id": session_id,
             "plugin_state_version": request_context.get("plugin_state_version"),
-            "session_status": session_status,
+            "plugin_activity_status": session_status.value,
             "constraints": dict(constraints),
         }
         if operation == "start":
@@ -1101,8 +1253,8 @@ class RuntimeCoordinator:
                 ongoing = self._ongoing_activity_coordinator.start(
                     activity_type=activity_type,
                     goal=goal,
-                    expected_input="ゲームの次の入力",
-                    end_condition="ゲーム終了またはユーザーによる停止",
+                    expected_input=activity_state.expected_input,
+                    end_condition=activity_state.end_condition,
                     context=context_updates,
                     input_text=input_text,
                     source_event_id=source_event_id,
@@ -1111,11 +1263,15 @@ class RuntimeCoordinator:
                 )
                 linker = getattr(plugin, "link_ongoing_activity", None)
                 if not callable(linker):
-                    raise RuntimeError("PluginがOngoingActivity関連付けに対応していません。")
+                    raise RuntimeError(
+                        "PluginがOngoingActivity関連付けに対応していません。"
+                    )
                 linker(ongoing.ongoing_activity_id)
                 context_updates["ongoing_activity_id"] = ongoing.ongoing_activity_id
             except Exception:
-                self._rollback_plugin_and_ongoing(plugin, reason="ongoing_activity_start_failed")
+                self._rollback_plugin_and_ongoing(
+                    plugin, reason="ongoing_activity_start_failed"
+                )
                 raise
         else:
             verified = self._ongoing_activity_coordinator.verify_context(
@@ -1130,21 +1286,25 @@ class RuntimeCoordinator:
         recorded = self._ongoing_activity_coordinator.record_execution(
             execution_result,
             context_updates=context_updates,
-            expected_input="" if is_terminal else "ゲームの次の入力",
-            waiting_input=not is_terminal,
+            expected_input="" if is_terminal else activity_state.expected_input,
+            waiting_input=session_status == PluginActivityStatus.WAITING_INPUT,
         )
-        if session_status == "completed":
+        if session_status == PluginActivityStatus.COMPLETED:
             terminal = self._ongoing_activity_coordinator.complete(
                 reason="plugin_session_completed"
             )
             if terminal is not None:
                 recorded = terminal
-        elif session_status == "canceled":
-            terminal = self._ongoing_activity_coordinator.cancel(reason="plugin_session_canceled")
+        elif session_status == PluginActivityStatus.CANCELED:
+            terminal = self._ongoing_activity_coordinator.cancel(
+                reason="plugin_session_canceled"
+            )
             if terminal is not None:
                 recorded = terminal
-        elif session_status == "paused":
-            paused = self._ongoing_activity_coordinator.pause(reason="plugin_session_paused")
+        elif session_status == PluginActivityStatus.SUSPENDED:
+            paused = self._ongoing_activity_coordinator.pause(
+                reason="plugin_session_paused"
+            )
             if paused is not None:
                 recorded = paused
         self._trace_logger.info(
@@ -1154,7 +1314,7 @@ class RuntimeCoordinator:
             session_id=session_id,
             operation=operation,
             ongoing_status=recorded.status.value,
-            session_status=session_status,
+            session_status=session_status.value,
             activity_turn_id=recorded.turns[-1].turn_id if recorded.turns else None,
         )
         return execution_result, recorded
@@ -1178,14 +1338,8 @@ class RuntimeCoordinator:
         if activity_plan is not None and activity_plan.operation is not None:
             return activity_plan.operation.value
         command = getattr(intent_result, "command", None)
-        command_type = str(getattr(command, "command_type", ""))
-        payload = getattr(command, "payload", {})
-        if command_type == "start_game":
-            return "start"
-        if command_type == "game_control" and isinstance(payload, Mapping):
-            if payload.get("control") == "quit":
-                return "stop"
-        return "continue"
+        operation = getattr(command, "operation", None)
+        return str(operation) if operation is not None else "continue"
 
     def _rollback_plugin_and_ongoing(self, plugin: object, *, reason: str) -> None:
         self._ongoing_activity_coordinator.cancel(reason=reason)
@@ -1205,7 +1359,9 @@ class RuntimeCoordinator:
         payload["operation"] = plan.operation.value if plan.operation else None
         payload["speech_act"] = plan.speech_act.value
         payload["ongoing_input_decision"] = (
-            plan.ongoing_input_decision.value if plan.ongoing_input_decision is not None else None
+            plan.ongoing_input_decision.value
+            if plan.ongoing_input_decision is not None
+            else None
         )
         return payload
 
@@ -1257,7 +1413,10 @@ class RuntimeCoordinator:
             required_capability=current.required_capability,
             activity_plan=stop_plan,
         )
-        if stop_routed is not None or self._activity_manager.ongoing_activity is not None:
+        if (
+            stop_routed is not None
+            or self._activity_manager.ongoing_activity is not None
+        ):
             self._trace_logger.warning(
                 "runtime_coordinator:activity_switch_stop_failed",
                 current_activity_type=current.activity_type,
@@ -1292,10 +1451,9 @@ class RuntimeCoordinator:
         summary_keys = (
             "plugin_id",
             "capability",
-            "game_session_id",
-            "game_type",
+            "plugin_session_id",
             "plugin_state_version",
-            "session_status",
+            "plugin_activity_status",
         )
         constraints = ongoing.context.get("constraints")
         recent_turns: tuple[dict[str, object], ...] = tuple(
@@ -1322,7 +1480,9 @@ class RuntimeCoordinator:
             turn_count=len(ongoing.turns),
             current_operation=ongoing.turns[-1].operation if ongoing.turns else None,
             plugin_state_summary={
-                key: ongoing.context[key] for key in summary_keys if key in ongoing.context
+                key: ongoing.context[key]
+                for key in summary_keys
+                if key in ongoing.context
             },
             recent_turns=recent_turns,
         )
@@ -1344,7 +1504,8 @@ class RuntimeCoordinator:
                 else None
             ),
             "current_activity_status": current_status,
-            "current_activity_preserved": plan.current_activity_preserved and not stopped,
+            "current_activity_preserved": plan.current_activity_preserved
+            and not stopped,
             "current_activity_paused": plan.current_activity_paused,
             "current_activity_stopped": stopped,
             "requested_new_activity": plan.requested_new_activity,
@@ -1416,253 +1577,6 @@ class RuntimeCoordinator:
             },
         )
 
-    async def _route_game_input(self, event: AgentEvent) -> AgentEvent | None:
-        classifier = self._game_input_classifier
-        if classifier is None:
-            return event
-        text = str(event.payload.get("text") or "")
-        active_before = self._game_engine.get_active_session()
-        current_before = self._game_engine.get_current_session()
-        self._trace_logger.debug(
-            "runtime_coordinator:user_text_routing_started",
-            source_event_id=event.event_id,
-            runtime_coordinator_instance_id=id(self),
-            game_engine_instance_id=id(self._game_engine),
-        )
-        self._trace_logger.debug(
-            "runtime_coordinator:active_game_session_checked",
-            source_event_id=event.event_id,
-            runtime_coordinator_instance_id=id(self),
-            game_engine_instance_id=id(self._game_engine),
-            active_session_found=active_before is not None,
-            session_id=active_before.session_id if active_before else None,
-            game_type=active_before.game_type if active_before else None,
-            expected_head=self._expected_head(active_before),
-        )
-        if (
-            active_before is None
-            and current_before is None
-            and self._last_started_game_session_id is not None
-        ):
-            self._trace_logger.warning(
-                "game_input_router:session_missing",
-                source_event_id=event.event_id,
-                expected_game_type="shiritori",
-                expected_session_id=self._last_started_game_session_id,
-                runtime_coordinator_instance_id=id(self),
-                game_engine_instance_id=id(self._game_engine),
-                reason="previously_started_session_not_found",
-            )
-        result = await classifier.classify(text)
-        self._last_game_input_classification = result
-        current_session = self._game_engine.get_active_session()
-        if result.session_id is not None and (
-            current_session is None
-            or current_session.session_id != result.session_id
-            or current_session.status.value != result.session_status
-        ):
-            self._trace_logger.warning(
-                "game_input_router:route_rejected",
-                classification=result.classification.value,
-                route="session_changed",
-                reason="game_session_changed_after_classification",
-            )
-            return self._with_game_classification(event, result, confirmation_required=True)
-
-        classification = result.classification
-        if classification == GameInputClassification.GAME_START_REQUEST:
-            return await self._route_game_start(event, result, current_session)
-        if classification == GameInputClassification.GAME_MOVE:
-            if result.game_word is None or result.game_type != "shiritori":
-                self._trace_logger.warning(
-                    "game_input_router:route_rejected",
-                    classification=classification.value,
-                    route="submit_game_move",
-                    reason="missing_word_or_unknown_game",
-                )
-                return self._with_game_classification(event, result, confirmation_required=True)
-            await self.submit_shiritori_word(result.game_word)
-            self._write_game_route(result, "submit_shiritori_word")
-            return None
-
-        if classification == GameInputClassification.GAME_CONTROL:
-            if result.game_control is None:
-                return self._with_game_classification(event, result, confirmation_required=True)
-            if result.game_control == GameControl.PAUSE:
-                self._game_engine.pause_game(reason="classified_user_control")
-            elif result.game_control == GameControl.RESUME:
-                self._game_engine.resume_game(reason="classified_user_control")
-            elif result.game_control == GameControl.QUIT:
-                self._game_engine.cancel_game("classified_user_quit")
-            elif result.game_control == GameControl.SURRENDER:
-                if self._shiritori_game_service is None:
-                    return self._with_game_classification(event, result, confirmation_required=True)
-                activity = self._shiritori_game_service.surrender(
-                    self._activity_manager,
-                    player=ShiritoriPlayer.USER,
-                )
-                await self._execute_explicit_activity(activity)
-            else:
-                self._trace_logger.warning(
-                    "game_input_router:route_rejected",
-                    classification=classification.value,
-                    route="game_control",
-                    reason="restart_not_supported",
-                )
-                return self._with_game_classification(event, result, confirmation_required=False)
-            self._write_game_route(result, f"game_control:{result.game_control.value}")
-            return None
-
-        if classification == GameInputClassification.MIXED:
-            self._trace_logger.info(
-                "game_input_router:route_rejected",
-                classification=classification.value,
-                route="pending_mixed_integration",
-                reason="mixed_response_integration_not_implemented",
-            )
-            return None
-
-        self._write_game_route(result, "conversation_activity")
-        return self._with_game_classification(
-            event,
-            result,
-            confirmation_required=classification == GameInputClassification.AMBIGUOUS,
-        )
-
-    async def _route_game_start(
-        self,
-        event: AgentEvent,
-        result: GameInputClassificationResult,
-        current_session: object | None,
-    ) -> AgentEvent | None:
-        requested_game = result.requested_game
-        failure_reason: str | None = None
-        if requested_game is None:
-            failure_reason = "requested_game_missing"
-        elif not self._game_engine.is_supported(requested_game):
-            failure_reason = "requested_game_not_supported"
-        elif current_session is not None:
-            failure_reason = "active_game_session_exists"
-        elif requested_game != "shiritori":
-            failure_reason = "game_start_route_not_implemented"
-        else:
-            try:
-                group = await self.start_shiritori(started_by=ShiritoriPlayer.AI)
-            except Exception as error:
-                failure_reason = f"{type(error).__name__}:game_start_failed"
-            else:
-                session = self._game_engine.get_active_session()
-                self._last_started_game_session_id = session.session_id if session else None
-                self._trace_logger.info(
-                    "game_input_router:game_start_routed",
-                    classification=result.classification.value,
-                    confidence=result.confidence,
-                    classifier_type=result.classifier_type,
-                    requested_game=requested_game,
-                    session_id=session.session_id if session else None,
-                    output_unit_id=group.group_id,
-                )
-                return None
-
-        self._trace_logger.warning(
-            "game_input_router:game_start_rejected",
-            classification=result.classification.value,
-            confidence=result.confidence,
-            classifier_type=result.classifier_type,
-            requested_game=requested_game,
-            reason=failure_reason,
-        )
-        enriched = self._with_game_classification(
-            event,
-            result,
-            confirmation_required=failure_reason == "active_game_session_exists",
-        )
-        return replace(
-            enriched,
-            payload={
-                **enriched.payload,
-                "game_start_failed": True,
-                "requested_game": requested_game,
-                "failure_reason": failure_reason,
-                "supported": bool(
-                    requested_game and self._game_engine.is_supported(requested_game)
-                ),
-            },
-        )
-
-    @staticmethod
-    def _expected_head(session: object | None) -> str | None:
-        metadata = getattr(session, "metadata", None)
-        if not isinstance(metadata, dict):
-            return None
-        state = metadata.get("shiritori_state")
-        return state.expected_head if isinstance(state, ShiritoriState) else None
-
-    def _write_user_text_routing_finished(
-        self,
-        event: AgentEvent,
-        result: GameInputClassificationResult,
-        routed_event: AgentEvent | None,
-    ) -> None:
-        session = self._game_engine.get_active_session()
-        self._trace_logger.info(
-            "runtime_coordinator:user_text_routing_finished",
-            source_event_id=event.event_id,
-            runtime_coordinator_instance_id=id(self),
-            game_engine_instance_id=id(self._game_engine),
-            classification=result.classification.value,
-            route="conversation" if routed_event is not None else "game",
-            session_id=session.session_id if session else None,
-            game_type=session.game_type if session else None,
-        )
-
-    def _with_game_classification(
-        self,
-        event: AgentEvent,
-        result: GameInputClassificationResult,
-        *,
-        confirmation_required: bool,
-    ) -> AgentEvent:
-        session = self._game_engine.get_active_session()
-        state = session.metadata.get("shiritori_state") if session else None
-        game_context: dict[str, object] = {
-            "session_id": session.session_id if session else None,
-            "game_type": session.game_type if session else None,
-            "game_status": session.status.value if session else None,
-            "current_turn": state.current_turn.value if isinstance(state, ShiritoriState) else None,
-            "last_word": state.last_word if isinstance(state, ShiritoriState) else None,
-            "expected_head": state.expected_head if isinstance(state, ShiritoriState) else None,
-            "used_words": list(state.used_words) if isinstance(state, ShiritoriState) else [],
-            "turn_count": state.turn_count if isinstance(state, ShiritoriState) else 0,
-        }
-        return replace(
-            event,
-            payload={
-                **event.payload,
-                "game_input_classification": result,
-                "game_session_context": game_context,
-                "confirmation_required": confirmation_required,
-                "requested_game": result.requested_game,
-                "supported": bool(
-                    result.requested_game and self._game_engine.is_supported(result.requested_game)
-                ),
-                "supported_games": [
-                    definition.game_type for definition in self._game_engine.list_supported_games()
-                ],
-            },
-        )
-
-    def _write_game_route(self, result: GameInputClassificationResult, route: str) -> None:
-        self._trace_logger.info(
-            "game_input_router:routed",
-            classification=result.classification.value,
-            confidence=result.confidence,
-            game_type=result.game_type,
-            route=route,
-            reason=result.reason,
-            classifier_type=result.classifier_type,
-        )
-
     async def run_once(self) -> ActionPlanGroup | None:
         self._trace_logger.write(
             "runtime_coordinator:run_once:start",
@@ -1689,9 +1603,11 @@ class RuntimeCoordinator:
         event = await self._event_queue.get()
         self._trace_logger.write(
             "runtime_coordinator:run_once:queue_get",
-            level="DEBUG"
-            if self._is_agent_state_only_event(event) or event.discardable
-            else "INFO",
+            level=(
+                "DEBUG"
+                if self._is_agent_state_only_event(event) or event.discardable
+                else "INFO"
+            ),
             event_type=event.event_type.value,
             event_id=event.event_id,
             priority=event.priority,
@@ -1752,10 +1668,14 @@ class RuntimeCoordinator:
         self._activity_executor_thread.stop()
 
         if self._activity_planner_thread.is_alive():
-            self._activity_planner_thread.join(timeout=self._thread_join_timeout_seconds)
+            self._activity_planner_thread.join(
+                timeout=self._thread_join_timeout_seconds
+            )
 
         if self._activity_executor_thread.is_alive():
-            self._activity_executor_thread.join(timeout=self._thread_join_timeout_seconds)
+            self._activity_executor_thread.join(
+                timeout=self._thread_join_timeout_seconds
+            )
 
         self._trace_logger.info(
             "runtime_coordinator:threads:stopped",
@@ -1766,6 +1686,36 @@ class RuntimeCoordinator:
     async def _handle_event(self, event: AgentEvent) -> ActionPlanGroup:
         for enricher in self._event_enrichers:
             event = enricher(event)
+        self._agent_life_service.handle_event(event)
+        if not isinstance(event.payload.get("relationship"), dict):
+            relationship = self._agent_life_service.preview_relationship(event)
+            if relationship is not None:
+                event = replace(
+                    event,
+                    payload={
+                        **event.payload,
+                        "relationship": relationship.as_context(),
+                    },
+                )
+        if not isinstance(event.payload.get("situation"), dict):
+            situation = (
+                self._agent_life_service.agent_state.current_situation.as_context()
+            )
+            event = replace(
+                event,
+                payload={
+                    **event.payload,
+                    "situation": situation,
+                },
+            )
+        if not isinstance(event.payload.get("memory"), dict):
+            event = replace(
+                event,
+                payload={
+                    **event.payload,
+                    "memory": self._agent_life_service.agent_state.memory.as_context(),
+                },
+            )
         self._trace_logger.write(
             "runtime_coordinator:handle_event:start",
             event_type=event.event_type.value,
@@ -1807,7 +1757,9 @@ class RuntimeCoordinator:
         except Exception as error:
             action_plan_group = action_planning_failure_group(activity, error)
             if action_plan_group.activity_turn_result is not None:
-                self._activity_manager.record_turn_result(action_plan_group.activity_turn_result)
+                self._activity_manager.record_turn_result(
+                    action_plan_group.activity_turn_result
+                )
             self._trace_logger.warning(
                 "runtime_coordinator:action_planning:failed",
                 activity_id=activity.activity_id,
@@ -1822,23 +1774,31 @@ class RuntimeCoordinator:
             "runtime_coordinator:handle_event:actions_planned",
             activity_type=activity.activity_type.value,
             action_types=[
-                action_plan.action_type.value for action_plan in action_plan_group.action_plans
+                action_plan.action_type.value
+                for action_plan in action_plan_group.action_plans
             ],
         )
         current_activity = self._activity_manager.get_activity(activity.activity_id)
-        if current_activity is not None and current_activity.status != ActivityStatus.ACTIVE:
+        if (
+            current_activity is not None
+            and current_activity.status != ActivityStatus.ACTIVE
+        ):
             self._trace_logger.info(
                 "runtime_coordinator:handle_event:actions_canceled",
                 event_id=event.event_id,
                 activity_id=current_activity.activity_id,
                 activity_type=current_activity.activity_type.value,
                 activity_status=current_activity.status.value,
-                action_ids=[action.action_id for action in action_plan_group.action_plans],
+                action_ids=[
+                    action.action_id for action in action_plan_group.action_plans
+                ],
                 action_types=[
-                    action.action_type.value for action in action_plan_group.action_plans
+                    action.action_type.value
+                    for action in action_plan_group.action_plans
                 ],
                 source_activity_ids=[
-                    action.source_activity_id for action in action_plan_group.action_plans
+                    action.source_activity_id
+                    for action in action_plan_group.action_plans
                 ],
                 reason="activity_suspended_before_action_execution",
             )
@@ -1846,17 +1806,27 @@ class RuntimeCoordinator:
                 action_plan_group, reason="activity_suspended_before_action_execution"
             )
             if canceled_group.activity_turn_result is not None:
-                self._activity_manager.record_turn_result(canceled_group.activity_turn_result)
+                self._activity_manager.record_turn_result(
+                    canceled_group.activity_turn_result
+                )
             self._agent_life_service.sync_from_activity_manager()
             return canceled_group
-        self._trace_logger.write("runtime_coordinator:handle_event:actions_execute_start")
+        self._trace_logger.write(
+            "runtime_coordinator:handle_event:actions_execute_start"
+        )
         output_result = await self._action_scheduler.execute(action_plan_group)
-        if output_result is not None and action_plan_group.activity_turn_result is not None:
+        if (
+            output_result is not None
+            and action_plan_group.activity_turn_result is not None
+        ):
             self._activity_manager.record_output_result(
                 action_plan_group.activity_turn_result, output_result
             )
         autonomous_output_saved = False
-        if activity.activity_type == ActivityType.AUTONOMOUS_TALK and output_result is not None:
+        if (
+            activity.activity_type == ActivityType.AUTONOMOUS_TALK
+            and output_result is not None
+        ):
             speech_text = completed_speech_text(action_plan_group, output_result)
             if speech_text is not None:
                 self._agent_life_service.record_autonomous_output(
@@ -1878,30 +1848,50 @@ class RuntimeCoordinator:
                     output_unit_id=output_result.output_unit_id,
                     reason="speak_not_completed",
                 )
-        self._trace_logger.write("runtime_coordinator:handle_event:actions_execute_finished")
+        self._trace_logger.write(
+            "runtime_coordinator:handle_event:actions_execute_finished"
+        )
         completed_activity = self._activity_manager.complete_processed_activity(
             activity.activity_id,
             result=build_activity_result(action_plan_group, output_result),
         )
-        if activity.activity_type == ActivityType.AUTONOMOUS_TALK and autonomous_output_saved:
-            self._agent_life_service.complete_autonomous_topic(activity_id=activity.activity_id)
+        if (
+            activity.activity_type == ActivityType.AUTONOMOUS_TALK
+            and autonomous_output_saved
+        ):
+            self._agent_life_service.complete_autonomous_topic(
+                activity_id=activity.activity_id
+            )
         self._trace_logger.write(
             "runtime_coordinator:handle_event:foreground_activity_completed",
             completed=completed_activity is not None,
-            activity_id=completed_activity.activity_id if completed_activity is not None else None,
-            activity_type=completed_activity.activity_type.value
-            if completed_activity is not None
-            else None,
-            activity_status=completed_activity.status.value
-            if completed_activity is not None
-            else None,
+            activity_id=(
+                completed_activity.activity_id
+                if completed_activity is not None
+                else None
+            ),
+            activity_type=(
+                completed_activity.activity_type.value
+                if completed_activity is not None
+                else None
+            ),
+            activity_status=(
+                completed_activity.status.value
+                if completed_activity is not None
+                else None
+            ),
         )
         self._agent_life_service.sync_from_activity_manager()
         self._trace_logger.write(
             "runtime_coordinator:handle_event:agent_state_synced_after_activity_complete",
-            active_activity_exists=self._agent_life_service.agent_state.active_activity is not None,
-            pending_activity_count=len(self._agent_life_service.agent_state.pending_activities),
-            suspended_activity_count=len(self._agent_life_service.agent_state.suspended_activities),
+            active_activity_exists=self._agent_life_service.agent_state.active_activity
+            is not None,
+            pending_activity_count=len(
+                self._agent_life_service.agent_state.pending_activities
+            ),
+            suspended_activity_count=len(
+                self._agent_life_service.agent_state.suspended_activities
+            ),
         )
         return action_plan_group
 

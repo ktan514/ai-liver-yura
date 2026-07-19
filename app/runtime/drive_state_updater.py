@@ -108,7 +108,9 @@ class DriveStateUpdater:
         elapsed_seconds = (current_time - previous_time).total_seconds()
         return self.update_by_elapsed_time(drive, elapsed_seconds)
 
-    def _apply_lifecycle_started(self, drive: DriveState, event: AgentEvent) -> DriveState:
+    def _apply_lifecycle_started(
+        self, drive: DriveState, event: AgentEvent
+    ) -> DriveState:
         if event.event_type == AgentEventType.STREAM_STARTED:
             return DriveState(
                 curiosity=drive.curiosity + 0.08,
