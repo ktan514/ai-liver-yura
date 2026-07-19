@@ -1,5 +1,3 @@
-
-
 import json
 from io import BytesIO
 from urllib.error import URLError
@@ -41,7 +39,9 @@ class FakeUrlOpen:
 @pytest.mark.asyncio
 async def test_generate_memory_summary_posts_prompt_to_ollama(monkeypatch) -> None:
     fake_urlopen = FakeUrlOpen(
-        response_body=json.dumps({"response": "イルカのジャンプの軽やかさに興味を示した"})
+        response_body=json.dumps(
+            {"response": "イルカのジャンプの軽やかさに興味を示した"}
+        )
     )
     monkeypatch.setattr(
         "app.adapters.memory.ollama_memory_summary_model.request.urlopen",
@@ -88,7 +88,9 @@ def test_parse_response_raises_error_when_response_text_is_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_memory_summary_raises_runtime_error_when_request_fails(monkeypatch) -> None:
+async def test_generate_memory_summary_raises_runtime_error_when_request_fails(
+    monkeypatch,
+) -> None:
     def fake_urlopen(http_request, timeout: float):
         raise URLError("connection refused")
 

@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import asyncio
@@ -23,7 +21,9 @@ async def main() -> None:
     topic_memory_config = config.memory.topic_memory
 
     if not topic_memory_config.enabled:
-        print("topic_memory is disabled. Set memory.topic_memory.enabled=true to initialize DB.")
+        print(
+            "topic_memory is disabled. Set memory.topic_memory.enabled=true to initialize DB."
+        )
         return
 
     if topic_memory_config.database.type != "postgres":
@@ -35,8 +35,7 @@ async def main() -> None:
     dsn = os.environ.get(topic_memory_config.database.dsn_env, "")
     if not dsn:
         raise RuntimeError(
-            "database dsn is not set: "
-            f"{topic_memory_config.database.dsn_env}"
+            "database dsn is not set: " f"{topic_memory_config.database.dsn_env}"
         )
 
     store = PostgresTopicMemoryStore(

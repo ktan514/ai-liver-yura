@@ -164,7 +164,9 @@ class OllamaResponseGenerator(ResponseGenerator):
                 api_url=self._api_url,
                 timeout_seconds=self._timeout_seconds,
             )
-            with request.urlopen(http_request, timeout=self._timeout_seconds) as response:
+            with request.urlopen(
+                http_request, timeout=self._timeout_seconds
+            ) as response:
                 response_body = response.read().decode("utf-8")
                 self._trace_logger.write(
                     "ollama_response_generator:post_generate_request:http_response_received",
@@ -189,7 +191,9 @@ class OllamaResponseGenerator(ResponseGenerator):
                 error_message=str(exc),
                 response_length=len(response_body),
             )
-            raise RuntimeError("Ollama API のレスポンスJSON解析に失敗しました。") from exc
+            raise RuntimeError(
+                "Ollama API のレスポンスJSON解析に失敗しました。"
+            ) from exc
 
         if not isinstance(decoded_body, dict):
             self._trace_logger.write(

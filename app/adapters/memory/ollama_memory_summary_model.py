@@ -67,10 +67,14 @@ class OllamaMemorySummaryModel(MemorySummaryModel):
         try:
             response_json = json.loads(response_body)
         except json.JSONDecodeError as error:
-            raise RuntimeError("ollama memory summary response is not valid json") from error
+            raise RuntimeError(
+                "ollama memory summary response is not valid json"
+            ) from error
 
         summary = response_json.get("response")
         if not isinstance(summary, str):
-            raise RuntimeError("ollama memory summary response does not contain response text")
+            raise RuntimeError(
+                "ollama memory summary response does not contain response text"
+            )
 
         return summary

@@ -1,4 +1,7 @@
-from app.adapters.tts.audio_query_corrector import AudioQueryCorrector, NoOpAudioQueryCorrector
+from app.adapters.tts.audio_query_corrector import (
+    AudioQueryCorrector,
+    NoOpAudioQueryCorrector,
+)
 from app.adapters.tts.pronunciation_corrector import (
     AppliedPronunciationRule,
     PronunciationCorrectionResult,

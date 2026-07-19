@@ -32,7 +32,9 @@ async def test_play_writes_temporary_wav_and_runs_command(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_play_raises_when_command_is_missing(monkeypatch) -> None:
-    monkeypatch.setattr("app.adapters.tts.system_audio_player.shutil.which", lambda command: None)
+    monkeypatch.setattr(
+        "app.adapters.tts.system_audio_player.shutil.which", lambda command: None
+    )
     player = SystemAudioPlayer(command="missing-player")
 
     with pytest.raises(RuntimeError, match="見つかりません"):

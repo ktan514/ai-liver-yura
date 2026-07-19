@@ -79,7 +79,9 @@ class OpenAIResponseGenerator:
             attempt=trace_context.attempt,
             **trace_context.trace_context.as_log_fields(),
         )
-        response_text = await asyncio.to_thread(self._generate_sync, prompt, trace_context)
+        response_text = await asyncio.to_thread(
+            self._generate_sync, prompt, trace_context
+        )
         self._trace_logger.llm_response(
             purpose=trace_context.purpose,
             provider="openai",
@@ -147,7 +149,9 @@ class OpenAIResponseGenerator:
         )
         return response_text
 
-    def _generate_sync(self, prompt: str, trace_context: LlmTraceContext | None = None) -> str:
+    def _generate_sync(
+        self, prompt: str, trace_context: LlmTraceContext | None = None
+    ) -> str:
         self._trace_logger.write(
             "openai_response_generator:generate_sync:start",
             model=self._model,
@@ -196,7 +200,9 @@ class OpenAIResponseGenerator:
             ) as response:
                 response_body = response.read().decode("utf-8")
                 self._trace_logger.llm_response(
-                    purpose=trace_context.purpose if trace_context else "direct_generation",
+                    purpose=(
+                        trace_context.purpose if trace_context else "direct_generation"
+                    ),
                     provider="openai",
                     model=self._model,
                     activity_id=trace_context.activity_id if trace_context else None,
@@ -209,7 +215,11 @@ class OpenAIResponseGenerator:
                     attempt=trace_context.attempt if trace_context else 1,
                     **cast(
                         Any,
-                        trace_context.trace_context.as_log_fields() if trace_context else {},
+                        (
+                            trace_context.trace_context.as_log_fields()
+                            if trace_context
+                            else {}
+                        ),
                     ),
                 )
                 self._trace_logger.write(
