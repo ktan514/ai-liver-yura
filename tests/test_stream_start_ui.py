@@ -103,7 +103,9 @@ def test_window_geometry_tabs_and_fixed_emergency_controls() -> None:
     window = StreamPreparationWindow(controller)  # type: ignore[arg-type]
 
     for available_width, available_height in ((1366, 768), (1440, 900), (1920, 1080)):
-        width, height = window.window_size_for_available(available_width, available_height)
+        width, height = window.window_size_for_available(
+            available_width, available_height
+        )
         assert width <= available_width
         assert height <= available_height
 
@@ -170,18 +172,38 @@ def test_settings_are_grouped_in_three_columns_and_apply_values_are_preserved() 
     window.resize(1100, 720)
     app.processEvents()
     assert window._settings_columns == 3  # noqa: SLF001 -- responsive layout contract
-    assert window.settings_grid.itemAtPosition(0, 0).widget() is window.log_settings_group
-    assert window.settings_grid.itemAtPosition(0, 1).widget() is window.obs_settings_group
-    assert window.settings_grid.itemAtPosition(0, 2).widget() is window.youtube_settings_group
-    assert window.settings_grid.itemAtPosition(1, 0).widget() is window.common_settings_group
+    assert (
+        window.settings_grid.itemAtPosition(0, 0).widget() is window.log_settings_group
+    )
+    assert (
+        window.settings_grid.itemAtPosition(0, 1).widget() is window.obs_settings_group
+    )
+    assert (
+        window.settings_grid.itemAtPosition(0, 2).widget()
+        is window.youtube_settings_group
+    )
+    assert (
+        window.settings_grid.itemAtPosition(1, 0).widget()
+        is window.common_settings_group
+    )
 
     window.resize(800, 576)
     app.processEvents()
     assert window._settings_columns == 2  # noqa: SLF001 -- responsive layout contract
-    assert window.settings_grid.itemAtPosition(0, 0).widget() is window.log_settings_group
-    assert window.settings_grid.itemAtPosition(0, 1).widget() is window.obs_settings_group
-    assert window.settings_grid.itemAtPosition(1, 0).widget() is window.youtube_settings_group
-    assert window.settings_grid.itemAtPosition(1, 1).widget() is window.common_settings_group
+    assert (
+        window.settings_grid.itemAtPosition(0, 0).widget() is window.log_settings_group
+    )
+    assert (
+        window.settings_grid.itemAtPosition(0, 1).widget() is window.obs_settings_group
+    )
+    assert (
+        window.settings_grid.itemAtPosition(1, 0).widget()
+        is window.youtube_settings_group
+    )
+    assert (
+        window.settings_grid.itemAtPosition(1, 1).widget()
+        is window.common_settings_group
+    )
 
     window.log_level.setCurrentText("DEBUG")
     window.obs_auto_refresh.setChecked(True)
@@ -224,10 +246,12 @@ def test_small_layout_uses_scroll_areas_and_preserves_readable_minimums() -> Non
     assert window.overview_scroll.widgetResizable() is True
     assert window.settings_scroll.widgetResizable() is True
     assert (
-        window.overview_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        window.overview_scroll.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     )
     assert (
-        window.settings_scroll.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        window.settings_scroll.horizontalScrollBarPolicy()
+        == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     )
     assert window._overview_columns == 1  # noqa: SLF001 -- responsive layout contract
     assert window._operation_columns == 2  # noqa: SLF001 -- responsive layout contract

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.activities import Activity
-from app.domain.games import ShiritoriGameDefinition
+from app.plugins.games.engine import GameEngine
 from app.plugins.games.intent import (
     GameIntent,
     GameIntentCommandParser,
     GameIntentInterpreter,
 )
-from app.runtime.game_engine import GameEngine
+from app.plugins.games.shiritori.domain import ShiritoriGameDefinition
+from app.shared.contracts.plugins.runtime import PluginLlmRequest
 
 
 class StaticLlm:
@@ -17,7 +17,7 @@ class StaticLlm:
         self.response = response
         self.calls = 0
 
-    async def generate_response(self, activity: Activity) -> str:
+    async def generate_response(self, request: PluginLlmRequest) -> str:
         self.calls += 1
         return self.response
 

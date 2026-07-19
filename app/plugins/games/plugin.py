@@ -3,22 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import asdict
 
-from app.core.plugins import (
-    MemoryPolicy,
-    PluginActivityRequest,
-    PluginCapability,
-    PluginCommand,
-    PluginContext,
-    PluginExecutionResult,
-    PluginIntentResult,
-)
-from app.domain.activities import Activity, ActivityType
-from app.domain.behavior import (
-    ActivityDefinition,
-    ActivityOperation,
-    ActivityPlan,
-    BehaviorDecision,
-)
+from app.plugins.games.activity_factory import TransientGameActivityFactory
 from app.plugins.games.activity_matcher import ExactActivityPhraseMatcher
 from app.plugins.games.game_engine import GameEngine
 from app.plugins.games.intent import (
@@ -27,46 +12,31 @@ from app.plugins.games.intent import (
     GameIntentCommand,
     GameIntentInterpreter,
 )
-from app.plugins.games.intent.prompt import build_shiritori_activity_prompt
 from app.plugins.games.shiritori import (
     ShiritoriGameDefinition,
     ShiritoriGameService,
     ShiritoriPlayer,
     ShiritoriState,
 )
-from app.utils.trace import TraceLogger
-
-
-class _TransientGameActivityFactory:
-    """既存Serviceへ狭いActivity生成機能だけを提供し、Core管理には登録しない。"""
-
-    def create_game_activity(
-        self,
-        session: object,
-        *,
-        goal: str,
-        priority: int = 100,
-        context_updates: dict[str, object] | None = None,
-    ) -> Activity:
-        context = dict(context_updates or {})
-        metadata = getattr(session, "metadata", {})
-        context.update(
-            {
-                "game_session_id": getattr(session, "session_id", None),
-                "game_type": getattr(session, "game_type", None),
-                "game_status": getattr(getattr(session, "status", None), "value", None),
-                "game_metadata": dict(metadata) if isinstance(metadata, dict) else {},
-                "game_current_turn": getattr(session, "current_turn", None),
-            }
-        )
-        context["plugin_prompt_override"] = build_shiritori_activity_prompt(context)
-        return Activity(
-            activity_type=ActivityType.GAME_WITH_USER,
-            goal=goal,
-            priority=priority,
-            context=context,
-            interruptible=False,
-        )
+from app.shared.contracts.activity import (
+    ActivityDefinition,
+    ActivityOperation,
+    ActivityPlanView,
+    BehaviorDecision,
+)
+from app.shared.contracts.plugins.runtime import (
+    MemoryPolicy,
+    PluginActivityRequest,
+    PluginActivityState,
+    PluginActivityStatus,
+    PluginActivityWorkItem,
+    PluginCapability,
+    PluginCommand,
+    PluginContext,
+    PluginExecutionResult,
+    PluginIntentResult,
+)
+from app.shared.observability import PluginLogger
 
 
 class GamesPlugin:
@@ -83,9 +53,12 @@ class GamesPlugin:
         self._state_version = 0
         self._llm_available = True
         self._intent_interpreter_enabled = True
-        self._trace_logger = TraceLogger()
+        self._trace_logger = PluginLogger(__name__)
         self._capabilities = frozenset(
-            {*(capability.value for capability in PluginCapability), self.SHIRITORI_CAPABILITY}
+            {
+                *(capability.value for capability in PluginCapability),
+                self.SHIRITORI_CAPABILITY,
+            }
         )
 
     @property
@@ -172,12 +145,16 @@ class GamesPlugin:
         self._context = context
         configuration = context.configuration
         shiritori = configuration.get("shiritori", {})
-        if not isinstance(shiritori, Mapping) or not bool(shiritori.get("enabled", True)):
+        if not isinstance(shiritori, Mapping) or not bool(
+            shiritori.get("enabled", True)
+        ):
             raise RuntimeError("有効なゲームがありません。")
         engine = GameEngine((ShiritoriGameDefinition(),))
         max_retries = int(shiritori.get("max_generation_retries", 3))
         self._engine = engine
-        self._service = ShiritoriGameService(engine, max_generation_attempts=max_retries)
+        self._service = ShiritoriGameService(
+            engine, max_generation_attempts=max_retries
+        )
         interpreter_config = configuration.get("intent_interpreter", {})
         if not isinstance(interpreter_config, Mapping):
             interpreter_config = {}
@@ -189,7 +166,9 @@ class GamesPlugin:
         )
         self._validator = GameCommandValidator(
             engine,
-            confidence_threshold=float(interpreter_config.get("confidence_threshold", 0.85)),
+            confidence_threshold=float(
+                interpreter_config.get("confidence_threshold", 0.85)
+            ),
         )
         self._llm_available = bool(configuration.get("llm_available", True))
         self._trace_logger.info(
@@ -216,6 +195,7 @@ class GamesPlugin:
         handled = command.intent != GameIntent.NOT_HANDLED
         generic_command = PluginCommand(
             command_type=command.intent.value,
+            operation=self._operation_for_command(command),
             payload={
                 "game_type": command.game_type,
                 "game_move": command.game_move,
@@ -239,7 +219,9 @@ class GamesPlugin:
             conversation_context=self._conversation_context(command),
         )
 
-    async def interpret_activity_plan(self, plan: ActivityPlan, text: str) -> PluginIntentResult:
+    async def interpret_activity_plan(
+        self, plan: ActivityPlanView, text: str
+    ) -> PluginIntentResult:
         """検証前の意味Planを、Plugin固有Commandへ副作用なしで変換する。"""
 
         if (
@@ -279,6 +261,7 @@ class GamesPlugin:
         )
         generic_command = PluginCommand(
             command_type=command.intent.value,
+            operation=plan.operation.value if plan.operation is not None else None,
             payload={
                 "game_type": command.game_type,
                 "game_move": command.game_move,
@@ -302,7 +285,9 @@ class GamesPlugin:
             conversation_context=self._conversation_context(command),
         )
 
-    async def execute_command(self, result: PluginIntentResult) -> PluginExecutionResult:
+    async def execute_command(
+        self, result: PluginIntentResult
+    ) -> PluginExecutionResult:
         command = self._to_game_command(result)
         validation = self._require_validator().validate(
             command, current_state_version=self._state_version
@@ -350,6 +335,7 @@ class GamesPlugin:
                         PluginCapability.ACTIVITY_PROVIDER.value,
                     }
                 ),
+                activity_state=self._activity_state(),
             )
         self._trace_logger.info(
             "game_command_router:routed",
@@ -369,7 +355,9 @@ class GamesPlugin:
             "session_id": session.session_id if session else None,
             "session_status": session.status.value if session else None,
             "game_type": session.game_type if session else None,
-            "ongoing_activity_id": session.metadata.get("ongoing_activity_id") if session else None,
+            "ongoing_activity_id": (
+                session.metadata.get("ongoing_activity_id") if session else None
+            ),
             "game_state": asdict(state) if isinstance(state, ShiritoriState) else None,
         }
 
@@ -391,7 +379,9 @@ class GamesPlugin:
                 reason=reason,
             )
 
-    async def _execute_validated(self, command: GameIntentCommand) -> PluginExecutionResult:
+    async def _execute_validated(
+        self, command: GameIntentCommand
+    ) -> PluginExecutionResult:
         if command.intent in {
             GameIntent.NORMAL_CHAT,
             GameIntent.GAME_CHAT,
@@ -417,7 +407,7 @@ class GamesPlugin:
                     reason="game_llm_provider_unavailable",
                 )
             _, activity = self._require_service().start_game(
-                _TransientGameActivityFactory(),  # type: ignore[arg-type]
+                TransientGameActivityFactory(),
                 started_by=ShiritoriPlayer.AI,
                 constraints=dict(command.constraints),
             )
@@ -428,7 +418,7 @@ class GamesPlugin:
             return self._activity_result(response_text, activity)
         if command.intent == GameIntent.PLAY_GAME_MOVE:
             _, activity = self._require_service().submit_user_word(
-                _TransientGameActivityFactory(),  # type: ignore[arg-type]
+                TransientGameActivityFactory(),
                 command.game_move or "",
             )
             if activity.context.get("shiritori_action") == "generate_ai_word":
@@ -436,8 +426,10 @@ class GamesPlugin:
                     activity, self._require_context().llm_gateway
                 )
             else:
-                response_text = await self._require_context().llm_gateway.generate_response(
-                    activity
+                response_text = (
+                    await self._require_context().llm_gateway.generate_response(
+                        activity
+                    )
                 )
             self._state_version += 1
             return self._activity_result(response_text, activity)
@@ -454,14 +446,17 @@ class GamesPlugin:
                 response_text = "ゲームを終了したよ。"
             else:
                 activity = self._require_service().surrender(
-                    _TransientGameActivityFactory(),  # type: ignore[arg-type]
+                    TransientGameActivityFactory(),
                     player=ShiritoriPlayer.USER,
                 )
-                response_text = await self._require_context().llm_gateway.generate_response(
-                    activity
+                response_text = (
+                    await self._require_context().llm_gateway.generate_response(
+                        activity
+                    )
                 )
             self._state_version += 1
             context = self._public_session_context()
+            state = self._require_activity_state()
             return PluginExecutionResult(
                 plugin_id=self.plugin_id,
                 handled=True,
@@ -471,14 +466,17 @@ class GamesPlugin:
                     priority=100,
                     context=context,
                     response_text=response_text,
+                    state=state,
                     memory_policy=MemoryPolicy(True, True, True),
                 ),
+                activity_state=state,
             )
         return PluginExecutionResult(self.plugin_id, False, reason="not_handled")
 
     def _activity_result(
-        self, response_text: str, source_activity: Activity
+        self, response_text: str, source_activity: PluginActivityWorkItem
     ) -> PluginExecutionResult:
+        state = self._require_activity_state()
         return PluginExecutionResult(
             plugin_id=self.plugin_id,
             handled=True,
@@ -488,9 +486,41 @@ class GamesPlugin:
                 priority=source_activity.priority,
                 context={**source_activity.context, **self._public_session_context()},
                 response_text=response_text,
+                state=state,
                 memory_policy=MemoryPolicy(True, True, True),
             ),
+            activity_state=state,
         )
+
+    def _activity_state(self) -> PluginActivityState | None:
+        engine = self._engine
+        session = engine.get_current_session() if engine is not None else None
+        if session is None:
+            return None
+        status = {
+            "playing": PluginActivityStatus.WAITING_INPUT,
+            "paused": PluginActivityStatus.SUSPENDED,
+            "completed": PluginActivityStatus.COMPLETED,
+            "canceled": PluginActivityStatus.CANCELED,
+        }.get(session.status.value)
+        if status is None:
+            return None
+        return PluginActivityState(
+            session_id=session.session_id,
+            status=status,
+            expected_input=(
+                "次の単語または操作"
+                if status == PluginActivityStatus.WAITING_INPUT
+                else ""
+            ),
+            end_condition="しりとり終了またはユーザーによる停止",
+        )
+
+    def _require_activity_state(self) -> PluginActivityState:
+        state = self._activity_state()
+        if state is None:
+            raise RuntimeError("Games PluginのActivity状態がありません。")
+        return state
 
     def _public_session_context(self) -> dict[str, object]:
         engine = self._require_engine()
@@ -502,7 +532,9 @@ class GamesPlugin:
             "session_id": session.session_id if session else None,
             "session_status": session.status.value if session else None,
             "game_type": session.game_type if session else None,
-            "ongoing_activity_id": session.metadata.get("ongoing_activity_id") if session else None,
+            "ongoing_activity_id": (
+                session.metadata.get("ongoing_activity_id") if session else None
+            ),
             "game_state": asdict(state) if isinstance(state, ShiritoriState) else None,
         }
 
@@ -528,6 +560,20 @@ class GamesPlugin:
             "execution_performed": False,
         }
 
+    @staticmethod
+    def _operation_for_command(command: GameIntentCommand) -> str | None:
+        if command.intent == GameIntent.START_GAME:
+            return "start"
+        if command.intent == GameIntent.PLAY_GAME_MOVE:
+            return "continue"
+        if command.intent == GameIntent.GAME_CONTROL:
+            if command.control == "quit":
+                return "stop"
+            if command.control in {"pause", "resume", "surrender"}:
+                return command.control
+            return "continue"
+        return None
+
     def _to_game_command(self, result: PluginIntentResult) -> GameIntentCommand:
         command = result.command
         if command is None:
@@ -544,19 +590,25 @@ class GamesPlugin:
             if command.validated_constraints is not None
             else payload.get("constraints", {})
         )
-        constraints = dict(constraints_value) if isinstance(constraints_value, Mapping) else {}
+        constraints = (
+            dict(constraints_value) if isinstance(constraints_value, Mapping) else {}
+        )
         return GameIntentCommand(
             intent=GameIntent(command.command_type),
             game_type=self._optional_str(payload.get("game_type")),
             confidence=confidence,
-            state_version=command.state_version if command.state_version is not None else -1,
+            state_version=(
+                command.state_version if command.state_version is not None else -1
+            ),
             game_move=self._optional_str(payload.get("game_move")),
             chat_text=self._optional_str(payload.get("chat_text")),
             control=self._optional_str(payload.get("control")),
             constraints=constraints,
             requires_confirmation=command.requires_confirmation,
             reason=str(payload.get("reason") or result.reason),
-            classifier_type=str(payload.get("classifier_type") or result.classifier_type),
+            classifier_type=str(
+                payload.get("classifier_type") or result.classifier_type
+            ),
         )
 
     @staticmethod

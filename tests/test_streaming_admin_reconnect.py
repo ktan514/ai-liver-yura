@@ -29,7 +29,9 @@ class BootstrapClient:
     def capabilities(self) -> list[dict[str, Any]]:
         return [{"capability_id": "demo"}]
 
-    def manual_check_ui_event(self, event: str, details: dict[str, Any] | None = None) -> None:
+    def manual_check_ui_event(
+        self, event: str, details: dict[str, Any] | None = None
+    ) -> None:
         self.manual_events.append(event)
 
 
@@ -95,7 +97,9 @@ def test_callbacks_do_not_reconnect_or_update_ui_after_close() -> None:
     controller.close()
 
     controller.core_connection_changed(True)
-    controller.handle_event(type("Event", (), {"event_type": "youtube.auth.updated", "data": {}})())
+    controller.handle_event(
+        type("Event", (), {"event_type": "youtube.auth.updated", "data": {}})()
+    )
 
     assert loads == []
     assert connections == []
@@ -109,7 +113,9 @@ def test_successful_rest_request_marks_connected_and_clears_stale_error() -> Non
     controller.connection_changed.connect(connections.append)
     controller.error_occurred.connect(errors.append)
     try:
-        controller._submit("probe", lambda: {}, lambda _: completed.set())  # noqa: SLF001
+        controller._submit(
+            "probe", lambda: {}, lambda _: completed.set()
+        )  # noqa: SLF001
         assert completed.wait(1)
         assert connections == [True]
         assert errors == [""]
@@ -124,7 +130,9 @@ def test_command_rejection_does_not_mark_rest_connection_disconnected() -> None:
     errors: list[str] = []
     completed = threading.Event()
     controller.connection_changed.connect(connections.append)
-    controller.error_occurred.connect(lambda value: (errors.append(value), completed.set()))
+    controller.error_occurred.connect(
+        lambda value: (errors.append(value), completed.set())
+    )
 
     def reject() -> object:
         raise CoreApiError("stream.command_rejected", "command rejected")

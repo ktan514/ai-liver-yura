@@ -1,3 +1,3 @@
-from app.domain.games.shiritori import ShiritoriPlayer, ShiritoriState
+from app.plugins.games.shiritori.domain import ShiritoriPlayer, ShiritoriState
 
 __all__ = ["ShiritoriPlayer", "ShiritoriState"]

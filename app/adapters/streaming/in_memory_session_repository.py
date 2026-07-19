@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from threading import RLock
 
-from app.domain.streaming import StreamSession, StreamSessionStatus
+from app.plugins.youtube_streaming.domain import StreamSession, StreamSessionStatus
 
 
 class InMemoryStreamSessionRepository:
@@ -14,7 +14,9 @@ class InMemoryStreamSessionRepository:
         with self._lock:
             active = self.find_active_or_preparing()
             if active is not None and active.session_id != session.session_id:
-                raise ValueError("準備中または準備済みのStreamSessionが既に存在します。")
+                raise ValueError(
+                    "準備中または準備済みのStreamSessionが既に存在します。"
+                )
             if session.session_id in self._sessions:
                 raise ValueError(f"StreamSessionは作成済みです: {session.session_id}")
             self._sessions[session.session_id] = session

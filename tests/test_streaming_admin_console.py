@@ -32,7 +32,9 @@ def test_freshness_uses_observation_time() -> None:
     assert freshness(None, 30, now=now) == "unknown"
 
 
-def test_adapter_capability_drives_operator_action_and_fake_never_requires_studio() -> None:
+def test_adapter_capability_drives_operator_action_and_fake_never_requires_studio() -> (
+    None
+):
     fake = AdapterCapabilities.for_adapter("fake")
     assert operator_action_for(fake, phase="starting")["action_type"] == "none"
 
@@ -48,7 +50,10 @@ def test_adapter_capability_drives_operator_action_and_fake_never_requires_studi
     assert start["action_type"] == "youtube_start_required"
     assert start["status"] == "waiting"
     assert start["can_confirm"] is True
-    assert operator_action_for(manual, phase="ending")["action_type"] == "youtube_stop_required"
+    assert (
+        operator_action_for(manual, phase="ending")["action_type"]
+        == "youtube_stop_required"
+    )
 
 
 def test_operator_action_state_transitions_are_explicit() -> None:
@@ -71,7 +76,9 @@ def test_diagnostic_ring_buffer_is_bounded_and_resizable() -> None:
 
 def test_runtime_log_settings_can_change_level_and_disable_file() -> None:
     settings = RuntimeLogSettings({"path": "logs/test-runtime.log"})
-    value = settings.apply({"level": "TRACE", "file_enabled": False, "ring_buffer_size": 42})
+    value = settings.apply(
+        {"level": "TRACE", "file_enabled": False, "ring_buffer_size": 42}
+    )
     assert value["level"] == "TRACE"
     assert value["file_enabled"] is False
     assert value["ring_buffer_size"] == 42

@@ -5,7 +5,9 @@ from datetime import datetime, timezone
 import pytest
 
 from app.adapters.streaming import InMemoryStreamOpeningRepository
-from app.adapters.streaming.in_memory_session_repository import InMemoryStreamSessionRepository
+from app.adapters.streaming.in_memory_session_repository import (
+    InMemoryStreamSessionRepository,
+)
 from app.domain.activity_turn_result import (
     ActionExecutionResult,
     ActionExecutionStatus,
@@ -13,7 +15,8 @@ from app.domain.activity_turn_result import (
     ActivityOutputStatus,
     ActivityTurnResult,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.application import StreamOpeningUsecase
+from app.plugins.youtube_streaming.domain import (
     RetryOpeningCommand,
     RunOfShowSegment,
     StreamOpeningRejected,
@@ -23,7 +26,6 @@ from app.domain.streaming import (
     StreamSessionStatus,
     StreamStartResult,
 )
-from app.usecases import StreamOpeningUsecase
 
 
 class RunOfShow:
@@ -70,7 +72,9 @@ def segment() -> RunOfShowSegment:
     return RunOfShowSegment("opening", "opening", "開始挨拶", 60, True, "llm", "v1")
 
 
-def turn(status: ActionExecutionStatus = ActionExecutionStatus.COMPLETED) -> ActivityTurnResult:
+def turn(
+    status: ActionExecutionStatus = ActionExecutionStatus.COMPLETED,
+) -> ActivityTurnResult:
     action = ActionExecutionResult("speak-1", "speak", status, "output", "turn")
     output_status = (
         ActivityOutputStatus.COMPLETED
@@ -149,7 +153,9 @@ async def test_live_verified_session_runs_once_and_emits_ordered_events() -> Non
         ({"youtube_broadcast_status": "testing"}, "opening.stream_state.unverified"),
     ],
 )
-async def test_unverified_external_state_is_rejected(update: dict[str, object], code: str) -> None:
+async def test_unverified_external_state_is_rejected(
+    update: dict[str, object], code: str
+) -> None:
     sessions = InMemoryStreamSessionRepository()
     session = live_session(sessions)
     usecase = StreamOpeningUsecase(
@@ -175,7 +181,11 @@ async def test_tts_failure_keeps_session_live_and_retry_is_idempotent() -> None:
     async def execute(_payload: dict[str, object], _trace: str) -> ActivityTurnResult:
         nonlocal calls
         calls += 1
-        return turn(ActionExecutionStatus.FAILED if calls == 1 else ActionExecutionStatus.COMPLETED)
+        return turn(
+            ActionExecutionStatus.FAILED
+            if calls == 1
+            else ActionExecutionStatus.COMPLETED
+        )
 
     usecase = StreamOpeningUsecase(
         sessions=sessions,
@@ -228,7 +238,7 @@ async def test_missing_required_segment_fails_without_generating_greeting() -> N
 
 
 def test_opening_activity_rejects_invalid_transition() -> None:
-    from app.domain.streaming import StreamOpeningActivity
+    from app.plugins.youtube_streaming.domain import StreamOpeningActivity
 
     activity = StreamOpeningActivity("session", "trace", "opening")
     with pytest.raises(ValueError, match="invalid opening transition"):

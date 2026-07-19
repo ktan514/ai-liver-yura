@@ -9,8 +9,8 @@ from app.adapters.obs import ObsWebSocketStreamingControlAdapter
 from app.adapters.streaming.fake_streaming_control import (
     DisabledObsStreamingControlAdapter,
 )
+from app.bootstrap import create_stream_preparation_runtime
 from app.config.app_config import load_app_config
-from app.runtime.runtime_factory import create_stream_preparation_runtime
 
 
 @pytest.mark.asyncio

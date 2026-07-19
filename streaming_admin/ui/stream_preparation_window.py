@@ -140,7 +140,9 @@ class StreamPreparationWindow(QMainWindow):
         self.main_retry_button.setEnabled(False)
         self.comment_response_retry_button.setEnabled(False)
         self.emergency_button = QPushButton("緊急停止")
-        self.emergency_button.setStyleSheet("background:#b71c1c;color:white;font-weight:bold")
+        self.emergency_button.setStyleSheet(
+            "background:#b71c1c;color:white;font-weight:bold"
+        )
         self.emergency_button.setEnabled(False)
         self.recovery_operation_buttons = (
             self.opening_retry_button,
@@ -197,8 +199,12 @@ class StreamPreparationWindow(QMainWindow):
         self.overview_scroll = QScrollArea()
         self.overview_scroll.setObjectName("overviewScrollArea")
         self.overview_scroll.setWidgetResizable(True)
-        self.overview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.overview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.overview_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.overview_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
         self.overview_content = QWidget()
         self.overview_content.setObjectName("overviewScrollContent")
         root = QVBoxLayout(self.overview_content)
@@ -244,7 +250,9 @@ class StreamPreparationWindow(QMainWindow):
         )
         self.responsibility_table = self._table(self.responsibility_model)
         self.responsibility_group = QGroupBox("操作分担")
-        self.responsibility_group.setMinimumHeight(self.responsibility_table.minimumHeight() + 30)
+        self.responsibility_group.setMinimumHeight(
+            self.responsibility_table.minimumHeight() + 30
+        )
         responsibility_layout = QVBoxLayout(self.responsibility_group)
         responsibility_layout.addWidget(self.responsibility_table)
         root.addWidget(self.responsibility_group)
@@ -291,7 +299,9 @@ class StreamPreparationWindow(QMainWindow):
 
         demo = QHBoxLayout()
         self.demo_preset = QComboBox()
-        self.demo_preset.addItems(["通常", "質問", "Prompt Injection", "個人情報", "Paid"])
+        self.demo_preset.addItems(
+            ["通常", "質問", "Prompt Injection", "個人情報", "Paid"]
+        )
         self.demo_comment = QLineEdit()
         self.demo_comment.setPlaceholderText("Demoコメントを入力")
         self.demo_send_button = QPushButton("Fakeコメント投入")
@@ -398,8 +408,12 @@ class StreamPreparationWindow(QMainWindow):
         self.settings_scroll = QScrollArea()
         self.settings_scroll.setObjectName("settingsScrollArea")
         self.settings_scroll.setWidgetResizable(True)
-        self.settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.settings_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.settings_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self.settings_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
         self.settings_content = QWidget()
         self.settings_content.setObjectName("settingsScrollContent")
         root = QVBoxLayout(self.settings_content)
@@ -504,7 +518,9 @@ class StreamPreparationWindow(QMainWindow):
             + 8
         )
         table.setMinimumHeight(minimum_height)
-        table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
+        table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding
+        )
         return table
 
     @staticmethod
@@ -616,10 +632,14 @@ class StreamPreparationWindow(QMainWindow):
         self.timeline_filter.currentIndexChanged.connect(self._apply_timeline_filter)
         self.timeline_errors.toggled.connect(self._apply_timeline_filter)
         self.timeline.clicked.connect(
-            lambda index: self._show_detail(self.timeline_model, index.row(), self.timeline_detail)
+            lambda index: self._show_detail(
+                self.timeline_model, index.row(), self.timeline_detail
+            )
         )
         self.comment_table.clicked.connect(
-            lambda index: self._show_detail(self.comment_model, index.row(), self.comment_detail)
+            lambda index: self._show_detail(
+                self.comment_model, index.row(), self.comment_detail
+            )
         )
         self.diagnostic_table.clicked.connect(
             lambda index: self._show_detail(
@@ -725,7 +745,9 @@ class StreamPreparationWindow(QMainWindow):
             int(height * StreamPreparationWindow.PREVIOUS_AVAILABLE_RATIO),
         )
         desired_width = int(previous_width * StreamPreparationWindow.INITIAL_SIZE_RATIO)
-        desired_height = int(previous_height * StreamPreparationWindow.INITIAL_SIZE_RATIO)
+        desired_height = int(
+            previous_height * StreamPreparationWindow.INITIAL_SIZE_RATIO
+        )
         return (
             min(width, max(StreamPreparationWindow.MINIMUM_WIDTH, desired_width)),
             min(height, max(StreamPreparationWindow.MINIMUM_HEIGHT, desired_height)),
@@ -742,7 +764,9 @@ class StreamPreparationWindow(QMainWindow):
             min(self.MINIMUM_WIDTH, geometry.width()),
             min(self.MINIMUM_HEIGHT, geometry.height()),
         )
-        width, height = self.window_size_for_available(geometry.width(), geometry.height())
+        width, height = self.window_size_for_available(
+            geometry.width(), geometry.height()
+        )
         self.resize(width, height)
         self.move(
             geometry.x() + max(0, (geometry.width() - width) // 2),
@@ -793,13 +817,21 @@ class StreamPreparationWindow(QMainWindow):
                 "#ffcc80",
             )
         elif youtube == "fake" and obs == "obs_websocket":
-            text, color = "LOCAL TEST / YOUTUBE FAKE + OBS REAL / YouTube手動操作不要", "#ffe082"
+            text, color = (
+                "LOCAL TEST / YOUTUBE FAKE + OBS REAL / YouTube手動操作不要",
+                "#ffe082",
+            )
         elif youtube not in {"unknown", "fake"} and obs == "obs_websocket":
-            text, color = "YOUTUBE REAL + OBS REAL / 公開開始・終了はAdapterが自動実行", "#a5d6a7"
+            text, color = (
+                "YOUTUBE REAL + OBS REAL / 公開開始・終了はAdapterが自動実行",
+                "#a5d6a7",
+            )
         else:
             text, color = "ADAPTER MODE UNKNOWN", "#cfd8dc"
         self.banner.setText(text)
-        self.banner.setStyleSheet(f"background:{color};color:#212121;padding:4px;font-weight:bold")
+        self.banner.setStyleSheet(
+            f"background:{color};color:#212121;padding:4px;font-weight:bold"
+        )
 
     def _console_changed(self, value: object) -> None:
         if not isinstance(value, dict) or not value:
@@ -817,9 +849,11 @@ class StreamPreparationWindow(QMainWindow):
             for service in services:
                 if not isinstance(service, dict):
                     continue
-                {"Core": self.system_card, "OBS": self.obs_card, "YouTube": self.youtube_card}.get(
-                    str(service.get("name")), self.system_card
-                ).set_service(service)
+                {
+                    "Core": self.system_card,
+                    "OBS": self.obs_card,
+                    "YouTube": self.youtube_card,
+                }.get(str(service.get("name")), self.system_card).set_service(service)
         steps = value.get("lifecycle_steps", [])
         if isinstance(steps, list):
             self.step_model.set_rows(item for item in steps if isinstance(item, dict))
@@ -846,7 +880,9 @@ class StreamPreparationWindow(QMainWindow):
             )
         timeline = value.get("timeline", [])
         if isinstance(timeline, list):
-            self._timeline_entries = [dict(item) for item in timeline if isinstance(item, dict)]
+            self._timeline_entries = [
+                dict(item) for item in timeline if isinstance(item, dict)
+            ]
             self.timeline_model.set_rows(self._timeline_entries)
             self.diagnostic_model.set_rows(self._timeline_entries)
         settings = value.get("log_settings")
@@ -861,8 +897,12 @@ class StreamPreparationWindow(QMainWindow):
             str(action.get("title") or "現在、必要な人間操作はありません。")
         )
         self.open_studio_button.setEnabled(required and bool(action.get("studio_url")))
-        self.confirm_operator_button.setEnabled(required and bool(action.get("can_confirm")))
-        self.cancel_operator_button.setEnabled(required and bool(action.get("can_cancel")))
+        self.confirm_operator_button.setEnabled(
+            required and bool(action.get("can_confirm"))
+        )
+        self.cancel_operator_button.setEnabled(
+            required and bool(action.get("can_cancel"))
+        )
         action_type = str(action.get("action_type", "none"))
         if (
             required
@@ -881,16 +921,22 @@ class StreamPreparationWindow(QMainWindow):
             return
         adapter = str(value.get("adapter_type", "unknown"))
         status = str(value.get("status", "unknown"))
-        self.adapter.setText("Google（実環境）" if adapter != "fake" else "Fake（テスト）")
+        self.adapter.setText(
+            "Google（実環境）" if adapter != "fake" else "Fake（テスト）"
+        )
         self.auth_status.setText(status_label(status))
-        self.auth_button.setEnabled(status not in {"authenticated", "authentication_in_progress"})
+        self.auth_button.setEnabled(
+            status not in {"authenticated", "authentication_in_progress"}
+        )
         self.prepare_button.setEnabled(status == "authenticated")
 
     def _session_changed(self, value: object) -> None:
         if not isinstance(value, dict):
             return
         try:
-            parsed = datetime.fromisoformat(str(value.get("observed_at")).replace("Z", "+00:00"))
+            parsed = datetime.fromisoformat(
+                str(value.get("observed_at")).replace("Z", "+00:00")
+            )
         except ValueError:
             parsed = None
         if parsed and self._last_snapshot_at and parsed < self._last_snapshot_at:
@@ -902,7 +948,9 @@ class StreamPreparationWindow(QMainWindow):
         enabled, reason = start_button_decision(value, self._demo_mode)
         self.start_button.setEnabled(enabled)
         self.start_button.setToolTip(reason)
-        self.demo_send_button.setEnabled(self._demo_mode and value.get("status") == "live")
+        self.demo_send_button.setEnabled(
+            self._demo_mode and value.get("status") == "live"
+        )
         self.checked_at.setText(local_time(value.get("observed_at")))
         self.summary.setText(failure_summary(value))
         modes = value.get("adapter_modes")
@@ -926,7 +974,9 @@ class StreamPreparationWindow(QMainWindow):
         self.checked_at.setText(local_time(value.get("observed_at")))
 
     def _update_obs_checks(self, checks: list[dict[str, object]]) -> None:
-        connected = next((item for item in checks if item.get("check_id") == "obs.connected"), None)
+        connected = next(
+            (item for item in checks if item.get("check_id") == "obs.connected"), None
+        )
         if connected:
             metadata = connected.get("metadata", {})
             output = (
@@ -934,7 +984,9 @@ class StreamPreparationWindow(QMainWindow):
                 if isinstance(metadata, dict)
                 else "unknown"
             )
-            self.obs_connection_status.setText(status_label(str(connected.get("status"))))
+            self.obs_connection_status.setText(
+                status_label(str(connected.get("status")))
+            )
             self.obs_output_status.setText(str(output))
 
     def _set_broadcasts(self, value: object) -> None:
@@ -959,7 +1011,9 @@ class StreamPreparationWindow(QMainWindow):
         if isinstance(value, list):
             for item in value:
                 if isinstance(item, dict):
-                    self.run_of_shows.addItem(str(item.get("title")), item.get("run_of_show_id"))
+                    self.run_of_shows.addItem(
+                        str(item.get("title")), item.get("run_of_show_id")
+                    )
         if self.run_of_shows.count() == 0:
             self.run_of_shows.addItem("進行表なし", None)
         index = self.run_of_shows.findData(selected)
@@ -967,7 +1021,10 @@ class StreamPreparationWindow(QMainWindow):
             self.run_of_shows.setCurrentIndex(index)
 
     def _prepare(self) -> None:
-        broadcast_id, run_id = self.broadcasts.currentData(), self.run_of_shows.currentData()
+        broadcast_id, run_id = (
+            self.broadcasts.currentData(),
+            self.run_of_shows.currentData(),
+        )
         if isinstance(broadcast_id, str) and isinstance(run_id, str):
             self.controller.prepare(broadcast_id, run_id)
         else:
@@ -977,7 +1034,9 @@ class StreamPreparationWindow(QMainWindow):
         session = self._current_session or {}
         if (
             QMessageBox.question(
-                self, "配信開始の承認", "OBS出力とYouTube公開処理を開始します。よろしいですか？"
+                self,
+                "配信開始の承認",
+                "OBS出力とYouTube公開処理を開始します。よろしいですか？",
             )
             != QMessageBox.StandardButton.Yes
         ):
@@ -1013,17 +1072,30 @@ class StreamPreparationWindow(QMainWindow):
         session = self._current_session or {}
         callback = getattr(self.controller, "emergency_stop", None)
         if callable(callback):
-            callback(session.get("session_id"), session.get("state_version"), "operator_emergency")
+            callback(
+                session.get("session_id"),
+                session.get("state_version"),
+                "operator_emergency",
+            )
 
     def _start_changed(self, value: object) -> None:
         if not isinstance(value, dict):
             return
         self.start_step.setText(
-            str(value.get("failed_step") or value.get("start_step") or value.get("status") or "-")
+            str(
+                value.get("failed_step")
+                or value.get("start_step")
+                or value.get("status")
+                or "-"
+            )
         )
         self.obs_output_status.setText(str(value.get("obs_output_status", "unknown")))
-        self.youtube_stream_status.setText(str(value.get("youtube_stream_status", "unknown")))
-        self.youtube_broadcast_status.setText(str(value.get("youtube_broadcast_status", "unknown")))
+        self.youtube_stream_status.setText(
+            str(value.get("youtube_stream_status", "unknown"))
+        )
+        self.youtube_broadcast_status.setText(
+            str(value.get("youtube_broadcast_status", "unknown"))
+        )
         self.start_button.setEnabled(False)
         self._update_timeline("lifecycle", "stream_start.updated", value)
 
@@ -1048,12 +1120,20 @@ class StreamPreparationWindow(QMainWindow):
         self._update_timeline("lifecycle", "stream_main.updated", value)
 
     def _set_activity_labels(self, prefix: str, value: dict[str, object]) -> None:
-        getattr(self, f"{prefix}_status").setText(status_label(str(value.get("status", "unknown"))))
+        getattr(self, f"{prefix}_status").setText(
+            status_label(str(value.get("status", "unknown")))
+        )
         getattr(self, f"{prefix}_segment").setText(str(value.get("segment_id") or "-"))
         getattr(self, f"{prefix}_started").setText(local_time(value.get("started_at")))
-        getattr(self, f"{prefix}_completed").setText(local_time(value.get("completed_at")))
-        getattr(self, f"{prefix}_speaking").setText("はい" if value.get("speaking") else "いいえ")
-        getattr(self, f"{prefix}_failure").setText(str(value.get("failure_code") or "-"))
+        getattr(self, f"{prefix}_completed").setText(
+            local_time(value.get("completed_at"))
+        )
+        getattr(self, f"{prefix}_speaking").setText(
+            "はい" if value.get("speaking") else "いいえ"
+        )
+        getattr(self, f"{prefix}_failure").setText(
+            str(value.get("failure_code") or "-")
+        )
         getattr(self, f"{prefix}_manual").setText(
             "必要" if value.get("manual_intervention_required") else "不要"
         )
@@ -1067,7 +1147,10 @@ class StreamPreparationWindow(QMainWindow):
         self.end_mode.setText(str(value.get("end_mode") or "-"))
         self.closing_status.setText(str(value.get("closing_status") or "-"))
         self.end_step.setText(
-            str(value.get("failed_step") or ("completed" if value.get("successful") else "-"))
+            str(
+                value.get("failed_step")
+                or ("completed" if value.get("successful") else "-")
+            )
         )
         self.end_failure.setText(str(value.get("failure_code") or "-"))
         self._update_timeline("lifecycle", "stream_end.updated", value)
@@ -1087,7 +1170,9 @@ class StreamPreparationWindow(QMainWindow):
         self.lifecycle_operations.setText(", ".join(allowed) or "なし")
         normal_end = operations.get("start_normal_end", {})
         emergency = operations.get("start_emergency_stop", {})
-        self.end_button.setEnabled(isinstance(normal_end, dict) and bool(normal_end.get("allowed")))
+        self.end_button.setEnabled(
+            isinstance(normal_end, dict) and bool(normal_end.get("allowed"))
+        )
         self.emergency_button.setEnabled(
             isinstance(emergency, dict) and bool(emergency.get("allowed"))
         )
@@ -1131,14 +1216,20 @@ class StreamPreparationWindow(QMainWindow):
                     "timestamp": item.get("received_at")
                     or item.get("created_at")
                     or item.get("timestamp"),
-                    "author": item.get("author_display_name") or item.get("author") or "-",
+                    "author": item.get("author_display_name")
+                    or item.get("author")
+                    or "-",
                     "comment": item.get("sanitized_text")
                     or item.get("text")
                     or item.get("comment")
                     or "-",
-                    "moderation": item.get("moderation_decision") or item.get("decision") or "-",
+                    "moderation": item.get("moderation_decision")
+                    or item.get("decision")
+                    or "-",
                     "priority": item.get("total_score") or item.get("priority") or "-",
-                    "status": item.get("status") or item.get("reservation_status") or "-",
+                    "status": item.get("status")
+                    or item.get("reservation_status")
+                    or "-",
                     "response": item.get("response") or "-",
                     **item,
                 }
@@ -1152,7 +1243,9 @@ class StreamPreparationWindow(QMainWindow):
         activity = value.get("activity")
         self._comment_response = dict(activity) if isinstance(activity, dict) else None
         if self._comment_response:
-            self.comment_response_status.setText(str(self._comment_response.get("status") or "-"))
+            self.comment_response_status.setText(
+                str(self._comment_response.get("status") or "-")
+            )
             self.comment_response_retry_button.setEnabled(
                 bool(self._comment_response.get("retryable"))
             )
@@ -1172,12 +1265,18 @@ class StreamPreparationWindow(QMainWindow):
         value = self.main_retry_button.property("main_segment")
         callback = getattr(self.controller, "retry_main_segment", None)
         if isinstance(value, dict) and callable(callback):
-            callback(value.get("session_id"), value.get("activity_id"), value.get("version"))
+            callback(
+                value.get("session_id"), value.get("activity_id"), value.get("version")
+            )
 
     def _retry_comment_response(self) -> None:
         session, activity = self._current_session or {}, self._comment_response or {}
         callback = getattr(self.controller, "retry_comment_response", None)
-        if callable(callback) and activity.get("activity_id") and activity.get("selection_id"):
+        if (
+            callable(callback)
+            and activity.get("activity_id")
+            and activity.get("selection_id")
+        ):
             callback(
                 str(session.get("session_id") or ""),
                 str(activity["activity_id"]),
@@ -1185,7 +1284,9 @@ class StreamPreparationWindow(QMainWindow):
                 int(activity.get("version", 0)),
             )
 
-    def _update_timeline(self, category: str, event_name: str, value: dict[str, object]) -> None:
+    def _update_timeline(
+        self, category: str, event_name: str, value: dict[str, object]
+    ) -> None:
         entry = {
             "timestamp": datetime.now().astimezone().isoformat(),
             "category": category,
@@ -1205,7 +1306,8 @@ class StreamPreparationWindow(QMainWindow):
 
     def _apply_timeline_filter(self) -> None:
         self.timeline_model.set_filter(
-            str(self.timeline_filter.currentData()), errors_only=self.timeline_errors.isChecked()
+            str(self.timeline_filter.currentData()),
+            errors_only=self.timeline_errors.isChecked(),
         )
 
     def _diagnostics_changed(self, value: object) -> None:
@@ -1213,7 +1315,9 @@ class StreamPreparationWindow(QMainWindow):
             return
         events = value.get("recent_events")
         if isinstance(events, list):
-            self.diagnostic_model.set_rows(item for item in events if isinstance(item, dict))
+            self.diagnostic_model.set_rows(
+                item for item in events if isinstance(item, dict)
+            )
         if value.get("saved"):
             self.summary.setText(f"診断情報を保存しました: {value.get('path')}")
 
@@ -1245,7 +1349,9 @@ class StreamPreparationWindow(QMainWindow):
             widget.setValue(int(value.get(key, widget.value())))
         self.obs_auto_refresh.setChecked(bool(value.get("obs_auto_refresh")))
         self.youtube_auto_refresh.setChecked(bool(value.get("youtube_auto_refresh")))
-        self.show_operator_dialogs.setChecked(bool(value.get("show_operator_dialogs", True)))
+        self.show_operator_dialogs.setChecked(
+            bool(value.get("show_operator_dialogs", True))
+        )
         self._configure_refresh_timers()
 
     def _configure_refresh_timers(self) -> None:
@@ -1310,7 +1416,9 @@ class StreamPreparationWindow(QMainWindow):
             callback()
 
     def _cancel_operator_action(self) -> None:
-        self.operator_description.setText("操作をキャンセルしました。配信状態は変更していません。")
+        self.operator_description.setText(
+            "操作をキャンセルしました。配信状態は変更していません。"
+        )
 
     def _select_demo_preset(self, name: str) -> None:
         self.demo_comment.setText(

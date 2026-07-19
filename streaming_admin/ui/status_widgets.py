@@ -62,12 +62,16 @@ class StatusCardWidget(QGroupBox):
                 "状態": status_text(value.get("status")),
                 "Adapter": value.get("adapter_type"),
                 "更新方式": value.get("update_mode"),
-                "更新間隔": f"{value.get('update_interval_seconds')}秒"
-                if value.get("update_interval_seconds")
-                else "-",
-                "次回更新": f"約{value.get('next_update_in_seconds')}秒後"
-                if value.get("next_update_in_seconds")
-                else "手動更新またはイベント待ち",
+                "更新間隔": (
+                    f"{value.get('update_interval_seconds')}秒"
+                    if value.get("update_interval_seconds")
+                    else "-"
+                ),
+                "次回更新": (
+                    f"約{value.get('next_update_in_seconds')}秒後"
+                    if value.get("next_update_in_seconds")
+                    else "手動更新またはイベント待ち"
+                ),
                 "最終更新": local_time(value.get("last_updated_at")),
                 "状態の鮮度": status_text(value.get("freshness")),
                 "エラー": value.get("error_message") or value.get("error_code") or "-",

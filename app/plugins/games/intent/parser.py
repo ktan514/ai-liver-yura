@@ -9,7 +9,9 @@ class GameIntentCommandParser:
     def __init__(self, supported_games: frozenset[str]) -> None:
         self._supported_games = supported_games
 
-    def parse(self, raw_output: str, *, expected_state_version: int) -> GameIntentCommand | None:
+    def parse(
+        self, raw_output: str, *, expected_state_version: int
+    ) -> GameIntentCommand | None:
         text = raw_output.strip()
         if text.startswith("```"):
             lines = text.splitlines()
@@ -24,7 +26,13 @@ class GameIntentCommandParser:
             return None
         if not isinstance(value, dict):
             return None
-        required = {"intent", "confidence", "state_version", "requires_confirmation", "reason"}
+        required = {
+            "intent",
+            "confidence",
+            "state_version",
+            "requires_confirmation",
+            "reason",
+        }
         if not required.issubset(value):
             return None
         try:

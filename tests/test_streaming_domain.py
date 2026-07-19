@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.adapters.streaming import InMemoryStreamSessionRepository
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.domain import (
     HealthCheckItem,
     HealthStatus,
     ReadinessPolicy,
@@ -41,7 +41,9 @@ def test_repository_prevents_multiple_active_sessions() -> None:
 
 
 def test_readiness_ignores_optional_unavailable_but_rejects_required() -> None:
-    optional = HealthCheckItem("avatar", "avatar", HealthStatus.UNAVAILABLE, False, "unavailable")
+    optional = HealthCheckItem(
+        "avatar", "avatar", HealthStatus.UNAVAILABLE, False, "unavailable"
+    )
     required = HealthCheckItem(
         "youtube",
         "youtube",

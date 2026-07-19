@@ -13,7 +13,7 @@ from app.adapters.youtube.google_youtube_auth_service import (
     GoogleYouTubeAuthConfig,
     GoogleYouTubeAuthService,
 )
-from app.domain.streaming import YouTubeAuthenticationStatus
+from app.plugins.youtube_streaming.domain import YouTubeAuthenticationStatus
 from app.utils.trace import TraceLogger
 
 
@@ -26,7 +26,9 @@ def credentials(*, expired: bool = False) -> Credentials:
         client_secret="client-secret-value",
         scopes=[YOUTUBE_READONLY_SCOPE],
     )
-    value.expiry = datetime.utcnow() + (timedelta(seconds=-60) if expired else timedelta(hours=1))
+    value.expiry = datetime.utcnow() + (
+        timedelta(seconds=-60) if expired else timedelta(hours=1)
+    )
     return value
 
 
@@ -57,7 +59,9 @@ def configure_paths(
     return client, token
 
 
-def test_auth_reports_missing_env_and_client_file(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_auth_reports_missing_env_and_client_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv("YOUTUBE_TEST_CLIENT_SECRET", raising=False)
     monkeypatch.delenv("YOUTUBE_TEST_TOKEN", raising=False)
     state = service().get_state()
@@ -75,10 +79,15 @@ def test_auth_reports_token_missing_as_authentication_required(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     configure_paths(monkeypatch, tmp_path)
-    assert service().get_state().status == YouTubeAuthenticationStatus.AUTHENTICATION_REQUIRED
+    assert (
+        service().get_state().status
+        == YouTubeAuthenticationStatus.AUTHENTICATION_REQUIRED
+    )
 
 
-def test_auth_loads_valid_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_auth_loads_valid_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     configure_paths(monkeypatch, tmp_path, token_exists=True)
     auth = service()
     assert auth.get_state().status == YouTubeAuthenticationStatus.AUTHENTICATED
@@ -127,7 +136,9 @@ def test_auth_refreshes_expired_token_and_saves_securely(
     assert token.stat().st_mode & 0o777 == 0o600
 
 
-def test_auth_refresh_failure_is_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_auth_refresh_failure_is_safe(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     _, token = configure_paths(monkeypatch, tmp_path)
     token.parent.mkdir()
     token.write_text(
@@ -154,7 +165,8 @@ def test_auth_corrupt_token_does_not_expose_internal_exception(
     state = service().get_state()
     assert state.status == YouTubeAuthenticationStatus.AUTHENTICATION_FAILED
     assert (
-        state.failure_reason == "保存済みYouTube OAuth Tokenが破損しています。再認証してください。"
+        state.failure_reason
+        == "保存済みYouTube OAuth Tokenが破損しています。再認証してください。"
     )
 
 

@@ -22,7 +22,11 @@ EMPTY_INDEX = QModelIndex()
 def mask_secrets(value: Any) -> Any:
     if isinstance(value, dict):
         return {
-            str(key): "***REDACTED***" if str(key).lower() in SECRET_KEYS else mask_secrets(item)
+            str(key): (
+                "***REDACTED***"
+                if str(key).lower() in SECRET_KEYS
+                else mask_secrets(item)
+            )
             for key, item in value.items()
         }
     if isinstance(value, list):
@@ -47,7 +51,13 @@ class ManualCheckLogModel(QAbstractTableModel):
         self.max_rows = max_rows
         self._items: list[dict[str, Any]] = []
         self._visible: list[dict[str, Any]] = []
-        self._filters = {"source": "", "category": "", "event": "", "status": "", "keyword": ""}
+        self._filters = {
+            "source": "",
+            "category": "",
+            "event": "",
+            "status": "",
+            "keyword": "",
+        }
 
     def rowCount(self, parent: QModelIndex = EMPTY_INDEX) -> int:  # noqa: N802
         return 0 if parent.isValid() else len(self._visible)
@@ -62,9 +72,15 @@ class ManualCheckLogModel(QAbstractTableModel):
         return "" if value is None else str(value)
 
     def headerData(
-        self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
     ) -> Any:  # noqa: N802
-        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+        ):
             return self.COLUMNS[section][1]
         return super().headerData(section, orientation, role)
 
@@ -85,7 +101,9 @@ class ManualCheckLogModel(QAbstractTableModel):
 
     def set_filters(self, **filters: str) -> None:
         self.beginResetModel()
-        self._filters.update({key: value.strip().casefold() for key, value in filters.items()})
+        self._filters.update(
+            {key: value.strip().casefold() for key, value in filters.items()}
+        )
         self._apply()
         self.endResetModel()
 
@@ -94,7 +112,9 @@ class ManualCheckLogModel(QAbstractTableModel):
 
     def detail(self, row: int) -> str:
         item = self.item(row)
-        return json.dumps(item, ensure_ascii=False, indent=2) if item is not None else ""
+        return (
+            json.dumps(item, ensure_ascii=False, indent=2) if item is not None else ""
+        )
 
     def _apply(self) -> None:
         keyword_fields = (
@@ -109,7 +129,8 @@ class ManualCheckLogModel(QAbstractTableModel):
         visible = []
         for item in self._items:
             if any(
-                self._filters[key] and self._filters[key] not in str(item.get(key) or "").casefold()
+                self._filters[key]
+                and self._filters[key] not in str(item.get(key) or "").casefold()
                 for key in ("source", "category", "event", "status")
             ):
                 continue

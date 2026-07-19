@@ -15,7 +15,7 @@ from app.adapters.obs.obs_websocket_client_factory import (
     ObsRequestClient,
     ObsWebSocketClientFactory,
 )
-from app.domain.streaming import ObsPreparationSnapshot
+from app.plugins.youtube_streaming.domain import ObsPreparationSnapshot
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +79,9 @@ class ObsWebSocketPreparationAdapter:
         return {item.source_name: item.usable for item in inspection.audio_sources}
 
     async def get_source_visibility(self, source_name: str) -> bool:
-        inspection = await self._run(lambda client: self._visibility(client, source_name))
+        inspection = await self._run(
+            lambda client: self._visibility(client, source_name)
+        )
         return inspection.avatar.visible and not inspection.avatar.ambiguous
 
     async def get_avatar_source_visibility(self) -> bool:
@@ -111,7 +113,9 @@ class ObsWebSocketPreparationAdapter:
             audio_source_states={
                 item.source_name: item.usable for item in inspection.audio_sources
             },
-            avatar_source_visible=(inspection.avatar.visible and not inspection.avatar.ambiguous),
+            avatar_source_visible=(
+                inspection.avatar.visible and not inspection.avatar.ambiguous
+            ),
             obs_version=inspection.obs_version,
             websocket_version=inspection.websocket_version,
             audio_source_details=details,
@@ -158,7 +162,9 @@ class ObsWebSocketPreparationAdapter:
         avatar = (
             self._visibility(client, self._config.avatar_source_name)
             if self._config.avatar_source_name
-            else ObsInspection("", "", "", "", "", (), ObsSourceVisibility("", True, True))
+            else ObsInspection(
+                "", "", "", "", "", (), ObsSourceVisibility("", True, True)
+            )
         )
         return ObsInspection(
             version.obs_version,
@@ -174,7 +180,9 @@ class ObsWebSocketPreparationAdapter:
         response = client.get_version()
         rpc = int(getattr(response, "rpc_version", 0))
         if rpc < 1:
-            raise ObsAdapterError("protocol_version", "obs.protocol_version_unsupported")
+            raise ObsAdapterError(
+                "protocol_version", "obs.protocol_version_unsupported"
+            )
         return ObsInspection(
             str(getattr(response, "obs_version", "unknown")),
             str(getattr(response, "obs_web_socket_version", "unknown")),
@@ -187,7 +195,9 @@ class ObsWebSocketPreparationAdapter:
 
     def _output(self, client: ObsRequestClient) -> ObsInspection:
         status = ObsStatusMapper.output_status(client.get_stream_status())
-        return ObsInspection("", "", status, "", "", (), ObsSourceVisibility("", True, True))
+        return ObsInspection(
+            "", "", status, "", "", (), ObsSourceVisibility("", True, True)
+        )
 
     def _scenes(self, client: ObsRequestClient) -> ObsInspection:
         collections = client.get_scene_collection_list()
@@ -227,10 +237,16 @@ class ObsWebSocketPreparationAdapter:
                     bool(getattr(active, "input_active", False)),
                 )
             )
-        return ObsInspection("", "", "", "", "", tuple(states), ObsSourceVisibility("", True, True))
+        return ObsInspection(
+            "", "", "", "", "", tuple(states), ObsSourceVisibility("", True, True)
+        )
 
     def _visibility(self, client: ObsRequestClient, source_name: str) -> ObsInspection:
-        current = str(getattr(client.get_current_program_scene(), "current_program_scene_name", ""))
+        current = str(
+            getattr(
+                client.get_current_program_scene(), "current_program_scene_name", ""
+            )
+        )
         matches: list[tuple[str, bool]] = []
         visited: set[str] = set()
 

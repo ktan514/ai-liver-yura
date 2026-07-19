@@ -1,5 +1,9 @@
 # YouTube Streaming Plugin 設計
 
+> 現在の標準起動では本Pluginを無効化しており、`python -m app`から構成しない。
+> ゆらCoreはOBS/YouTube操作や進行表を知らず、YouTubeからはviewer権限の正規化済み
+> コメントEventだけを受け取る方針へ移行した。本書の進行機能は旧構成の記録である。
+
 - **Version:** 1.0.0
 - **目的:** AIライバーがYouTubeライブ配信を開始し、進行し、視聴者コメントへ反応し、終了できるようにする
 - **位置づけ:** `ai_liver_architecture_policy.md`および`plugin_core_contract.md`に従うPlugin固有設計
@@ -780,6 +784,10 @@ quota不足時は無制限に再試行しない。
 OBS操作は別Pluginの責務とする。
 
 YouTube Streaming Pluginは、OBS Pluginを直接呼び出さない。
+
+Coreの共通Activity pipelineとの接続はComposition RootのGatewayが担当する。
+Plugin側はShared Contractsの`PluginActivityResult`と`PluginEvent`だけを扱い、
+Core内部のActivity ResultやAgent Eventへ直接依存しない。
 
 必要な場合はCoreへActivity RequestまたはFollow-up Eventを返す。
 

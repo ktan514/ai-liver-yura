@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.domain.behavior import (
+from app.shared.contracts.activity import (
     ActivityMatcherContext,
     ActivityOperation,
     DeterministicActivityMatch,
@@ -18,7 +18,9 @@ class ExactActivityPhraseMatcher:
     display_name: str
     continue_phrases: tuple[str, ...] = ()
 
-    def match(self, context: ActivityMatcherContext) -> DeterministicActivityMatch | None:
+    def match(
+        self, context: ActivityMatcherContext
+    ) -> DeterministicActivityMatch | None:
         normalized = context.normalized_input
         if normalized in self.start_phrases:
             return DeterministicActivityMatch(

@@ -5,7 +5,9 @@ from app.ports.comment_moderation import SemanticModerationResult
 
 class FakeCommentModerationAdapter:
     def __init__(
-        self, result: SemanticModerationResult | None = None, error: Exception | None = None
+        self,
+        result: SemanticModerationResult | None = None,
+        error: Exception | None = None,
     ) -> None:
         self.result = result or SemanticModerationResult("allow", "benign", "none", 1.0)
         self.error = error

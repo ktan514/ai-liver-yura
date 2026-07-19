@@ -20,14 +20,17 @@ from app.adapters.youtube import (
     YouTubeApiError,
     YouTubeApiErrorKind,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.application import (
+    PrepareStreamSessionUsecase,
+    StreamPreparationRequirements,
+)
+from app.plugins.youtube_streaming.domain import (
     HealthStatus,
     StreamPreparationCommand,
     YouTubeAuthenticationState,
     YouTubeAuthenticationStatus,
     YouTubeLiveChatStatus,
 )
-from app.usecases import PrepareStreamSessionUsecase, StreamPreparationRequirements
 
 
 class FakeAuth:
@@ -56,7 +59,9 @@ class FakeRequest:
 
 
 class FakeResource:
-    def __init__(self, name: str, handler: Callable[[str, dict[str, object]], object]) -> None:
+    def __init__(
+        self, name: str, handler: Callable[[str, dict[str, object]], object]
+    ) -> None:
         self._name = name
         self._handler = handler
 
@@ -162,7 +167,10 @@ async def test_list_broadcasts_handles_empty_pagination_sort_and_same_title() ->
     results = await adapter(handler).list_broadcasts()
     assert {item.broadcast_id for item in results} == {"broadcast-1", "broadcast-2"}
     assert results[0].title == results[1].title
-    assert next(item for item in results if item.broadcast_id == "broadcast-2").selectable is False
+    assert (
+        next(item for item in results if item.broadcast_id == "broadcast-2").selectable
+        is False
+    )
 
 
 @pytest.mark.asyncio
@@ -192,7 +200,9 @@ async def test_resolve_validates_not_found_status_privacy_and_bound_stream() -> 
 @pytest.mark.asyncio
 async def test_stream_resolution_maps_status_health_without_leaking_secret() -> None:
     def handler(name: str, params: dict[str, object]) -> object:
-        return {"items": [broadcast()]} if name == "broadcasts" else {"items": [stream()]}
+        return (
+            {"items": [broadcast()]} if name == "broadcasts" else {"items": [stream()]}
+        )
 
     result = await adapter(handler).resolve_bound_stream("broadcast-1")
     assert result.status == "ready"
@@ -238,7 +248,9 @@ async def test_retry_is_limited_to_retryable_errors() -> None:
         nonlocal attempts
         attempts += 1
         if attempts < 3:
-            return YouTubeApiError(YouTubeApiErrorKind.SERVER, "temporary", retryable=True)
+            return YouTubeApiError(
+                YouTubeApiErrorKind.SERVER, "temporary", retryable=True
+            )
         return {"items": []}
 
     assert await adapter(retry_handler, max_retries=2).list_broadcasts() == ()
@@ -249,7 +261,9 @@ async def test_retry_is_limited_to_retryable_errors() -> None:
     def quota_handler(name: str, params: dict[str, object]) -> object:
         nonlocal quota_attempts
         quota_attempts += 1
-        return YouTubeApiError(YouTubeApiErrorKind.QUOTA_EXHAUSTED, "quota", retryable=False)
+        return YouTubeApiError(
+            YouTubeApiErrorKind.QUOTA_EXHAUSTED, "quota", retryable=False
+        )
 
     with pytest.raises(YouTubeApiError):
         await adapter(quota_handler, max_retries=5).list_broadcasts()
@@ -257,7 +271,9 @@ async def test_retry_is_limited_to_retryable_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancel_does_not_publish_late_sync_result(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_cancel_does_not_publish_late_sync_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     instance = adapter(lambda name, params: {"items": []})
 
     def slow(operation: object) -> object:

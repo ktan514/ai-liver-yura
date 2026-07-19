@@ -17,6 +17,9 @@ class ObsStatusMapper:
             return "failed"
         if active or state in {"OBS_WEBSOCKET_OUTPUT_STARTED", "ACTIVE", "STARTED"}:
             return "active"
-        if state in {"OBS_WEBSOCKET_OUTPUT_STOPPED", "IDLE", "STOPPED", ""} and not active:
+        if (
+            state in {"OBS_WEBSOCKET_OUTPUT_STOPPED", "IDLE", "STOPPED", ""}
+            and not active
+        ):
             return "idle"
         return "unknown"

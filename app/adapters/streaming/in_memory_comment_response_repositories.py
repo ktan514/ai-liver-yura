@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict, deque
 from threading import RLock
 
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.domain import (
     CommentResponseHistoryEntry,
     StreamCommentResponseActivity,
 )
@@ -17,7 +17,9 @@ class InMemoryCommentResponseActivityRepository:
         self._capacity = capacity
         self._lock = RLock()
 
-    def create(self, activity: StreamCommentResponseActivity) -> StreamCommentResponseActivity:
+    def create(
+        self, activity: StreamCommentResponseActivity
+    ) -> StreamCommentResponseActivity:
         with self._lock:
             key = (activity.session_id, activity.selection_id)
             if key in self._selection_index:
@@ -31,7 +33,9 @@ class InMemoryCommentResponseActivityRepository:
                     raise ValueError("comment_response.repository_capacity")
             return activity
 
-    def save(self, activity: StreamCommentResponseActivity) -> StreamCommentResponseActivity:
+    def save(
+        self, activity: StreamCommentResponseActivity
+    ) -> StreamCommentResponseActivity:
         with self._lock:
             current = self._items.get(activity.activity_id)
             if current is None or activity.version != current.version + 1:
@@ -44,7 +48,12 @@ class InMemoryCommentResponseActivityRepository:
 
     def find_by_session(self, session_id: str) -> StreamCommentResponseActivity | None:
         return next(
-            (item for item in reversed(self._items.values()) if item.session_id == session_id), None
+            (
+                item
+                for item in reversed(self._items.values())
+                if item.session_id == session_id
+            ),
+            None,
         )
 
     def find_by_selection(
@@ -69,7 +78,11 @@ class InMemoryCommentResponseHistory:
         self._capacity = capacity
 
     def save(self, item: CommentResponseHistoryEntry) -> None:
-        self._items.setdefault(item.session_id, deque(maxlen=self._capacity)).append(item)
+        self._items.setdefault(item.session_id, deque(maxlen=self._capacity)).append(
+            item
+        )
 
-    def recent(self, session_id: str, limit: int = 20) -> tuple[CommentResponseHistoryEntry, ...]:
+    def recent(
+        self, session_id: str, limit: int = 20
+    ) -> tuple[CommentResponseHistoryEntry, ...]:
         return tuple(self._items.get(session_id, ()))[-limit:]

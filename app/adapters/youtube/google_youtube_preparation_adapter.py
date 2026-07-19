@@ -16,7 +16,7 @@ from app.adapters.youtube.youtube_api_error_mapper import (
     YouTubeApiErrorKind,
     YouTubeApiErrorMapper,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.domain import (
     YouTubeAuthenticationState,
     YouTubeAuthenticationStatus,
     YouTubeBroadcastStatus,
@@ -125,7 +125,9 @@ class GoogleYouTubePreparationAdapter:
                 break
             page_token = next_token
         maximum = datetime.max.replace(tzinfo=timezone.utc)
-        broadcasts.sort(key=lambda item: (item.scheduled_start_at or maximum, item.broadcast_id))
+        broadcasts.sort(
+            key=lambda item: (item.scheduled_start_at or maximum, item.broadcast_id)
+        )
         return tuple(broadcasts)
 
     async def resolve_broadcast(self, broadcast_id: str) -> YouTubeBroadcastSummary:
@@ -197,7 +199,9 @@ class GoogleYouTubePreparationAdapter:
         )
         item = self._first_item(response, "YouTube Streamが見つかりません。")
         status_data = item.get("status")
-        value = status_data.get("streamStatus") if isinstance(status_data, dict) else None
+        value = (
+            status_data.get("streamStatus") if isinstance(status_data, dict) else None
+        )
         return map_stream_status(value).value
 
     async def get_broadcast_status(self, broadcast_id: str) -> str:
@@ -206,7 +210,9 @@ class GoogleYouTubePreparationAdapter:
     async def get_live_chat_id(self, broadcast_id: str) -> str | None:
         return (await self.get_live_chat_availability(broadcast_id)).live_chat_id
 
-    async def get_live_chat_availability(self, broadcast_id: str) -> YouTubeLiveChatSnapshot:
+    async def get_live_chat_availability(
+        self, broadcast_id: str
+    ) -> YouTubeLiveChatSnapshot:
         broadcast = await self._find_owned_broadcast(broadcast_id)
         if broadcast.live_chat_id:
             return YouTubeLiveChatSnapshot(
@@ -227,7 +233,9 @@ class GoogleYouTubePreparationAdapter:
     async def health_check(self) -> bool:
         await self._request(
             lambda client: (
-                client.channels().list(part="id", mine=True, maxResults=1).execute(num_retries=0)
+                client.channels()
+                .list(part="id", mine=True, maxResults=1)
+                .execute(num_retries=0)
             )
         )
         return True

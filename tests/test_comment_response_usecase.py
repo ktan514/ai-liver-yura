@@ -11,7 +11,9 @@ from app.adapters.streaming import (
     InMemoryStreamMainSegmentRepository,
     InMemoryStreamOpeningRepository,
 )
-from app.adapters.streaming.in_memory_session_repository import InMemoryStreamSessionRepository
+from app.adapters.streaming.in_memory_session_repository import (
+    InMemoryStreamSessionRepository,
+)
 from app.config.app_config import CommentResponseSettings
 from app.domain.activity_turn_result import (
     ActionExecutionResult,
@@ -22,7 +24,11 @@ from app.domain.activity_turn_result import (
     CharacterGenerationResult,
     CharacterGenerationStatus,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.application import (
+    CommentResponseUsecase,
+    StreamLifecycleGate,
+)
+from app.plugins.youtube_streaming.domain import (
     CommentResponseRejected,
     CommentResponseTarget,
     RetryCommentResponseCommand,
@@ -32,7 +38,6 @@ from app.domain.streaming import (
     StreamSession,
     StreamSessionStatus,
 )
-from app.usecases import CommentResponseUsecase, StreamLifecycleGate
 
 ACTIVE = {
     "obs_output": "active",
@@ -47,7 +52,11 @@ class Selections:
         self.target = target
 
     def selection(self, selection_id: str) -> CommentResponseTarget | None:
-        return self.target if self.target and self.target.selection_id == selection_id else None
+        return (
+            self.target
+            if self.target and self.target.selection_id == selection_id
+            else None
+        )
 
     def reacquire(self, selection_id: str) -> CommentResponseTarget | None:
         if (
@@ -102,8 +111,12 @@ def target(session_id: str) -> CommentResponseTarget:
 
 
 def turn(success: bool = True) -> ActivityTurnResult:
-    status = ActionExecutionStatus.COMPLETED if success else ActionExecutionStatus.FAILED
-    output_status = ActivityOutputStatus.COMPLETED if success else ActivityOutputStatus.FAILED
+    status = (
+        ActionExecutionStatus.COMPLETED if success else ActionExecutionStatus.FAILED
+    )
+    output_status = (
+        ActivityOutputStatus.COMPLETED if success else ActivityOutputStatus.FAILED
+    )
     return ActivityTurnResult(
         "turn",
         "stream_comment_response",
@@ -116,7 +129,9 @@ def turn(success: bool = True) -> ActivityTurnResult:
             output_status,
             "output",
             "turn",
-            action_results=(ActionExecutionResult("speak", "speak", status, "output", "turn"),),
+            action_results=(
+                ActionExecutionResult("speak", "speak", status, "output", "turn"),
+            ),
             failure_stage=None if success else "tts",
         ),
     )
@@ -166,11 +181,16 @@ def setup(success: bool = True):
 
 
 @pytest.mark.asyncio
-async def test_reserved_target_runs_safe_character_path_and_consumes_after_speech() -> None:
+async def test_reserved_target_runs_safe_character_path_and_consumes_after_speech() -> (
+    None
+):
     usecase, session, _sessions, selections, payloads, events, history = setup()
     activity = await usecase.start(session.session_id, "selection", "trace")
     assert activity.status == StreamCommentResponseStatus.COMPLETED
-    assert selections.target is not None and selections.target.reservation_status == "consumed"
+    assert (
+        selections.target is not None
+        and selections.target.reservation_status == "consumed"
+    )
     quoted = payloads[0]["comment_response_target"]
     assert isinstance(quoted, dict)
     assert quoted["sanitized_text"].startswith("安全化コメント")
@@ -188,7 +208,10 @@ async def test_tts_failure_releases_and_retry_is_idempotent() -> None:
     failed = await usecase.start(session.session_id, "selection", "trace")
     assert failed.status == StreamCommentResponseStatus.FAILED
     assert failed.failure_code == "tts"
-    assert selections.target is not None and selections.target.reservation_status == "released"
+    assert (
+        selections.target is not None
+        and selections.target.reservation_status == "released"
+    )
     command = RetryCommentResponseCommand(
         "command", session.session_id, failed.activity_id, "selection", failed.version
     )
@@ -205,7 +228,8 @@ async def test_missing_expired_duplicate_and_lifecycle_blocked_are_rejected() ->
     with pytest.raises(CommentResponseRejected, match="reservation_missing"):
         await usecase.start(session.session_id, "selection", "trace")
     selections.target = replace(
-        target(session.session_id), expires_at=datetime.now(timezone.utc) - timedelta(seconds=1)
+        target(session.session_id),
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
     )
     with pytest.raises(CommentResponseRejected, match="reservation_expired"):
         await usecase.start(session.session_id, "selection", "trace")

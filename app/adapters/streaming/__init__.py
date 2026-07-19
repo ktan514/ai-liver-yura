@@ -1,5 +1,7 @@
 from app.adapters.obs import ObsWebSocketPreparationAdapter
-from app.adapters.streaming.fake_comment_moderation_adapter import FakeCommentModerationAdapter
+from app.adapters.streaming.fake_comment_moderation_adapter import (
+    FakeCommentModerationAdapter,
+)
 from app.adapters.streaming.fake_live_chat_adapter import FakeLiveChatAdapter
 from app.adapters.streaming.fake_obs_preparation_adapter import (
     DisabledObsPreparationAdapter,
@@ -34,7 +36,9 @@ from app.adapters.streaming.in_memory_comment_response_repositories import (
 from app.adapters.streaming.in_memory_main_segment_repository import (
     InMemoryStreamMainSegmentRepository,
 )
-from app.adapters.streaming.in_memory_opening_repository import InMemoryStreamOpeningRepository
+from app.adapters.streaming.in_memory_opening_repository import (
+    InMemoryStreamOpeningRepository,
+)
 from app.adapters.streaming.in_memory_session_repository import (
     InMemoryStreamSessionRepository,
 )

@@ -9,13 +9,23 @@ from app.adapters.streaming import (
     InMemoryStreamMainSegmentRepository,
     InMemoryStreamOpeningRepository,
 )
-from app.adapters.streaming.in_memory_session_repository import InMemoryStreamSessionRepository
-from app.adapters.youtube.google_youtube_live_chat_adapter import GoogleYouTubeLiveChatAdapter
-from app.adapters.youtube.youtube_api_error_mapper import YouTubeApiError, YouTubeApiErrorKind
+from app.adapters.streaming.in_memory_session_repository import (
+    InMemoryStreamSessionRepository,
+)
+from app.adapters.youtube.google_youtube_live_chat_adapter import (
+    GoogleYouTubeLiveChatAdapter,
+)
+from app.adapters.youtube.youtube_api_error_mapper import (
+    YouTubeApiError,
+    YouTubeApiErrorKind,
+)
 from app.domain.events import AgentEvent
-from app.domain.streaming import StreamSession, StreamSessionStatus
+from app.plugins.youtube_streaming.application import (
+    StreamLifecycleGate,
+    YouTubeLiveChatPoller,
+)
+from app.plugins.youtube_streaming.domain import StreamSession, StreamSessionStatus
 from app.ports.youtube_live_chat import LiveChatMessageDto, LiveChatPageDto
-from app.usecases import StreamLifecycleGate, YouTubeLiveChatPoller
 
 ACTIVE = {
     "obs_output": "active",
@@ -54,9 +64,7 @@ def message(
     )
 
 
-def setup(
-    pages: list[LiveChatPageDto], **options: object
-) -> tuple[
+def setup(pages: list[LiveChatPageDto], **options: object) -> tuple[
     YouTubeLiveChatPoller,
     list[AgentEvent],
     list[str],

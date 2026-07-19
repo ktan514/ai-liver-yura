@@ -36,7 +36,20 @@ from app.config.app_config import CommentRankingSettings, load_app_config
 from app.domain.actions import ActionPlan
 from app.domain.character import CharacterProfile
 from app.domain.events import AgentEvent, AgentEventType
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.application import (
+    CommentModerationUsecase,
+    CommentRankingUsecase,
+    CommentResponseUsecase,
+    EndStreamSessionUsecase,
+    PrepareStreamSessionUsecase,
+    StartStreamSessionUsecase,
+    StreamLifecycleGate,
+    StreamMainSegmentUsecase,
+    StreamOpeningUsecase,
+    StreamPreparationRequirements,
+    YouTubeLiveChatPoller,
+)
+from app.plugins.youtube_streaming.domain import (
     ApproveNormalStreamEndCommand,
     ApproveStreamStartCommand,
     CommentRankingContext,
@@ -62,19 +75,6 @@ from app.runtime.activity_planner_thread import (
     ActivityPlanningService,
 )
 from app.runtime.planned_activity_queue import PlannedActivityQueue
-from app.usecases import (
-    CommentModerationUsecase,
-    CommentRankingUsecase,
-    CommentResponseUsecase,
-    EndStreamSessionUsecase,
-    PrepareStreamSessionUsecase,
-    StartStreamSessionUsecase,
-    StreamLifecycleGate,
-    StreamMainSegmentUsecase,
-    StreamOpeningUsecase,
-    StreamPreparationRequirements,
-    YouTubeLiveChatPoller,
-)
 
 ACTIVE = {
     "obs_output": "active",
@@ -109,7 +109,9 @@ def build_runtime() -> tuple[RuntimeCoordinator, RecordingActionExecutor]:
     planner = ActionPlanner(generator)
     executor = RecordingActionExecutor()
     scheduler = ActionScheduler(executor)
-    planning = ActivityPlanningService(agent_life_service=life, activity_manager=manager)
+    planning = ActivityPlanningService(
+        agent_life_service=life, activity_manager=manager
+    )
     planner_thread = ActivityPlannerThread(requests, planned, planning)
     executor_thread = ActivityExecutorThread(planned, planner, scheduler, manager, life)
     return (
@@ -156,7 +158,9 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
     broadcast_id = config.streaming.fake.broadcast_id
     youtube_preparation = FakeYouTubePreparationAdapter(
         FakeYouTubePreparationConfig(
-            broadcasts=(YouTubeBroadcastSummary(broadcast_id, "vertical", live_chat_id="chat"),)
+            broadcasts=(
+                YouTubeBroadcastSummary(broadcast_id, "vertical", live_chat_id="chat"),
+            )
         )
     )
     sessions = InMemoryStreamSessionRepository()
@@ -193,7 +197,9 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
     assert session is not None and session.status == StreamSessionStatus.READY
     assert session.live_chat_id and session.selected_stream_id
 
-    obs = FakeObsStreamingControlAdapter(statuses=["idle", "active", "active", "active", "idle"])
+    obs = FakeObsStreamingControlAdapter(
+        statuses=["idle", "active", "active", "active", "idle"]
+    )
     youtube = FakeYouTubeStreamingControlAdapter(
         stream_statuses=["active", "active", "inactive"],
         broadcast_statuses=["ready", "live", "live", "live", "complete"],
@@ -301,7 +307,9 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
                 trace_id,
             )
             assert target is not None
-            activity = await responder.start(target.session_id, target.selection_id, trace_id)
+            activity = await responder.start(
+                target.session_id, target.selection_id, trace_id
+            )
             response_finished.set_result(activity)
 
         __import__("asyncio").create_task(handle())
@@ -322,7 +330,7 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
         live_chat_id=str(session.live_chat_id),
         adapter=chat,
         gate=gate,
-        event_sink=coordinator.publish_event,
+        event_sink=activity_gateway.publish_event,
         publisher=publish,
     )
     assert await poller.poll_once()
@@ -355,7 +363,11 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
     assert current is not None
     ended = await end.normal(
         ApproveNormalStreamEndCommand(
-            "end-command", "vertical-trace", current.session_id, current.state_version, "operator"
+            "end-command",
+            "vertical-trace",
+            current.session_id,
+            current.state_version,
+            "operator",
         )
     )
     final = sessions.get(session.session_id)
@@ -377,10 +389,16 @@ async def test_streaming_vertical_happy_path_without_external_connections() -> N
 
     assert_before(events, "stream_start.live", "stream_opening.started")
     assert_before(events, "stream_opening.completed", "stream_main_segment.started")
-    assert_before(events, "stream_main_segment.completed", "stream_comments.ranking_started")
-    assert_before(events, "stream_comments.target_selected", "stream_comments.response_started")
     assert_before(
-        events, "stream_comments.response_speech_started", "stream_comments.reservation_consumed"
+        events, "stream_main_segment.completed", "stream_comments.ranking_started"
+    )
+    assert_before(
+        events, "stream_comments.target_selected", "stream_comments.response_started"
+    )
+    assert_before(
+        events,
+        "stream_comments.response_speech_started",
+        "stream_comments.reservation_consumed",
     )
     assert_before(events, "stream_closing.completed", "stream_end.broadcast_complete")
     assert_before(events, "stream_end.broadcast_complete", "stream_end.obs_idle")

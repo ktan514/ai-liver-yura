@@ -18,7 +18,7 @@ from app.adapters.youtube.youtube_api_error_mapper import (
     YouTubeApiError,
     YouTubeApiErrorKind,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.domain import (
     YouTubeAuthenticationState,
     YouTubeAuthenticationStatus,
 )
@@ -74,7 +74,9 @@ class GoogleYouTubeAuthService:
                 self._validate_client_secret()
                 token_path = self._token_path()
                 if not token_path.is_file():
-                    return self._set_state(YouTubeAuthenticationStatus.AUTHENTICATION_REQUIRED)
+                    return self._set_state(
+                        YouTubeAuthenticationStatus.AUTHENTICATION_REQUIRED
+                    )
                 credentials = self._load_credentials(token_path)
                 if credentials.expired and credentials.refresh_token:
                     self._refresh(credentials)
@@ -192,7 +194,13 @@ class GoogleYouTubeAuthService:
                         str(token_path), scopes=list(self._config.scopes)
                     ),
                 )
-        except (ValueError, json.JSONDecodeError, OSError, KeyError, GoogleAuthError) as error:
+        except (
+            ValueError,
+            json.JSONDecodeError,
+            OSError,
+            KeyError,
+            GoogleAuthError,
+        ) as error:
             raise YouTubeApiError(
                 YouTubeApiErrorKind.AUTHENTICATION,
                 "保存済みYouTube OAuth Tokenが破損しています。再認証してください。",

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from datetime import datetime, timezone
 
 from app.domain.actions import ActionPlan, ActionType
 from app.domain.activity_turn_result import ActionExecutionResult, ActionExecutionStatus
-from app.domain.emotions import EmotionState
+from app.domain.character_response import VoiceIntent
 from app.domain.events import AgentEvent, AgentEventType
 from app.domain.short_term_memory import ShortTermMemory
 from app.domain.topic import TopicCategory, TopicHistory
@@ -22,11 +21,7 @@ from app.utils.trace import TraceLogger
 
 
 class ExecuteActionUsecase:
-    """ActionPlan を実行する最小 UseCase。
-
-    初期段階では外部 TTS / OBS / Live2D へ接続せず、標準出力に出す。
-    後で Channel Executor へ分割する。
-    """
+    """ActionPlanをPort経由で実行し、利用不能な出力は安全に縮退するUseCase。"""
 
     def __init__(
         self,
@@ -39,7 +34,6 @@ class ExecuteActionUsecase:
         memory_summary_generator: MemorySummaryGenerator | None = None,
         speech_synthesizer: SpeechSynthesizer | None = None,
         audio_player: AudioPlayer | None = None,
-        emotion_provider: Callable[[], EmotionState] | None = None,
     ) -> None:
         self._event_publisher = event_publisher
         self._short_term_memory = short_term_memory or ShortTermMemory()
@@ -50,7 +44,6 @@ class ExecuteActionUsecase:
         self._memory_summary_generator = memory_summary_generator
         self._speech_synthesizer = speech_synthesizer
         self._audio_player = audio_player
-        self._emotion_provider = emotion_provider
         self._trace_logger = TraceLogger()
 
     async def execute(self, action_plan: ActionPlan) -> ActionExecutionResult | None:
@@ -61,7 +54,9 @@ class ExecuteActionUsecase:
             source_activity_id=action_plan.source_activity_id,
             output_unit_id=action_plan.output_unit_id,
             text_length=len(action_plan.text),
-            required_resources=[resource.value for resource in action_plan.required_resources],
+            required_resources=[
+                resource.value for resource in action_plan.required_resources
+            ],
         )
         if action_plan.action_type == ActionType.SPEAK:
             self._trace_logger.write(
@@ -78,7 +73,9 @@ class ExecuteActionUsecase:
             )
             print(f"[{action_plan.action_type.value}] {action_plan.text}")
             playback_error = await self._play_speech(action_plan)
-            await self._publish_speech_event(AgentEventType.SPEECH_FINISHED, action_plan)
+            await self._publish_speech_event(
+                AgentEventType.SPEECH_FINISHED, action_plan
+            )
             self._trace_logger.write(
                 "execute_action_usecase:speak:speech_finished_published",
                 action_id=action_plan.action_id,
@@ -109,6 +106,14 @@ class ExecuteActionUsecase:
                 action_id=action_plan.action_id,
                 source_activity_id=action_plan.source_activity_id,
             )
+            pause_after = action_plan.metadata.get("pause_after_seconds", 0.0)
+            if (
+                playback_error is None
+                and isinstance(pause_after, (int, float))
+                and not isinstance(pause_after, bool)
+                and pause_after > 0
+            ):
+                await asyncio.sleep(min(float(pause_after), 3.0))
             if playback_error is not None:
                 now = datetime.now(timezone.utc)
                 return ActionExecutionResult(
@@ -181,9 +186,12 @@ class ExecuteActionUsecase:
     async def _play_speech(self, action_plan: ActionPlan) -> str | None:
         if self._speech_synthesizer is not None and self._audio_player is not None:
             try:
-                emotion = self._emotion_provider() if self._emotion_provider is not None else None
+                voice_intent = action_plan.metadata.get("voice_intent")
                 audio_data = await self._speech_synthesizer.synthesize(
-                    action_plan.text, emotion=emotion
+                    action_plan.text,
+                    voice_intent=(
+                        voice_intent if isinstance(voice_intent, VoiceIntent) else None
+                    ),
                 )
                 await self._audio_player.play(audio_data)
                 self._trace_logger.info(
@@ -203,7 +211,9 @@ class ExecuteActionUsecase:
         else:
             playback_error = None
 
-        estimated_duration_seconds = self._estimate_speech_duration_seconds(action_plan.text)
+        estimated_duration_seconds = self._estimate_speech_duration_seconds(
+            action_plan.text
+        )
         self._trace_logger.write(
             "execute_action_usecase:speak:estimated_duration",
             action_id=action_plan.action_id,
@@ -218,7 +228,7 @@ class ExecuteActionUsecase:
         if action_plan.metadata.get("skip_topic_memory") is True:
             self._trace_logger.debug(
                 "execute_action_usecase:speak:topic_history_skipped",
-                reason="game_activity",
+                reason="activity_memory_policy",
                 action_id=action_plan.action_id,
                 source_activity_id=action_plan.source_activity_id,
             )

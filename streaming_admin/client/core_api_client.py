@@ -21,9 +21,15 @@ class CoreApiClient:
 
     @property
     def headers(self) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.config.token}"} if self.config.token else {}
+        return (
+            {"Authorization": f"Bearer {self.config.token}"}
+            if self.config.token
+            else {}
+        )
 
-    def _request(self, method: str, path: str, json: dict[str, Any] | None = None) -> Any:
+    def _request(
+        self, method: str, path: str, json: dict[str, Any] | None = None
+    ) -> Any:
         try:
             response = httpx.request(
                 method,
@@ -34,7 +40,9 @@ class CoreApiClient:
             )
             payload = response.json()
         except (httpx.HTTPError, ValueError) as error:
-            raise CoreApiError("runtime.unavailable", "Coreへ接続できません。", True) from error
+            raise CoreApiError(
+                "runtime.unavailable", "Coreへ接続できません。", True
+            ) from error
         if response.is_error:
             detail = payload.get("error", {}) if isinstance(payload, dict) else {}
             raise CoreApiError(
@@ -47,10 +55,14 @@ class CoreApiClient:
     def health(self) -> dict[str, Any]:
         value = dict(self._request("GET", "/api/v1/health"))
         manual = value.get("manual_check_log")
-        self.manual_check_enabled = isinstance(manual, dict) and bool(manual.get("enabled"))
+        self.manual_check_enabled = isinstance(manual, dict) and bool(
+            manual.get("enabled")
+        )
         return value
 
-    def manual_check_ui_event(self, event: str, details: dict[str, Any] | None = None) -> None:
+    def manual_check_ui_event(
+        self, event: str, details: dict[str, Any] | None = None
+    ) -> None:
         self._request(
             "POST",
             "/api/v1/manual-check/ui-events",
@@ -76,11 +88,19 @@ class CoreApiClient:
         return dict(self._request("GET", "/api/v1/youtube/auth"))
 
     def start_auth(self, command_id: str) -> dict[str, Any]:
-        return dict(self._request("POST", "/api/v1/youtube/auth/start", {"command_id": command_id}))
+        return dict(
+            self._request(
+                "POST", "/api/v1/youtube/auth/start", {"command_id": command_id}
+            )
+        )
 
     def broadcasts(self, refresh: bool = False) -> list[dict[str, Any]]:
         method = "POST" if refresh else "GET"
-        path = "/api/v1/streaming/broadcasts/refresh" if refresh else "/api/v1/streaming/broadcasts"
+        path = (
+            "/api/v1/streaming/broadcasts/refresh"
+            if refresh
+            else "/api/v1/streaming/broadcasts"
+        )
         return list(self._request(method, path)["items"])
 
     def run_of_shows(self) -> list[dict[str, Any]]:
@@ -154,7 +174,9 @@ class CoreApiClient:
             )
         )
 
-    def approve_end(self, command_id: str, session_id: str, version: int) -> dict[str, Any]:
+    def approve_end(
+        self, command_id: str, session_id: str, version: int
+    ) -> dict[str, Any]:
         return dict(
             self._request(
                 "POST",
@@ -195,31 +217,41 @@ class CoreApiClient:
         return dict(
             self._request(
                 "POST" if refresh else "GET",
-                "/api/v1/streaming/session/comments/refresh-status"
-                if refresh
-                else "/api/v1/streaming/session/comments/status",
+                (
+                    "/api/v1/streaming/session/comments/refresh-status"
+                    if refresh
+                    else "/api/v1/streaming/session/comments/status"
+                ),
             )
         )
 
     def moderation_status(self) -> dict[str, Any]:
-        return dict(self._request("GET", "/api/v1/streaming/session/comments/moderation/status"))
+        return dict(
+            self._request("GET", "/api/v1/streaming/session/comments/moderation/status")
+        )
 
     def ranking_status(self) -> dict[str, Any]:
-        status = dict(self._request("GET", "/api/v1/streaming/session/comments/ranking/status"))
-        status["top"] = self._request("GET", "/api/v1/streaming/session/comments/ranking/top").get(
-            "items", []
+        status = dict(
+            self._request("GET", "/api/v1/streaming/session/comments/ranking/status")
         )
+        status["top"] = self._request(
+            "GET", "/api/v1/streaming/session/comments/ranking/top"
+        ).get("items", [])
         status["current_selection"] = self._request(
             "GET", "/api/v1/streaming/session/comments/selection/current"
         ).get("selection")
         return status
 
     def comment_response_status(self) -> dict[str, Any]:
-        return dict(self._request("GET", "/api/v1/streaming/session/comments/response/status"))
+        return dict(
+            self._request("GET", "/api/v1/streaming/session/comments/response/status")
+        )
 
     def retry_comment_response(self, payload: dict[str, Any]) -> dict[str, Any]:
         return dict(
-            self._request("POST", "/api/v1/streaming/session/comments/response/retry", payload)
+            self._request(
+                "POST", "/api/v1/streaming/session/comments/response/retry", payload
+            )
         )
 
     def enqueue_demo_comment(self, payload: dict[str, Any]) -> dict[str, Any]:

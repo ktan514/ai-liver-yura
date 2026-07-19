@@ -12,10 +12,12 @@ from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.admin_api.service import AdminApiService
-from app.core.contracts.plugins import CommandRejected
+from app.shared.contracts.plugins.registration import CommandRejected
 
 
-def _error(code: str, message: str, status: int, *, retryable: bool = False) -> JSONResponse:
+def _error(
+    code: str, message: str, status: int, *, retryable: bool = False
+) -> JSONResponse:
     return JSONResponse(
         {
             "error": {
@@ -43,7 +45,9 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
         version="1.0.0",
         lifespan=lifespan,
     )
-    configured_token = token if token is not None else os.getenv("AI_LIVER_ADMIN_API_TOKEN")
+    configured_token = (
+        token if token is not None else os.getenv("AI_LIVER_ADMIN_API_TOKEN")
+    )
 
     @app.middleware("http")
     async def authenticate(request: Request, call_next: Any) -> Any:
@@ -83,7 +87,9 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
         return {
             "accepted": True,
             "file_logged": bool(
-                service.runtime_status().get("manual_check_log", {}).get("enabled", False)
+                service.runtime_status()
+                .get("manual_check_log", {})
+                .get("enabled", False)
             ),
         }
 
@@ -131,7 +137,9 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
         if not isinstance(command_id, str) or not command_id:
             return _error("request.invalid", "command_id is required", 422)
         if not await service.command("youtube.auth.start", {"command_id": command_id}):
-            return _error("youtube.auth.in_progress", "authentication is already in progress", 409)
+            return _error(
+                "youtube.auth.in_progress", "authentication is already in progress", 409
+            )
         return {"command_id": command_id, "accepted": True}
 
     @app.get("/api/v1/streaming/broadcasts")
@@ -140,7 +148,10 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
             return {"items": await service.query("stream.broadcast.list")}
         except Exception:
             return _error(
-                "youtube.broadcast.list_failed", "broadcast list failed", 502, retryable=True
+                "youtube.broadcast.list_failed",
+                "broadcast list failed",
+                502,
+                retryable=True,
             )
 
     @app.post("/api/v1/streaming/broadcasts/refresh")
@@ -151,7 +162,10 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
             return {"items": items}
         except Exception:
             return _error(
-                "youtube.broadcast.list_failed", "broadcast list failed", 502, retryable=True
+                "youtube.broadcast.list_failed",
+                "broadcast list failed",
+                502,
+                retryable=True,
             )
 
     @app.get("/api/v1/streaming/run-of-shows")
@@ -170,14 +184,22 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
     @app.post("/api/v1/streaming/session/prepare")
     async def prepare(payload: dict[str, Any]) -> Any:
         required = ("command_id", "broadcast_id", "run_of_show_id")
-        if any(not isinstance(payload.get(key), str) or not payload[key] for key in required):
+        if any(
+            not isinstance(payload.get(key), str) or not payload[key]
+            for key in required
+        ):
             return _error("request.invalid", "required field is missing", 422)
         try:
             result = await service.command("stream.session.prepare", payload)
         except (KeyError, TypeError, ValueError):
             return _error("request.invalid", "invalid preparation request", 422)
         except Exception:
-            return _error("stream.prepare.failed", "stream preparation failed", 500, retryable=True)
+            return _error(
+                "stream.prepare.failed",
+                "stream preparation failed",
+                500,
+                retryable=True,
+            )
         return result
 
     @app.get("/api/v1/capabilities")
@@ -218,7 +240,11 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
     @app.get("/api/v1/streaming/session/opening")
     async def stream_opening_status() -> Any:
         value = await service.query("stream.opening.status.get")
-        return value if value is not None else _error("opening.not_found", "opening not found", 404)
+        return (
+            value
+            if value is not None
+            else _error("opening.not_found", "opening not found", 404)
+        )
 
     @app.post("/api/v1/streaming/session/opening/retry")
     async def retry_stream_opening(payload: dict[str, Any]) -> Any:
@@ -243,7 +269,12 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
 
     @app.post("/api/v1/streaming/session/main-segment/retry")
     async def retry_stream_main_segment(payload: dict[str, Any]) -> Any:
-        required = ("command_id", "session_id", "activity_id", "expected_activity_version")
+        required = (
+            "command_id",
+            "session_id",
+            "activity_id",
+            "expected_activity_version",
+        )
         if any(key not in payload for key in required):
             return _error("request.invalid", "required field is missing", 422)
         try:
@@ -321,7 +352,9 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
         return (
             value
             if value is not None
-            else _error("comment_moderation.not_found", "comment moderation not found", 404)
+            else _error(
+                "comment_moderation.not_found", "comment moderation not found", 404
+            )
         )
 
     @app.get("/api/v1/streaming/session/comments/moderation/recent")
@@ -330,7 +363,9 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
         return (
             value
             if value is not None
-            else _error("comment_moderation.not_found", "comment moderation not found", 404)
+            else _error(
+                "comment_moderation.not_found", "comment moderation not found", 404
+            )
         )
 
     @app.get("/api/v1/streaming/session/comments/ranking/status")
@@ -407,7 +442,9 @@ def create_admin_api(service: AdminApiService, token: str | None = None) -> Fast
                     yield f"id: {event.event_id}\nevent: {event.event_type}\ndata: {payload}\n\n"
                 while True:
                     try:
-                        event = await asyncio.wait_for(subscription.live_queue.get(), timeout=15)
+                        event = await asyncio.wait_for(
+                            subscription.live_queue.get(), timeout=15
+                        )
                         payload = json.dumps(event.as_dict())
                         yield (
                             f"id: {event.event_id}\nevent: {event.event_type}\ndata: {payload}\n\n"

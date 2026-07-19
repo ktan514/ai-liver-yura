@@ -14,7 +14,9 @@ class AdminClientConfig:
     @classmethod
     def from_environment(cls) -> AdminClientConfig:
         return cls(
-            base_url=os.getenv("AI_LIVER_ADMIN_API_URL", "http://127.0.0.1:8765").rstrip("/"),
+            base_url=os.getenv(
+                "AI_LIVER_ADMIN_API_URL", "http://127.0.0.1:8765"
+            ).rstrip("/"),
             token=os.getenv("AI_LIVER_ADMIN_API_TOKEN"),
             timeout_seconds=float(os.getenv("AI_LIVER_ADMIN_API_TIMEOUT", "10")),
             operator=os.getenv("AI_LIVER_ADMIN_OPERATOR", "operator"),

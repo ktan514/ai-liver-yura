@@ -11,18 +11,20 @@ from app.adapters.streaming.fake_streaming_control import (
 from app.adapters.streaming.in_memory_session_repository import (
     InMemoryStreamSessionRepository,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.application import StartStreamSessionUsecase
+from app.plugins.youtube_streaming.domain import (
     ApproveStreamStartCommand,
     StreamSession,
     StreamSessionStatus,
     StreamStartRejected,
 )
-from app.usecases import StartStreamSessionUsecase
 
 
 def ready_session(repository: InMemoryStreamSessionRepository) -> StreamSession:
     created = repository.create(
-        StreamSession(trace_id="prepare", selected_broadcast_id="broadcast", title="title")
+        StreamSession(
+            trace_id="prepare", selected_broadcast_id="broadcast", title="title"
+        )
     )
     preparing = repository.save(created.transition(StreamSessionStatus.PREPARING))
     return repository.save(
@@ -30,7 +32,9 @@ def ready_session(repository: InMemoryStreamSessionRepository) -> StreamSession:
     )
 
 
-def command(session: StreamSession, command_id: str = "command") -> ApproveStreamStartCommand:
+def command(
+    session: StreamSession, command_id: str = "command"
+) -> ApproveStreamStartCommand:
     return ApproveStreamStartCommand(
         command_id,
         "trace",
@@ -55,7 +59,9 @@ def usecase(
         obs=obs_value,
         youtube=youtube_value,
         event_publisher=(
-            (lambda event, data, trace: events.append(event)) if events is not None else None
+            (lambda event, data, trace: events.append(event))
+            if events is not None
+            else None
         ),
         poll_interval_seconds=0.001,
         step_timeout_seconds=0.005,
@@ -70,7 +76,11 @@ async def test_ready_approval_reaches_live_and_records_audit_and_event_order() -
     value = usecase(repository, events=events)
     result = await value.execute(command(session))
     assert result.successful is True
-    assert (result.obs_status, result.youtube_stream_status, result.youtube_broadcast_status) == (
+    assert (
+        result.obs_status,
+        result.youtube_stream_status,
+        result.youtube_broadcast_status,
+    ) == (
         "active",
         "active",
         "live",
@@ -123,14 +133,18 @@ async def test_fake_adapter_version_and_not_ready_are_rejected() -> None:
 
     other_repository = InMemoryStreamSessionRepository()
     created = other_repository.create(
-        StreamSession(trace_id="trace", selected_broadcast_id="broadcast", title="title")
+        StreamSession(
+            trace_id="trace", selected_broadcast_id="broadcast", title="title"
+        )
     )
     with pytest.raises(StreamStartRejected, match="stream.start.not_ready"):
         await usecase(other_repository).execute(command(created))
 
 
 @pytest.mark.asyncio
-async def test_fake_youtube_is_allowed_only_with_explicit_real_obs_vertical_mode() -> None:
+async def test_fake_youtube_is_allowed_only_with_explicit_real_obs_vertical_mode() -> (
+    None
+):
     repository = InMemoryStreamSessionRepository()
     session = ready_session(repository)
     obs = FakeObsStreamingControlAdapter(["idle", "active", "active"])
@@ -156,15 +170,30 @@ async def test_fake_youtube_is_allowed_only_with_explicit_real_obs_vertical_mode
     ("obs_statuses", "stream_statuses", "broadcast_statuses", "failure_code"),
     [
         (["unknown"], ["active"], ["ready"], "stream.start.obs_failed"),
-        (["idle", "starting"], ["active"], ["ready"], "stream.start.obs_active_timeout"),
-        (["active", "active"], ["inactive"], ["ready"], "stream.start.youtube_stream_timeout"),
+        (
+            ["idle", "starting"],
+            ["active"],
+            ["ready"],
+            "stream.start.obs_active_timeout",
+        ),
+        (
+            ["active", "active"],
+            ["inactive"],
+            ["ready"],
+            "stream.start.youtube_stream_timeout",
+        ),
         (
             ["active", "active"],
             ["active"],
             ["complete"],
             "stream.start.broadcast_transition_failed",
         ),
-        (["active", "active"], ["active"], ["ready"], "stream.start.broadcast_live_timeout"),
+        (
+            ["active", "active"],
+            ["active"],
+            ["ready"],
+            "stream.start.broadcast_live_timeout",
+        ),
     ],
 )
 async def test_each_external_failure_is_explicit(
@@ -194,7 +223,9 @@ async def test_already_active_continues_only_after_explicit_approval() -> None:
 
 
 @pytest.mark.asyncio
-async def test_new_command_retries_from_start_failed_after_rechecking_external_state() -> None:
+async def test_new_command_retries_from_start_failed_after_rechecking_external_state() -> (
+    None
+):
     repository = InMemoryStreamSessionRepository()
     session = ready_session(repository)
     obs = FakeObsStreamingControlAdapter(["unknown"])
@@ -212,6 +243,8 @@ async def test_new_command_retries_from_start_failed_after_rechecking_external_s
 
 
 def test_forbidden_state_transitions_are_rejected() -> None:
-    session = StreamSession(trace_id="trace", selected_broadcast_id="broadcast", title="title")
+    session = StreamSession(
+        trace_id="trace", selected_broadcast_id="broadcast", title="title"
+    )
     with pytest.raises(ValueError):
         session.transition(StreamSessionStatus.LIVE)

@@ -29,4 +29,3 @@ class YouTubeApiError(RuntimeError):
 
     def __str__(self) -> str:
         return self.safe_message
-

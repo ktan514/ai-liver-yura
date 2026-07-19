@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.domain import (
     YouTubeAuthenticationState,
     YouTubeAuthenticationStatus,
     YouTubeBroadcastSummary,
@@ -76,7 +76,9 @@ class FakeYouTubePreparationAdapter:
             stream_id=f"stream-{broadcast_id}",
             status=self._config.stream_status,
             bound=True,
-            live_chat_id=f"chat-{broadcast_id}" if self._config.live_chat_enabled else None,
+            live_chat_id=(
+                f"chat-{broadcast_id}" if self._config.live_chat_enabled else None
+            ),
             ingestion_type="rtmp",
             health_status="healthy",
         )
@@ -93,11 +95,15 @@ class FakeYouTubePreparationAdapter:
         await self.resolve_broadcast(broadcast_id)
         return f"chat-{broadcast_id}" if self._config.live_chat_enabled else None
 
-    async def get_live_chat_availability(self, broadcast_id: str) -> YouTubeLiveChatSnapshot:
+    async def get_live_chat_availability(
+        self, broadcast_id: str
+    ) -> YouTubeLiveChatSnapshot:
         live_chat_id = await self.get_live_chat_id(broadcast_id)
         return YouTubeLiveChatSnapshot(
             status=(
-                YouTubeLiveChatStatus.AVAILABLE if live_chat_id else YouTubeLiveChatStatus.DISABLED
+                YouTubeLiveChatStatus.AVAILABLE
+                if live_chat_id
+                else YouTubeLiveChatStatus.DISABLED
             ),
             live_chat_id=live_chat_id,
             reason=None if live_chat_id else "Live Chatは無効です。",
@@ -158,7 +164,9 @@ class UnavailableYouTubePreparationAdapter:
         await self._fail()
         return None
 
-    async def get_live_chat_availability(self, broadcast_id: str) -> YouTubeLiveChatSnapshot:
+    async def get_live_chat_availability(
+        self, broadcast_id: str
+    ) -> YouTubeLiveChatSnapshot:
         await self._fail()
         return YouTubeLiveChatSnapshot(YouTubeLiveChatStatus.UNAVAILABLE)
 

@@ -20,7 +20,9 @@ class EventStreamClient:
         self._active_response: httpx.Response | None = None
 
     def run(
-        self, on_event: Callable[[ApiEvent], None], on_connection: Callable[[bool], None]
+        self,
+        on_event: Callable[[ApiEvent], None],
+        on_connection: Callable[[bool], None],
     ) -> None:
         headers = {"Accept": "text/event-stream"}
         if self.config.token:

@@ -13,7 +13,9 @@ class FakeLiveChatAdapter:
     calls: int = 0
     keep_alive: bool = False
 
-    def enqueue(self, message: LiveChatMessageDto, *, polling_interval_ms: int = 100) -> None:
+    def enqueue(
+        self, message: LiveChatMessageDto, *, polling_interval_ms: int = 100
+    ) -> None:
         self.pages.append(LiveChatPageDto((message,), None, polling_interval_ms))
 
     async def get_live_chat_status(self, live_chat_id: str) -> str:

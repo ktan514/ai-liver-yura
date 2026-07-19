@@ -10,17 +10,18 @@ from app.adapters.streaming.fake_streaming_control import (
     FakeYouTubeStreamingControlAdapter,
 )
 from app.admin_api import create_admin_api
-from app.bootstrap import compose_streaming
+from app.bootstrap import compose_streaming, create_stream_preparation_runtime
 from app.config.app_config import load_app_config
-from app.domain.streaming import StreamSession, StreamSessionStatus
-from app.runtime.runtime_factory import create_stream_preparation_runtime
-from app.usecases import StartStreamSessionUsecase
+from app.plugins.youtube_streaming.application import StartStreamSessionUsecase
+from app.plugins.youtube_streaming.domain import StreamSession, StreamSessionStatus
 
 
 def ready_runtime(real_controls: bool) -> tuple[object, StreamSession]:
     runtime = create_stream_preparation_runtime(load_app_config())
     created = runtime.sessions.create(
-        StreamSession(trace_id="prepare", selected_broadcast_id="broadcast", title="title")
+        StreamSession(
+            trace_id="prepare", selected_broadcast_id="broadcast", title="title"
+        )
     )
     preparing = runtime.sessions.save(created.transition(StreamSessionStatus.PREPARING))
     ready = runtime.sessions.save(
@@ -63,7 +64,9 @@ def test_approve_and_status_endpoints_complete_asynchronously() -> None:
         )
         assert response.status_code == 202
         for _ in range(20):
-            status = client.get("/api/v1/streaming/session/start/status", headers=headers)
+            status = client.get(
+                "/api/v1/streaming/session/start/status", headers=headers
+            )
             if status.status_code == 200:
                 break
             time.sleep(0.005)
@@ -77,7 +80,9 @@ def test_approve_endpoint_rejects_fake_adapter_and_version_mismatch() -> None:
     runtime, ready = ready_runtime(False)
     service = compose_streaming(runtime).admin_api
     client = TestClient(create_admin_api(service))
-    response = client.post("/api/v1/streaming/session/start/approve", json=approval(ready))
+    response = client.post(
+        "/api/v1/streaming/session/start/approve", json=approval(ready)
+    )
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "stream.start.test_adapter"
 

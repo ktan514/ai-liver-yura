@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import logging
 import re
 
-from app.domain.activities import Activity, ActivityType
 from app.plugins.games.game_engine import GameEngine
 from app.plugins.games.game_session import GameSession
 from app.plugins.games.intent.command import GameIntent, GameIntentCommand
 from app.plugins.games.intent.parser import GameIntentCommandParser
 from app.plugins.games.intent.prompt import build_game_intent_prompt
-from app.plugins.games.shiritori.rules import get_shiritori_head, normalize_shiritori_word
+from app.plugins.games.shiritori.rules import (
+    get_shiritori_head,
+    normalize_shiritori_word,
+)
 from app.plugins.games.shiritori.state import ShiritoriPlayer, ShiritoriState
-from app.ports.response_generator import ResponseGenerator
-from app.utils.trace import TraceLogger
+from app.shared.contracts.plugins.runtime import (
+    PluginLlmRequest,
+    ResponseGenerationGateway,
+)
 
 
 class GameIntentInterpreter:
@@ -41,7 +46,7 @@ class GameIntentInterpreter:
     def __init__(
         self,
         engine: GameEngine,
-        response_generator: ResponseGenerator,
+        response_generator: ResponseGenerationGateway,
         *,
         max_attempts: int = 2,
     ) -> None:
@@ -51,7 +56,7 @@ class GameIntentInterpreter:
         self._parser = GameIntentCommandParser(
             frozenset(game.game_type for game in engine.list_supported_games())
         )
-        self._trace_logger = TraceLogger()
+        self._logger = logging.getLogger(__name__)
 
     async def interpret(self, text: str, *, state_version: int) -> GameIntentCommand:
         session = self._engine.get_active_session()
@@ -76,20 +81,19 @@ class GameIntentInterpreter:
                 for game in self._engine.list_supported_games()
             ),
         )
-        self._trace_logger.debug(
-            "game_intent_interpreter:llm_requested",
-            state_version=state_version,
-            game_type=session.game_type if session else None,
+        self._logger.debug(
+            "game intent LLM requested: state_version=%s game_type=%s",
+            state_version,
+            session.game_type if session else None,
         )
         for attempt in range(self._max_attempts):
-            activity = Activity(
-                activity_type=ActivityType.GAME_INPUT_CLASSIFICATION,
-                goal="Games PluginのIntentを構造化する",
+            request = PluginLlmRequest(
+                purpose="game_intent_classification",
+                prompt=prompt,
                 context={
-                    "plugin_prompt_override": prompt,
                     "retry_count": attempt,
                     "user_input": text,
-                    "game_session_id": session.session_id if session else None,
+                    "plugin_session_id": session.session_id if session else None,
                     "planner_state": {
                         "state_version": state_version,
                         "game_type": session.game_type if session else None,
@@ -98,39 +102,33 @@ class GameIntentInterpreter:
                 },
             )
             try:
-                raw = await self._response_generator.generate_response(activity)
+                raw = await self._response_generator.generate_response(request)
             except Exception as error:
-                self._trace_logger.warning(
-                    "game_intent_interpreter:llm_failed",
-                    error_type=type(error).__name__,
-                    attempt=attempt,
+                self._logger.warning(
+                    "game intent LLM failed: error=%s attempt=%s",
+                    type(error).__name__,
+                    attempt,
                 )
                 continue
             command = self._parser.parse(raw, expected_state_version=state_version)
-            self._trace_logger.llm_response(
-                purpose="game_intent_classification",
-                provider="game_intent_interpreter",
-                model=type(self._response_generator).__name__,
-                activity_id=activity.activity_id,
-                raw_response=raw,
-                parsed_response=command,
-                fallback_used=command is None,
-                stage="parsed" if command is not None else "retry_scheduled",
+            self._logger.debug(
+                "game intent LLM response: request_id=%s parsed=%s",
+                request.request_id,
+                command is not None,
             )
             if command is not None:
                 self._write("game_intent_interpreter:command_parsed", command)
                 self._write("game_intent_interpreter:llm_succeeded", command)
                 return command
-            self._trace_logger.warning(
-                "game_intent_interpreter:command_rejected",
-                state_version=state_version,
-                attempt=attempt,
-                reason="invalid_structured_output",
+            self._logger.warning(
+                "game intent command rejected: state_version=%s attempt=%s",
+                state_version,
+                attempt,
             )
-            self._trace_logger.debug(
-                "game_intent_interpreter:retry_scheduled",
-                attempt=attempt,
-                next_attempt=attempt + 1 if attempt + 1 < self._max_attempts else None,
+            self._logger.debug(
+                "game intent retry scheduled: attempt=%s next=%s",
+                attempt,
+                attempt + 1 if attempt + 1 < self._max_attempts else None,
             )
         fallback = self._command(
             GameIntent.AMBIGUOUS,
@@ -188,7 +186,10 @@ class GameIntentInterpreter:
             isinstance(state, ShiritoriState)
             and state.current_turn == ShiritoriPlayer.USER
             and re.fullmatch(r"[ぁ-ゖー]+", word)
-            and (state.expected_head is None or get_shiritori_head(word) == state.expected_head)
+            and (
+                state.expected_head is None
+                or get_shiritori_head(word) == state.expected_head
+            )
         ):
             return self._command(
                 GameIntent.PLAY_GAME_MOVE,
@@ -204,7 +205,8 @@ class GameIntentInterpreter:
         if session is not None:
             return True
         return any(
-            marker in text for marker in ("しりとり", "しり取り", "シリトリ", "言葉遊び", "遊ぼ")
+            marker in text
+            for marker in ("しりとり", "しり取り", "シリトリ", "言葉遊び", "遊ぼ")
         )
 
     @staticmethod
@@ -235,12 +237,13 @@ class GameIntentInterpreter:
         )
 
     def _write(self, label: str, command: GameIntentCommand) -> None:
-        self._trace_logger.debug(
+        self._logger.debug(
+            "%s: intent=%s game_type=%s confidence=%s classifier=%s state_version=%s reason=%s",
             label,
-            intent=command.intent.value,
-            game_type=command.game_type,
-            confidence=command.confidence,
-            classifier_type=command.classifier_type,
-            state_version=command.state_version,
-            reason=command.reason,
+            command.intent.value,
+            command.game_type,
+            command.confidence,
+            command.classifier_type,
+            command.state_version,
+            command.reason,
         )

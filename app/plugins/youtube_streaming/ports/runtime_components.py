@@ -18,4 +18,3 @@ class StreamingRuntimeComponents(Protocol):
     obs_control: Any
     youtube_control: Any
     live_chat: Any
-

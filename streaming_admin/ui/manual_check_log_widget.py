@@ -46,7 +46,9 @@ class ManualCheckLogWidget(QWidget):
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.setSortingEnabled(False)
-        self.table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.table.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self.detail = QPlainTextEdit()
         self.detail.setReadOnly(True)
@@ -113,7 +115,9 @@ class ManualCheckLogWidget(QWidget):
         elif runtime_mode == "streaming_demo":
             self.status.setText("手動確認ログは無効です")
         else:
-            self.status.setText("既存ログを表示" if self.reader.path else "対象ログなし")
+            self.status.setText(
+                "既存ログを表示" if self.reader.path else "対象ログなし"
+            )
         self.poll()
 
     def poll(self) -> None:

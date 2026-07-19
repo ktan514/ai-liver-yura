@@ -102,4 +102,6 @@ class EnrichActivityWithTopicMemoryUsecase:
             if isinstance(event_text, str):
                 text_parts.append(event_text)
 
-        return "\n".join(text_part.strip() for text_part in text_parts if text_part.strip())
+        return "\n".join(
+            text_part.strip() for text_part in text_parts if text_part.strip()
+        )

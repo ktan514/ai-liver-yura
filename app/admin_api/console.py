@@ -43,7 +43,11 @@ def freshness(
     except ValueError:
         return "unknown"
     current = now or datetime.now(timezone.utc)
-    return "stale" if (current - observed).total_seconds() > stale_after_seconds else "fresh"
+    return (
+        "stale"
+        if (current - observed).total_seconds() > stale_after_seconds
+        else "fresh"
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +95,9 @@ class OperatorActionState:
             "expired": set(),
         }
         if target not in allowed.get(self.status, set()):
-            raise ValueError(f"invalid operator action transition: {self.status} -> {target}")
+            raise ValueError(
+                f"invalid operator action transition: {self.status} -> {target}"
+            )
         return OperatorActionState(self.action_type, target)
 
 
@@ -117,8 +123,14 @@ def operator_action_for(
         "action_type": action,
         "status": "not_required" if action == "none" else "waiting",
         "title": title,
-        "description": "" if action == "none" else "Studioで操作後、状態を確認してください。",
-        "steps": [] if action == "none" else ["映像と音声を確認", "公開状態を変更", "状態を確認"],
+        "description": (
+            "" if action == "none" else "Studioで操作後、状態を確認してください。"
+        ),
+        "steps": (
+            []
+            if action == "none"
+            else ["映像と音声を確認", "公開状態を変更", "状態を確認"]
+        ),
         "studio_url": capabilities.studio_url,
         "can_confirm": action != "none" and capabilities.can_check_status,
         "can_cancel": action != "none",
@@ -188,11 +200,14 @@ class RuntimeLogSettings:
         ):
             if int(candidate[key]) < 1:
                 raise ValueError(f"{key} must be positive")
-        if int(candidate["backup_count"]) < 0 or int(candidate["max_retention_days"]) < 0:
+        if (
+            int(candidate["backup_count"]) < 0
+            or int(candidate["max_retention_days"]) < 0
+        ):
             raise ValueError("retention values must not be negative")
         candidate["level"] = level
         self.values = candidate
-        trace_level = "DEBUG" if level == "TRACE" else level
+        trace_level: str | TraceLevel = "DEBUG" if level == "TRACE" else level
         if not bool(candidate["file_enabled"]):
             trace_level = TraceLevel.OFF
         TraceLogger.configure(
@@ -201,11 +216,15 @@ class RuntimeLogSettings:
             max_bytes=int(candidate["max_file_size"]),
             backup_count=int(candidate["backup_count"]),
         )
-        logging.getLogger().setLevel(logging.DEBUG if level == "TRACE" else getattr(logging, level))
+        logging.getLogger().setLevel(
+            logging.DEBUG if level == "TRACE" else getattr(logging, level)
+        )
         return dict(self.values)
 
 
-def timeline_entry(event_type: str, data: Mapping[str, Any], trace_id: str = "") -> dict[str, Any]:
+def timeline_entry(
+    event_type: str, data: Mapping[str, Any], trace_id: str = ""
+) -> dict[str, Any]:
     lowered = event_type.lower()
     if "obs" in lowered:
         category = "obs"
@@ -218,7 +237,11 @@ def timeline_entry(event_type: str, data: Mapping[str, Any], trace_id: str = "")
     else:
         category = "lifecycle" if event_type.startswith("stream") else "system"
     error_code = data.get("error_code") or data.get("failure_code")
-    result = "failed" if error_code or "failed" in lowered else str(data.get("status") or "updated")
+    result = (
+        "failed"
+        if error_code or "failed" in lowered
+        else str(data.get("status") or "updated")
+    )
     return {
         "timestamp": utc_now(),
         "category": category,
@@ -235,12 +258,15 @@ def timeline_entry(event_type: str, data: Mapping[str, Any], trace_id: str = "")
     }
 
 
-def save_snapshot(snapshot: Mapping[str, Any], directory: str | Path = "logs/diagnostics") -> str:
+def save_snapshot(
+    snapshot: Mapping[str, Any], directory: str | Path = "logs/diagnostics"
+) -> str:
     target_dir = Path(directory)
     target_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M%S")
     target = target_dir / f"diagnostic-{stamp}.json"
     target.write_text(
-        json.dumps(snapshot, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
+        json.dumps(snapshot, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
     )
     return str(target)

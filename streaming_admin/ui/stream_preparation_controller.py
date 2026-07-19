@@ -89,7 +89,9 @@ class StreamPreparationController(QObject):
         self._submit("load", action, self._loaded)
 
     def authenticate(self) -> None:
-        self._submit("auth", lambda: self.client.start_auth(str(uuid4())), lambda _: None)
+        self._submit(
+            "auth", lambda: self.client.start_auth(str(uuid4())), lambda _: None
+        )
 
     def refresh_broadcasts(self) -> None:
         self._manual_event("reload_slots_clicked")
@@ -125,12 +127,17 @@ class StreamPreparationController(QObject):
 
     def refresh_youtube(self) -> None:
         def action() -> dict[str, object]:
-            return {"auth": self.client.auth_status(), "broadcasts": self.client.broadcasts(True)}
+            return {
+                "auth": self.client.auth_status(),
+                "broadcasts": self.client.broadcasts(True),
+            }
 
         self._submit("youtube", action, self._youtube_refreshed)
 
     def reconnect_obs(self) -> None:
-        self.error_occurred.emit("OBS再接続capabilityは現在のCoreで提供されていません。")
+        self.error_occurred.emit(
+            "OBS再接続capabilityは現在のCoreで提供されていません。"
+        )
 
     def load_diagnostics(self) -> None:
         callback = getattr(self.client, "diagnostics", None)
@@ -145,7 +152,9 @@ class StreamPreparationController(QObject):
     def update_settings(self, payload: dict[str, Any]) -> None:
         callback = getattr(self.client, "update_settings", None)
         if callable(callback):
-            self._submit("settings", lambda: callback(payload), self.settings_changed.emit)
+            self._submit(
+                "settings", lambda: callback(payload), self.settings_changed.emit
+            )
 
     def prepare(self, broadcast_id: str, run_of_show_id: str) -> None:
         self._manual_event("prepare_clicked")
@@ -156,7 +165,9 @@ class StreamPreparationController(QObject):
             "run_of_show_id": run_of_show_id,
             "expected_state_version": None,
         }
-        self._submit("prepare", lambda: self.client.prepare(payload), self.session_changed.emit)
+        self._submit(
+            "prepare", lambda: self.client.prepare(payload), self.session_changed.emit
+        )
 
     def approve_start(self, session_id: str, state_version: int) -> None:
         self._manual_event("start_clicked")
@@ -175,10 +186,14 @@ class StreamPreparationController(QObject):
             self.opening_changed.emit,
         )
 
-    def retry_main_segment(self, session_id: str, activity_id: str, version: int) -> None:
+    def retry_main_segment(
+        self, session_id: str, activity_id: str, version: int
+    ) -> None:
         self._submit(
             "main-segment-retry",
-            lambda: self.client.retry_main_segment(str(uuid4()), session_id, activity_id, version),
+            lambda: self.client.retry_main_segment(
+                str(uuid4()), session_id, activity_id, version
+            ),
             self.main_segment_changed.emit,
         )
 
@@ -194,7 +209,9 @@ class StreamPreparationController(QObject):
         self._manual_event("emergency_stop_clicked")
         self._submit(
             "emergency-stop",
-            lambda: self.client.emergency_stop(str(uuid4()), session_id, version, reason_code),
+            lambda: self.client.emergency_stop(
+                str(uuid4()), session_id, version, reason_code
+            ),
             self.end_changed.emit,
         )
 
@@ -215,7 +232,10 @@ class StreamPreparationController(QObject):
         )
 
     def enqueue_demo_comment(self, payload: dict[str, Any]) -> None:
-        payload = {**payload, "test_case_id": str(payload.get("test_case_id") or uuid4())}
+        payload = {
+            **payload,
+            "test_case_id": str(payload.get("test_case_id") or uuid4()),
+        }
         self._manual_event(
             "demo_comment_submitted",
             {
@@ -228,7 +248,9 @@ class StreamPreparationController(QObject):
             "demo-comment",
             lambda: self.client.enqueue_demo_comment(payload),
             lambda _: self._submit(
-                "comments-status", self.client.comments_status, self.comments_changed.emit
+                "comments-status",
+                self.client.comments_status,
+                self.comments_changed.emit,
             ),
         )
 
@@ -246,9 +268,13 @@ class StreamPreparationController(QObject):
         elif event_type == "obs.status.updated" and isinstance(data, dict):
             self.obs_changed.emit(data)
         elif event_type.startswith("stream_start."):
-            self._submit("start-status", self.client.start_status, self.start_changed.emit)
+            self._submit(
+                "start-status", self.client.start_status, self.start_changed.emit
+            )
         elif event_type.startswith("stream_opening."):
-            self._submit("opening-status", self.client.opening_status, self.opening_changed.emit)
+            self._submit(
+                "opening-status", self.client.opening_status, self.opening_changed.emit
+            )
         elif event_type.startswith("stream_main_segment."):
             self._submit(
                 "main-segment-status",
@@ -271,12 +297,20 @@ class StreamPreparationController(QObject):
                 "stream_emergency_stop.",
             )
         ):
-            self._submit("lifecycle", self.client.lifecycle, self.lifecycle_changed.emit)
-            self._submit("session-status", self.client.session, self.session_changed.emit)
+            self._submit(
+                "lifecycle", self.client.lifecycle, self.lifecycle_changed.emit
+            )
+            self._submit(
+                "session-status", self.client.session, self.session_changed.emit
+            )
         if event_type != "runtime.connected":
             self.refresh_console()
         if event_type.startswith("stream_comments."):
-            self._submit("comments-status", self.client.comments_status, self.comments_changed.emit)
+            self._submit(
+                "comments-status",
+                self.client.comments_status,
+                self.comments_changed.emit,
+            )
         if (
             event_type.startswith("stream_comments.moderation_")
             or event_type == "stream_comments.candidate_created"
@@ -289,7 +323,9 @@ class StreamPreparationController(QObject):
         if event_type.startswith("stream_comments.ranking_") or event_type.startswith(
             "stream_comments.target_"
         ):
-            self._submit("ranking-status", self.client.ranking_status, self.ranking_changed.emit)
+            self._submit(
+                "ranking-status", self.client.ranking_status, self.ranking_changed.emit
+            )
         if event_type.startswith("stream_comments.response_") or event_type.startswith(
             "stream_comments.reservation_"
         ):
@@ -333,7 +369,10 @@ class StreamPreparationController(QObject):
         self.refresh_console()
 
     def _submit(
-        self, operation: str, action: Callable[[], object], done: Callable[[object], None]
+        self,
+        operation: str,
+        action: Callable[[], object],
+        done: Callable[[object], None],
     ) -> None:
         with self._state_lock:
             if self._closing or self._closed or operation in self._busy:
@@ -356,7 +395,10 @@ class StreamPreparationController(QObject):
                 self.error_occurred.emit("")
                 done(result)
             except Exception as error:
-                if isinstance(error, CoreApiError) and error.code == "runtime.unavailable":
+                if (
+                    isinstance(error, CoreApiError)
+                    and error.code == "runtime.unavailable"
+                ):
                     self._core_connected = False
                     self.connection_changed.emit(False)
                 elif isinstance(error, CoreApiError) and not self._core_connected:

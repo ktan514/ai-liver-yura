@@ -10,7 +10,7 @@ import urllib.request
 from dataclasses import dataclass
 from uuid import uuid4
 
-from app.domain.streaming import HealthCheckItem, HealthStatus
+from app.plugins.youtube_streaming.domain import HealthCheckItem, HealthStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +78,9 @@ class VoiceVoxHealthAdapter:
             )
 
     def _get_json(self, path: str) -> object:
-        request = urllib.request.Request(f"{self._config.base_url.rstrip('/')}{path}", method="GET")
+        request = urllib.request.Request(
+            f"{self._config.base_url.rstrip('/')}{path}", method="GET"
+        )
         try:
             with urllib.request.urlopen(  # noqa: S310 -- configured local service
                 request, timeout=self._config.timeout_seconds

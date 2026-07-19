@@ -6,18 +6,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.__main__ import is_demo_exit_command, should_start_console_input
+from app.adapters.llm import StreamingDemoResponseGenerator
 from app.admin_api import create_admin_api
-from app.bootstrap import StreamingComposition, compose_streaming
-from app.config.app_config import load_app_config
-from app.domain.activities import Activity, ActivityType
-from app.plugins.youtube_streaming.adapters.streaming_demo_response_generator import (
-    StreamingDemoResponseGenerator,
-)
-from app.runtime.runtime_factory import (
+from app.bootstrap import (
+    StreamingComposition,
+    compose_streaming,
     create_runtime_coordinator,
     create_stream_preparation_runtime,
     create_streaming_demo_config,
 )
+from app.config.app_config import load_app_config
+from app.domain.activities import Activity, ActivityType
 
 
 def demo_composition() -> StreamingComposition:
@@ -38,7 +37,7 @@ def test_demo_preset_builds_only_fake_external_adapters() -> None:
     assert service.runtime.obs_control.adapter_type == "demo_fake"
     assert service.runtime.youtube_control.adapter_type == "demo_fake"
     assert service.runtime.live_chat.adapter_type == "fake_live_chat_test"
-    assert should_start_console_input("streaming_demo") is False
+    assert should_start_console_input("streaming_demo") is True
     assert should_start_console_input("console") is True
 
 
@@ -46,7 +45,9 @@ def test_demo_preset_builds_only_fake_external_adapters() -> None:
 async def test_demo_generator_returns_final_speech_per_streaming_activity() -> None:
     generator = StreamingDemoResponseGenerator()
     values = {
-        activity_type: await generator.generate_response(Activity(activity_type, "demo"))
+        activity_type: await generator.generate_response(
+            Activity(activity_type, "demo")
+        )
         for activity_type in (
             ActivityType.STREAM_OPENING_GREETING,
             ActivityType.STREAM_MAIN_SEGMENT,
@@ -131,7 +132,9 @@ async def test_demo_comment_uses_poller_moderation_ranking_and_response(
         )
         assert accepted["accepted"] is True
         assert isinstance(accepted["test_case_id"], str)
-        poller = service._comment_poller  # noqa: SLF001 -- exercise the composed real poller
+        poller = (
+            service._comment_poller
+        )  # noqa: SLF001 -- exercise the composed real poller
         assert poller is not None
         await poller.poll_once()
         for _ in range(100):

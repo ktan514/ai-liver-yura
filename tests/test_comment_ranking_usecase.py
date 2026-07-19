@@ -13,9 +13,15 @@ from app.adapters.streaming import (
     InMemoryStreamMainSegmentRepository,
     InMemoryStreamOpeningRepository,
 )
-from app.adapters.streaming.in_memory_session_repository import InMemoryStreamSessionRepository
+from app.adapters.streaming.in_memory_session_repository import (
+    InMemoryStreamSessionRepository,
+)
 from app.config.app_config import CommentRankingSettings
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.application import (
+    CommentRankingUsecase,
+    StreamLifecycleGate,
+)
+from app.plugins.youtube_streaming.domain import (
     CommentCandidate,
     CommentRankingContext,
     StreamMainSegmentActivity,
@@ -24,7 +30,6 @@ from app.domain.streaming import (
     StreamSessionStatus,
 )
 from app.ports.comment_ranking import SemanticRankingScores
-from app.usecases import CommentRankingUsecase, StreamLifecycleGate
 
 ACTIVE = {
     "obs_output": "active",
@@ -35,7 +40,11 @@ ACTIVE = {
 
 
 class Semantic:
-    def __init__(self, scores: SemanticRankingScores | None = None, error: Exception | None = None):
+    def __init__(
+        self,
+        scores: SemanticRankingScores | None = None,
+        error: Exception | None = None,
+    ):
         self.scores = scores or SemanticRankingScores(0.8, 0.8, 0.8)
         self.error = error
 
@@ -114,17 +123,23 @@ def candidate(
 async def test_features_weighted_ranking_and_top_one_reservation() -> None:
     usecase, session_id, events = setup()
     usecase.add_candidate(candidate(session_id, "plain", "こんにちは"))
-    usecase.add_candidate(candidate(session_id, "question", "ゲームはどうして好きですか？"))
+    usecase.add_candidate(
+        candidate(session_id, "question", "ゲームはどうして好きですか？")
+    )
     selected = await usecase.select(
         session_id,
-        CommentRankingContext(current_topic="ゲーム", recent_agent_utterance="ゲームの話"),
+        CommentRankingContext(
+            current_topic="ゲーム", recent_agent_utterance="ゲームの話"
+        ),
         "trace",
     )
     assert selected is not None and selected.candidate_id == "question"
     top = usecase.top(session_id)
     assert top[0].rank == 1
     assert 0 <= top[0].total_score <= 1
-    assert top[0].feature_scores.engagement_score > top[1].feature_scores.engagement_score
+    assert (
+        top[0].feature_scores.engagement_score > top[1].feature_scores.engagement_score
+    )
     assert usecase.current_selection(session_id) == selected
     assert any(name == "stream_comments.target_selected" for name, _ in events)
 
@@ -135,9 +150,15 @@ async def test_threshold_and_busy_are_normal_zero_selection() -> None:
     usecase, session_id, events = setup(settings)
     usecase.add_candidate(candidate(session_id, "one", "短文"))
     assert await usecase.select(session_id, CommentRankingContext()) is None
-    assert "comment_ranking.below_threshold" in usecase.top(session_id)[0].exclusion_reasons
+    assert (
+        "comment_ranking.below_threshold"
+        in usecase.top(session_id)[0].exclusion_reasons
+    )
     usecase.add_candidate(candidate(session_id, "two", "質問ですか？"))
-    assert await usecase.select(session_id, CommentRankingContext(speech_idle=False)) is None
+    assert (
+        await usecase.select(session_id, CommentRankingContext(speech_idle=False))
+        is None
+    )
     assert any(name == "stream_comments.target_not_selected" for name, _ in events)
 
 
@@ -148,8 +169,12 @@ async def test_semantic_invalid_or_unavailable_uses_conservative_fallback() -> N
     await usecase.select(session_id, CommentRankingContext(current_topic="ゲーム"))
     assert usecase.top(session_id)[0].fallback_used
 
-    invalid, invalid_session, _ = setup(semantic=Semantic(SemanticRankingScores(2.0, 0.5, 0.5)))
-    invalid.add_candidate(candidate(invalid_session, "invalid", "ゲームは楽しいですか？"))
+    invalid, invalid_session, _ = setup(
+        semantic=Semantic(SemanticRankingScores(2.0, 0.5, 0.5))
+    )
+    invalid.add_candidate(
+        candidate(invalid_session, "invalid", "ゲームは楽しいですか？")
+    )
     await invalid.select(invalid_session, CommentRankingContext(current_topic="ゲーム"))
     assert invalid.top(invalid_session)[0].fallback_used
 
@@ -157,17 +182,23 @@ async def test_semantic_invalid_or_unavailable_uses_conservative_fallback() -> N
 @pytest.mark.asyncio
 async def test_fairness_duplicate_reservation_release_consume_and_expiry() -> None:
     usecase, session_id, _events = setup()
-    usecase.add_candidate(candidate(session_id, "first", "最初の質問ですか？", author="same"))
+    usecase.add_candidate(
+        candidate(session_id, "first", "最初の質問ですか？", author="same")
+    )
     first = await usecase.select(session_id, CommentRankingContext())
     assert first is not None
     assert await usecase.select(session_id, CommentRankingContext()) is None
     assert usecase.release(first.selection_id) is not None
-    usecase.add_candidate(candidate(session_id, "second", "別の質問ですか？", author="same"))
+    usecase.add_candidate(
+        candidate(session_id, "second", "別の質問ですか？", author="same")
+    )
     second = await usecase.select(session_id, CommentRankingContext())
     assert second is None
 
     other, other_session, _ = setup()
-    other.add_candidate(candidate(other_session, "other", "新しい人の質問ですか？", author="new"))
+    other.add_candidate(
+        candidate(other_session, "other", "新しい人の質問ですか？", author="new")
+    )
     target = await other.select(other_session, CommentRankingContext())
     assert target is not None
     assert other.consume(target.selection_id) is not None

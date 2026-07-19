@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from threading import RLock
 
-from app.domain.streaming import StreamPreparationResult
+from app.plugins.youtube_streaming.domain import StreamPreparationResult
 from app.ports.streaming_preparation import PreparationSubscriber
 from app.utils.trace import TraceLogger
 

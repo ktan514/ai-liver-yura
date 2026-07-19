@@ -16,7 +16,9 @@ from streaming_admin.ui.manual_check_log_widget import ManualCheckLogWidget
 def write(path: Path, *values: object, end: str = "\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as stream:
-        stream.write("\n".join(json.dumps(value, ensure_ascii=False) for value in values) + end)
+        stream.write(
+            "\n".join(json.dumps(value, ensure_ascii=False) for value in values) + end
+        )
 
 
 def entry(event: str, **values: object) -> dict[str, object]:
@@ -88,7 +90,9 @@ def test_model_limits_filters_searches_and_masks_details() -> None:
     assert model.item(0)["event"] == "event-5099"  # type: ignore[index]
 
 
-def test_widget_timer_reload_clear_follow_and_disconnected_file_access(tmp_path: Path) -> None:
+def test_widget_timer_reload_clear_follow_and_disconnected_file_access(
+    tmp_path: Path,
+) -> None:
     app = cast(QApplication, QApplication.instance() or QApplication([]))
     path = tmp_path / "logs/manual_checks/streaming_demo_ui.jsonl"
     write(path, entry("first"))
