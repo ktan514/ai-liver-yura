@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import urllib.error
@@ -11,6 +10,7 @@ from uuid import uuid4
 from app.adapters.prompt import SimplePromptBuilder
 from app.domain.activities import Activity
 from app.domain.character import CharacterProfile
+from app.utils.async_blocking import run_cancellable_blocking
 from app.utils.llm_trace import LlmTraceContext, build_llm_trace_context
 from app.utils.trace import TraceLogger
 
@@ -79,7 +79,7 @@ class OpenAIResponseGenerator:
             attempt=trace_context.attempt,
             **trace_context.trace_context.as_log_fields(),
         )
-        response_text = await asyncio.to_thread(
+        response_text = await run_cancellable_blocking(
             self._generate_sync, prompt, trace_context
         )
         self._trace_logger.llm_response(
@@ -127,7 +127,7 @@ class OpenAIResponseGenerator:
             service="openai_responses",
             request_id=request_id,
         )
-        response_text = await asyncio.to_thread(self._generate_sync, prompt)
+        response_text = await run_cancellable_blocking(self._generate_sync, prompt)
         self._trace_logger.llm_response(
             purpose="direct_generation",
             provider="openai",
