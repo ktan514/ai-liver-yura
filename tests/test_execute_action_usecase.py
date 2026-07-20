@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.domain.actions import ActionPlan, ActionType
@@ -56,6 +58,18 @@ class FakeTopicClassifier:
     async def classify(self, text: str) -> TopicCategory:
         self.classified_texts.append(text)
         return self.category
+
+
+class BlockingTopicClassifier(FakeTopicClassifier):
+    def __init__(self, category: TopicCategory) -> None:
+        super().__init__(category)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def classify(self, text: str) -> TopicCategory:
+        self.started.set()
+        await self.release.wait()
+        return await super().classify(text)
 
 
 # FakeEmbeddingGenerator and FakeTopicMemoryStore for topic memory tests
@@ -235,6 +249,36 @@ async def test_speak_action_records_topic_history_when_classifier_is_set() -> No
     assert entries[0].summary == "透明な体でゆらゆら漂う生き物って不思議だよね。"
     assert entries[0].source_text == "透明な体でゆらゆら漂う生き物って不思議だよね。"
     assert entries[0].activity_type == ActionType.SPEAK.value
+
+
+@pytest.mark.asyncio
+async def test_speak_can_record_topic_memory_outside_output_critical_path() -> None:
+    topic_history = TopicHistory()
+    classifier = BlockingTopicClassifier(TopicCategory.SEA_LIFE)
+    usecase = ExecuteActionUsecase(
+        topic_history=topic_history,
+        topic_classifier=classifier,
+        speech_synthesizer=FakeSpeechSynthesizer(),
+        audio_player=FakeAudioPlayer(),
+        background_topic_memory=True,
+    )
+
+    await usecase.execute(
+        ActionPlan(action_type=ActionType.SPEAK, text="クラゲの話")
+    )
+    await asyncio.wait_for(classifier.started.wait(), timeout=1.0)
+
+    assert usecase.pending_background_task_count == 1
+    assert topic_history.recent_entries() == []
+
+    classifier.release.set()
+    for _ in range(10):
+        if usecase.pending_background_task_count == 0:
+            break
+        await asyncio.sleep(0)
+
+    assert usecase.pending_background_task_count == 0
+    assert topic_history.recent_entries()[0].category == TopicCategory.SEA_LIFE
 
 
 @pytest.mark.asyncio

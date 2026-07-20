@@ -16,6 +16,9 @@ from app.utils.trace import TraceLogger
 class PostgresTopicMemoryStoreConfig:
     dsn: str
     embedding_dimension: int
+    duplicate_threshold: float | None = None
+    max_entries: int | None = None
+    retention_days: int | None = None
 
 
 @dataclass(frozen=True)
@@ -214,6 +217,18 @@ class PostgresTopicMemoryStore(TopicMemoryStore):
 
     async def save(self, entry: TopicMemoryEntry) -> None:
         self._validate_embedding_dimension(entry.embedding)
+        await self._cleanup_topic_memories()
+
+        if self._config.duplicate_threshold is not None:
+            if await self._is_duplicate(entry.embedding, self._config.duplicate_threshold):
+                TraceLogger().write(
+                    "postgres_topic_memory_store:save:duplicate_skipped",
+                    similarity_threshold=self._config.duplicate_threshold,
+                    category=entry.category.value,
+                    activity_type=entry.activity_type,
+                    source_activity_id=entry.source_activity_id,
+                )
+                return
 
         await self._database_client.execute(
             "save",
@@ -236,6 +251,8 @@ class PostgresTopicMemoryStore(TopicMemoryStore):
             self._format_vector(entry.embedding),
             self._ensure_timezone(entry.created_at),
         )
+
+        await self._cleanup_topic_memories()
 
     async def fetch_recent(self, limit: int = 10) -> list[TopicMemoryEntry]:
         records = await self._database_client.fetch(
@@ -290,6 +307,49 @@ class PostgresTopicMemoryStore(TopicMemoryStore):
             )
             for record in records
         ]
+
+    async def _is_duplicate(self, embedding: list[float], threshold: float) -> bool:
+        self._validate_embedding_dimension(embedding)
+        record = await self._database_client.fetch(
+            "find_duplicate",
+            """
+                SELECT
+                    1 - (embedding <=> $1::vector) AS similarity
+                FROM topic_memories
+                ORDER BY embedding <=> $1::vector
+                LIMIT 1
+                """,
+            self._format_vector(embedding),
+        )
+        if not record:
+            return False
+        return float(record[0]["similarity"]) >= threshold
+
+    async def _cleanup_topic_memories(self) -> None:
+        if self._config.retention_days is not None:
+            await self._database_client.execute(
+                "cleanup:retention",
+                """
+                    DELETE FROM topic_memories
+                    WHERE created_at < NOW() - ($1 || ' days')::interval
+                    """,
+                self._config.retention_days,
+            )
+
+        if self._config.max_entries is not None:
+            await self._database_client.execute(
+                "cleanup:max_entries",
+                """
+                    DELETE FROM topic_memories
+                    WHERE id IN (
+                        SELECT id
+                        FROM topic_memories
+                        ORDER BY created_at DESC, id DESC
+                        OFFSET $1
+                    )
+                    """,
+                self._config.max_entries,
+            )
 
     def _validate_embedding_dimension(self, embedding: list[float]) -> None:
         if len(embedding) != self._config.embedding_dimension:

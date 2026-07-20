@@ -22,6 +22,39 @@ class EnrichActivityWithTopicMemoryUsecase:
         self._search_limit = search_limit
         self._trace_logger = TraceLogger()
 
+    async def load_recent_context(
+        self, limit: int | None = None
+    ) -> tuple[dict[str, object], ...]:
+        """自律計画へ渡すため、発話原文とembeddingを除いた最近の記憶を返す。"""
+
+        if self._topic_memory_store is None:
+            return ()
+        try:
+            entries = await self._topic_memory_store.fetch_recent(
+                limit=limit or self._search_limit
+            )
+        except Exception as error:
+            self._trace_logger.write(
+                "enrich_activity_with_topic_memory:recent_fetch_failed",
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
+            return ()
+        memories: tuple[dict[str, object], ...] = tuple(
+            {
+                "category": entry.category.value,
+                "summary": entry.summary,
+                "activity_type": entry.activity_type,
+                "created_at": entry.created_at.isoformat(),
+            }
+            for entry in entries
+        )
+        self._trace_logger.write(
+            "enrich_activity_with_topic_memory:recent_context_loaded",
+            memory_count=len(memories),
+        )
+        return memories
+
     async def enrich(self, activity: Activity) -> Activity:
         if self._embedding_generator is None or self._topic_memory_store is None:
             self._trace_logger.write(
@@ -94,14 +127,25 @@ class EnrichActivityWithTopicMemoryUsecase:
         return enriched_activity
 
     def _build_query_text(self, activity: Activity) -> str:
-        text_parts = [activity.goal]
+        text_parts: list[str] = []
 
         event_payload = activity.context.get("event_payload")
-        if isinstance(event_payload, dict):
-            event_text = event_payload.get("text")
-            if isinstance(event_text, str):
-                text_parts.append(event_text)
 
-        return "\n".join(
-            text_part.strip() for text_part in text_parts if text_part.strip()
-        )
+        # base goal
+        if isinstance(activity.goal, str) and activity.goal.strip():
+            text_parts.append(activity.goal.strip())
+
+        # event payload text and selected topic
+        if isinstance(event_payload, dict):
+            event_text = event_payload.get("text") or event_payload.get("comment")
+            if isinstance(event_text, str) and event_text.strip():
+                text_parts.append(event_text.strip())
+
+            selected_topic = (
+                event_payload.get("selected_topic")
+                or (event_payload.get("behavior_plan") or {}).get("topic")
+            )
+            if isinstance(selected_topic, str) and selected_topic.strip():
+                text_parts.append(selected_topic.strip())
+
+        return "\n".join(text_part for text_part in text_parts if text_part)

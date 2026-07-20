@@ -126,6 +126,9 @@ class TopicMemorySettings:
     database_service: str
     embedding_model: str
     summary: TopicMemorySummarySettings
+    duplicate_threshold: float = 0.95
+    max_entries: int | None = None
+    retention_days: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -898,10 +901,29 @@ def _load_memory_settings(config: dict[str, Any]) -> MemorySettings:
 
 
 def _load_topic_memory_settings(config: dict[str, Any]) -> TopicMemorySettings:
+    duplicate_threshold = _optional_float(config, "duplicate_threshold")
+    if duplicate_threshold is None:
+        duplicate_threshold = 0.95
+    if not 0.0 <= duplicate_threshold <= 1.0:
+        raise RuntimeError(
+            "memory.topic_memory.duplicate_thresholdは0.0以上1.0以下で指定してください。"
+        )
+
+    max_entries = _optional_int(config, "max_entries")
+    if max_entries is not None and max_entries <= 0:
+        raise RuntimeError("memory.topic_memory.max_entriesは正の整数で指定してください。")
+
+    retention_days = _optional_int(config, "retention_days")
+    if retention_days is not None and retention_days <= 0:
+        raise RuntimeError("memory.topic_memory.retention_daysは正の整数で指定してください。")
+
     return TopicMemorySettings(
         enabled=_require_bool(config, "enabled"),
         database_service=_require_string(config, "database_service"),
         embedding_model=_require_string(config, "embedding_model"),
+        duplicate_threshold=float(duplicate_threshold),
+        max_entries=max_entries,
+        retention_days=retention_days,
         summary=_load_topic_memory_summary_settings(_require_dict(config, "summary")),
     )
 

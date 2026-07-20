@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from datetime import datetime, timezone
 
 from app.domain.actions import ActionPlan, ActionType
@@ -34,6 +35,7 @@ class ExecuteActionUsecase:
         memory_summary_generator: MemorySummaryGenerator | None = None,
         speech_synthesizer: SpeechSynthesizer | None = None,
         audio_player: AudioPlayer | None = None,
+        background_topic_memory: bool = False,
     ) -> None:
         self._event_publisher = event_publisher
         self._short_term_memory = short_term_memory or ShortTermMemory()
@@ -44,6 +46,9 @@ class ExecuteActionUsecase:
         self._memory_summary_generator = memory_summary_generator
         self._speech_synthesizer = speech_synthesizer
         self._audio_player = audio_player
+        self._background_topic_memory = background_topic_memory
+        self._background_tasks: set[asyncio.Task[None]] = set()
+        self._background_tasks_lock = threading.RLock()
         self._trace_logger = TraceLogger()
 
     async def execute(self, action_plan: ActionPlan) -> ActionExecutionResult | None:
@@ -93,7 +98,10 @@ class ExecuteActionUsecase:
                     text_length=len(action_plan.text),
                     reason="speak_completed",
                 )
-                await self._record_topic_history(action_plan)
+                if self._background_topic_memory:
+                    self._schedule_topic_history(action_plan)
+                else:
+                    await self._record_topic_history(action_plan)
             else:
                 self._trace_logger.info(
                     "execute_action_usecase:speak:memory_not_saved",
@@ -187,13 +195,30 @@ class ExecuteActionUsecase:
         if self._speech_synthesizer is not None and self._audio_player is not None:
             try:
                 voice_intent = action_plan.metadata.get("voice_intent")
+                self._trace_logger.write(
+                    "execute_action_usecase:speak:synthesis_started",
+                    action_id=action_plan.action_id,
+                )
                 audio_data = await self._speech_synthesizer.synthesize(
                     action_plan.text,
                     voice_intent=(
                         voice_intent if isinstance(voice_intent, VoiceIntent) else None
                     ),
                 )
+                self._trace_logger.write(
+                    "execute_action_usecase:speak:synthesis_finished",
+                    action_id=action_plan.action_id,
+                    audio_bytes=len(audio_data),
+                )
+                self._trace_logger.write(
+                    "execute_action_usecase:speak:playback_started",
+                    action_id=action_plan.action_id,
+                )
                 await self._audio_player.play(audio_data)
+                self._trace_logger.write(
+                    "execute_action_usecase:speak:playback_finished",
+                    action_id=action_plan.action_id,
+                )
                 self._trace_logger.info(
                     "execute_action_usecase:speak:audio_played",
                     action_id=action_plan.action_id,
@@ -223,6 +248,43 @@ class ExecuteActionUsecase:
         )
         await asyncio.sleep(estimated_duration_seconds)
         return playback_error
+
+    def _schedule_topic_history(self, action_plan: ActionPlan) -> None:
+        task = asyncio.create_task(
+            self._record_topic_history_in_background(action_plan),
+            name=f"topic-memory:{action_plan.action_id}",
+        )
+        with self._background_tasks_lock:
+            self._background_tasks.add(task)
+        task.add_done_callback(self._background_task_finished)
+        self._trace_logger.write(
+            "execute_action_usecase:speak:topic_memory_scheduled",
+            action_id=action_plan.action_id,
+            source_activity_id=action_plan.source_activity_id,
+        )
+
+    async def _record_topic_history_in_background(
+        self, action_plan: ActionPlan
+    ) -> None:
+        try:
+            await self._record_topic_history(action_plan)
+        except Exception as error:
+            self._trace_logger.warning(
+                "execute_action_usecase:speak:topic_memory_background_failed",
+                action_id=action_plan.action_id,
+                source_activity_id=action_plan.source_activity_id,
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
+
+    def _background_task_finished(self, task: asyncio.Task[None]) -> None:
+        with self._background_tasks_lock:
+            self._background_tasks.discard(task)
+
+    @property
+    def pending_background_task_count(self) -> int:
+        with self._background_tasks_lock:
+            return len(self._background_tasks)
 
     async def _record_topic_history(self, action_plan: ActionPlan) -> None:
         if action_plan.metadata.get("skip_topic_memory") is True:

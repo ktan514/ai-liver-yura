@@ -17,11 +17,19 @@ class FakeRecord(dict[str, Any]):
     pass
 
 
-def _create_store(embedding_dimension: int = 3) -> PostgresTopicMemoryStore:
+def _create_store(
+    embedding_dimension: int = 3,
+    duplicate_threshold: float | None = None,
+    max_entries: int | None = None,
+    retention_days: int | None = None,
+) -> PostgresTopicMemoryStore:
     return PostgresTopicMemoryStore(
         PostgresTopicMemoryStoreConfig(
             dsn="postgresql://user:password@localhost:5432/ai_liver_test",
             embedding_dimension=embedding_dimension,
+            duplicate_threshold=duplicate_threshold,
+            max_entries=max_entries,
+            retention_days=retention_days,
         )
     )
 
@@ -116,3 +124,70 @@ def test_record_to_entry_converts_record_to_topic_memory_entry() -> None:
     assert entry.source_activity_id == "activity-1"
     assert entry.embedding == [0.1, 0.2, 0.3]
     assert entry.created_at == created_at
+
+
+@pytest.mark.asyncio
+async def test_save_skips_duplicate_when_threshold_is_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _create_store(duplicate_threshold=0.9)
+
+    async def fake_fetch(operation_name: str, sql: str, *args: Any) -> list[dict[str, float]]:
+        return [{"similarity": 0.92}]
+
+    monkeypatch.setattr(store._database_client, "fetch", fake_fetch)
+    execute_calls: list[tuple[str, str]] = []
+
+    async def fake_execute(operation_name: str, sql: str, *args: Any) -> str:
+        execute_calls.append((operation_name, sql))
+        return ""
+
+    monkeypatch.setattr(store._database_client, "execute", fake_execute)
+
+    await store.save(
+        TopicMemoryEntry(
+            category=TopicCategory.NATURE,
+            summary="海の色は天気で変わる。",
+            source_text="海の色は時間や天気で変わるのが面白いよね。",
+            activity_type="speak",
+            source_activity_id="activity-duplicate",
+            embedding=[0.1, 0.2, 0.3],
+            created_at=datetime(2026, 7, 8, 12, 0, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    assert execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_save_inserts_entry_when_not_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _create_store(duplicate_threshold=0.9)
+
+    async def fake_fetch(operation_name: str, sql: str, *args: Any) -> list[dict[str, float]]:
+        return []
+
+    monkeypatch.setattr(store._database_client, "fetch", fake_fetch)
+    inserted: list[tuple[str, str]] = []
+
+    async def fake_execute(operation_name: str, sql: str, *args: Any) -> str:
+        inserted.append((operation_name, sql))
+        return "INSERT 0 1"
+
+    monkeypatch.setattr(store._database_client, "execute", fake_execute)
+
+    await store.save(
+        TopicMemoryEntry(
+            category=TopicCategory.NATURE,
+            summary="海の色は天気で変わる。",
+            source_text="海の色は時間や天気で変わるのが面白いよね。",
+            activity_type="speak",
+            source_activity_id="activity-unique",
+            embedding=[0.1, 0.2, 0.3],
+            created_at=datetime(2026, 7, 8, 12, 0, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    assert len(inserted) == 1
+    assert inserted[0][0] == "save"
