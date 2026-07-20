@@ -3,11 +3,12 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from typing import Any
 from uuid import uuid4
 
+from app.domain.activities import ActivityType
 from app.domain.drives import DriveState
 from app.domain.emotions import EmotionState
 from app.domain.events import AgentEvent, AgentEventType
@@ -63,6 +64,7 @@ class AgentLifeService:
         pending_confirmation_provider: Callable[[], bool] | None = None,
         autonomous_activity_policy: AutonomousActivityPolicy | None = None,
         agent_memory_store: AgentMemoryStore | None = None,
+        autonomous_plan_retry_backoff_seconds: float = 2.0,
     ) -> None:
         self._activity_manager = activity_manager
         self._agent_state = initial_state or AgentState()
@@ -77,6 +79,10 @@ class AgentLifeService:
         self._short_term_memory = short_term_memory
         self._last_emotion_updated_at = self._last_drive_updated_at
         self._last_autonomous_talk_planned_at: datetime | None = None
+        self._last_autonomous_plan_rejected_at: datetime | None = None
+        self._autonomous_plan_retry_backoff_seconds = max(
+            autonomous_plan_retry_backoff_seconds, 0.0
+        )
         self._conversation_idle_timeout_seconds = conversation_idle_timeout_seconds
         self._observed_ongoing_activity_id: str | None = None
         self._explicit_resume_reason: str | None = None
@@ -240,11 +246,20 @@ class AgentLifeService:
             )
             return None
 
-        if self._agent_state.active_activity is not None:
+        active_activity = self._agent_state.active_activity
+        is_autonomous_lookahead = (
+            active_activity is not None
+            and active_activity.activity_type == ActivityType.AUTONOMOUS_TALK
+            and active_activity.context.get("action_plan_prepared") is True
+            and not self._agent_state.pending_activities
+            and not self._agent_state.suspended_activities
+        )
+
+        if active_activity is not None and not is_autonomous_lookahead:
             self._trace_logger.write(
                 "agent_life_service:plan_next_event:skipped",
                 reason="active_activity_exists",
-                active_activity_type=self._agent_state.active_activity.activity_type.value,
+                active_activity_type=active_activity.activity_type.value,
             )
             return None
 
@@ -325,7 +340,7 @@ class AgentLifeService:
             )
         )
 
-        if self._is_within_pause(
+        if not is_autonomous_lookahead and self._is_within_pause(
             since=self._agent_state.last_speech_finished_at,
             now=now,
             pause_seconds=minimum_pause_seconds,
@@ -338,10 +353,14 @@ class AgentLifeService:
             )
             return None
 
-        if resume_reason is None and self._is_within_pause(
-            since=self._agent_state.last_user_input_at,
-            now=now,
-            pause_seconds=minimum_pause_seconds,
+        if (
+            not is_autonomous_lookahead
+            and resume_reason is None
+            and self._is_within_pause(
+                since=self._agent_state.last_user_input_at,
+                now=now,
+                pause_seconds=minimum_pause_seconds,
+            )
         ):
             self._trace_logger.write(
                 "agent_life_service:plan_next_event:skipped",
@@ -353,6 +372,18 @@ class AgentLifeService:
 
         autonomous_talk_interval_seconds = self._autonomous_talk_interval_seconds()
         if self._is_within_pause(
+            since=self._last_autonomous_plan_rejected_at,
+            now=now,
+            pause_seconds=self._autonomous_plan_retry_backoff_seconds,
+        ):
+            self._trace_logger.write(
+                "agent_life_service:plan_next_event:skipped",
+                reason="autonomous_plan_retry_backoff",
+                backoff_seconds=self._autonomous_plan_retry_backoff_seconds,
+                last_rejected_at=self._last_autonomous_plan_rejected_at,
+            )
+            return None
+        if not is_autonomous_lookahead and self._is_within_pause(
             since=self._last_autonomous_talk_planned_at,
             now=now,
             pause_seconds=autonomous_talk_interval_seconds,
@@ -368,10 +399,13 @@ class AgentLifeService:
             )
             return None
 
-        self._last_autonomous_talk_planned_at = now
-        self._explicit_resume_reason = None
-        self._observed_ongoing_activity_id = None
-
+        not_before = now
+        if is_autonomous_lookahead and self._last_autonomous_talk_planned_at is not None:
+            not_before = max(
+                now,
+                self._last_autonomous_talk_planned_at
+                + timedelta(seconds=autonomous_talk_interval_seconds),
+            )
         self._trace_logger.write(
             "agent_life_service:plan_next_event:planned",
             event_type=AgentEventType.CURIOSITY_PEAK.value,
@@ -390,7 +424,15 @@ class AgentLifeService:
         payload: dict[str, Any] = {
             "reason": "internal_drive",
             "drive": self._agent_state.current_drive.strongest_drive_name(),
+            "autonomous_planned_for": not_before.isoformat(),
         }
+        if is_autonomous_lookahead:
+            payload.update(
+                {
+                    "lookahead": True,
+                    "not_before": not_before.isoformat(),
+                }
+            )
         if resume_reason is not None and resume_reason != "no_conversation":
             payload["resume_reason"] = resume_reason
         if continuation_result is not None:
@@ -458,6 +500,26 @@ class AgentLifeService:
             self._processed_event_id_set.discard(oldest)
         self._processed_event_ids.append(event.event_id)
         self._processed_event_id_set.add(event.event_id)
+
+        if event.event_type == AgentEventType.CURIOSITY_PEAK:
+            planned_for = event.payload.get("autonomous_planned_for")
+            try:
+                accepted_at = (
+                    datetime.fromisoformat(planned_for)
+                    if isinstance(planned_for, str)
+                    else event.occurred_at
+                )
+            except ValueError:
+                accepted_at = event.occurred_at
+            self._last_autonomous_talk_planned_at = accepted_at
+            self._last_autonomous_plan_rejected_at = None
+            self._explicit_resume_reason = None
+            self._observed_ongoing_activity_id = None
+            self._trace_logger.write(
+                "agent_life_service:autonomous_plan:accepted",
+                source_event_id=event.event_id,
+                planned_for=accepted_at,
+            )
 
         before_drive = self._agent_state.current_drive
         before_emotion = self._agent_state.current_emotion
@@ -576,7 +638,9 @@ class AgentLifeService:
             AgentEventType.YOUTUBE_COMMENT,
             AgentEventType.USER_SPEECH,
         ):
-            self._agent_state = self._agent_state.mark_user_input_received()
+            self._agent_state = self._agent_state.mark_user_input_received(
+                event.occurred_at
+            )
             text = event.payload.get("text") or event.payload.get("comment")
             if self._short_term_memory is not None and isinstance(text, str):
                 self._short_term_memory.add_user_input(
@@ -599,12 +663,32 @@ class AgentLifeService:
                 )
 
         if event.event_type == AgentEventType.SPEECH_STARTED:
-            self._agent_state = self._agent_state.mark_speech_started()
+            self._agent_state = self._agent_state.mark_speech_started(event.occurred_at)
 
         if event.event_type == AgentEventType.SPEECH_FINISHED:
-            self._agent_state = self._agent_state.mark_speech_finished()
+            self._agent_state = self._agent_state.mark_speech_finished(event.occurred_at)
 
         return self.sync_from_activity_manager()
+
+    def record_autonomous_plan_rejected(
+        self,
+        event: AgentEvent,
+        *,
+        rejected_at: datetime | None = None,
+    ) -> None:
+        """採用されなかった自律候補に短い再試行バックオフだけを適用する。"""
+
+        if event.event_type != AgentEventType.CURIOSITY_PEAK:
+            return
+        self._last_autonomous_plan_rejected_at = (
+            rejected_at or datetime.now(timezone.utc)
+        )
+        self._trace_logger.write(
+            "agent_life_service:autonomous_plan:rejected",
+            source_event_id=event.event_id,
+            rejected_at=self._last_autonomous_plan_rejected_at,
+            retry_backoff_seconds=self._autonomous_plan_retry_backoff_seconds,
+        )
 
     def _persist_relationship_memory(
         self,

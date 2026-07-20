@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from dataclasses import asdict
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from typing import Any
 
 from app.domain.activities import (
@@ -148,11 +151,7 @@ class ResponseContextBuilder:
                 if isinstance(event_payload.get("situation"), dict)
                 else {}
             ),
-            memory=(
-                dict(event_payload.get("memory", {}))
-                if isinstance(event_payload.get("memory"), dict)
-                else {}
-            ),
+            memory=self._memory_context(activity, event_payload),
             ongoing_activity=ongoing_activity,
             ongoing_input_decision=self._optional_str(
                 transition.get("ongoing_input_decision")
@@ -199,7 +198,12 @@ class ResponseContextBuilder:
             recent_conversation_summary=(
                 self._short_term_memory.build_recent_conversation_summary(limit=6)
                 if self._short_term_memory is not None
-                else ""
+                else self._conversation_summary(
+                    event_payload.get(
+                        "conversation_history",
+                        activity.context.get("recent_conversation"),
+                    )
+                )
             ),
             recent_topic_summary=(
                 str(situation.get("recent_topic_summary") or "")
@@ -240,6 +244,70 @@ class ResponseContextBuilder:
     @staticmethod
     def _optional_str(value: object) -> str | None:
         return str(value) if value is not None else None
+
+    @staticmethod
+    def _memory_context(
+        activity: Activity, event_payload: dict[str, object]
+    ) -> dict[str, object]:
+        value = event_payload.get("memory", activity.context.get("memory"))
+        memory = dict(value) if isinstance(value, dict) else {}
+        related = event_payload.get(
+            "related_knowledge", activity.context.get("related_knowledge")
+        )
+        if isinstance(related, (list, tuple)):
+            memory["related_knowledge"] = list(related)
+        similar = activity.context.get("similar_topic_memories")
+        if isinstance(similar, (list, tuple)):
+            memory["similar_topic_memories"] = [
+                projected
+                for item in similar
+                if (projected := ResponseContextBuilder._project_topic_memory(item))
+            ]
+        return memory
+
+    @staticmethod
+    def _project_topic_memory(value: object) -> dict[str, object]:
+        """発話生成に必要な意味情報だけを長期記憶から取り出す。"""
+
+        entry = getattr(value, "entry", None)
+        similarity = getattr(value, "similarity", None)
+        if entry is None and isinstance(value, dict):
+            entry = value.get("entry")
+            similarity = value.get("similarity")
+        if entry is None:
+            return {}
+
+        def field(name: str) -> object:
+            if isinstance(entry, dict):
+                return entry.get(name)
+            return getattr(entry, name, None)
+
+        category = field("category")
+        category_value = getattr(category, "value", category)
+        summary = str(field("summary") or "").strip()
+        if not summary:
+            return {}
+        projected: dict[str, object] = {
+            "category": str(category_value or "other"),
+            "summary": summary,
+        }
+        if isinstance(similarity, (int, float)) and not isinstance(similarity, bool):
+            projected["similarity"] = float(similarity)
+        return projected
+
+    @staticmethod
+    def _conversation_summary(value: object) -> str:
+        if not isinstance(value, (list, tuple)):
+            return ""
+        lines: list[str] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "unknown")
+            text = str(item.get("text") or "").strip()
+            if text:
+                lines.append(f"- {role}: {text}")
+        return "\n".join(lines)
 
     @staticmethod
     def _ongoing_context(value: object) -> OngoingActivityContext | None:
@@ -947,12 +1015,28 @@ class CharacterResponsePipeline:
                     ),
                     attempt=attempt + 1,
                 )
-                validation = await self._validator.validate(
-                    activity,
+                if self._is_recent_speech_duplicate(
+                    response.speech,
                     context,
-                    response,
-                    attempt=attempt + 1,
-                )
+                ):
+                    self._trace_logger.warning(
+                        "character_response_pipeline:repetition_detected",
+                        source_activity_id=activity.activity_id,
+                        attempt=attempt + 1,
+                        speech_length=len(response.speech),
+                    )
+                    validation = ResponseValidationResult(
+                        accepted=False,
+                        reason="recent_speech_too_similar",
+                        claim_differences=("semantic_novelty_required",),
+                    )
+                else:
+                    validation = await self._validator.validate(
+                        activity,
+                        context,
+                        response,
+                        attempt=attempt + 1,
+                    )
             except Exception as error:
                 last_error = f"{type(error).__name__}: {error}"
                 self._trace_logger.warning(
@@ -1056,6 +1140,11 @@ class CharacterResponsePipeline:
         validation: ResponseValidationResult,
         context: ResponseContext,
     ) -> str:
+        instruction = (
+            "直近発話とは異なる主題または内容を選ぶ"
+            if validation.reason == "recent_speech_too_similar"
+            else "未実行処理を実行済みと表現しない"
+        )
         return json.dumps(
             {
                 "reason": validation.reason,
@@ -1071,11 +1160,39 @@ class CharacterResponsePipeline:
                 "operation": context.operation,
                 "allowed_claims": [claim.value for claim in context.allowed_claims],
                 "forbidden_claims": [claim.value for claim in context.forbidden_claims],
-                "instruction": "未実行処理を実行済みと表現しない",
+                "instruction": instruction,
             },
             ensure_ascii=False,
             default=str,
         )
+
+    @staticmethod
+    def _is_recent_speech_duplicate(
+        speech: str,
+        context: ResponseContext,
+        *,
+        threshold: float = 0.82,
+    ) -> bool:
+        if not bool(context.constraints.get("avoid_repetition")):
+            return False
+        candidate = CharacterResponsePipeline._normalize_for_similarity(speech)
+        if len(candidate) < 12:
+            return False
+        for line in context.recent_speech_summary.splitlines():
+            previous = CharacterResponsePipeline._normalize_for_similarity(
+                line.removeprefix("-").strip()
+            )
+            if len(previous) < 12:
+                continue
+            similarity = SequenceMatcher(None, candidate, previous).ratio()
+            if similarity >= threshold:
+                return True
+        return False
+
+    @staticmethod
+    def _normalize_for_similarity(text: str) -> str:
+        normalized = unicodedata.normalize("NFKC", text).casefold()
+        return re.sub(r"[^\w\u3040-\u30ff\u3400-\u9fff]", "", normalized)
 
     @staticmethod
     def _safe_fallback(context: ResponseContext) -> CharacterResponse:

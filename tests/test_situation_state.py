@@ -67,6 +67,7 @@ def test_situation_context_reaches_situation_evaluator_prompt() -> None:
         user_text="続きを話そう",
         source_event_id="event-1",
         available_capabilities=frozenset(),
+        request_kind="chat",
         situation={
             "active_activity_type": "conversation_with_user",
             "pending_activity_count": 1,
@@ -79,3 +80,4 @@ def test_situation_context_reaches_situation_evaluator_prompt() -> None:
     assert '"active_activity_type": "conversation_with_user"' in prompt
     assert '"pending_activity_count": 1' in prompt
     assert '"subject": "viewer.favorite"' in prompt
+    assert '"request_kind": "chat"' in prompt

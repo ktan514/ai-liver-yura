@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, replace
 from queue import Queue
+from time import monotonic
 from typing import Any, cast
 
 from app.core.plugins import PluginManager
@@ -17,6 +18,7 @@ from app.domain.activities import (
 )
 from app.domain.activity_turn_result import ActivityTurnResult
 from app.domain.behavior import (
+    ActivityDefinition,
     ActivityOperation,
     ActivityPlan,
     ActivityPlanEvaluation,
@@ -33,6 +35,8 @@ from app.domain.pending_confirmation import (
     ConfirmationResolutionKind,
     PendingConfirmation,
 )
+from app.domain.short_term_memory import ShortTermMemory
+from app.domain.topic import TopicHistory
 from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler
 from app.runtime.activity_executor_thread import ActivityExecutorThread
@@ -95,6 +99,11 @@ class RuntimeCoordinator:
         pending_confirmation_manager: PendingConfirmationManager | None = None,
         confirmation_resolver: ConfirmationResolver | None = None,
         autonomous_planning_enabled: bool = True,
+        short_term_memory: ShortTermMemory | None = None,
+        topic_history: TopicHistory | None = None,
+        require_startup_completion: bool = False,
+        async_initializers: tuple[Callable[[], Awaitable[None]], ...] = (),
+        autonomous_planning_poll_seconds: float = 0.5,
     ) -> None:
         self._event_queue = event_queue
         self._activity_manager = activity_manager
@@ -132,6 +141,16 @@ class RuntimeCoordinator:
         ] = []
         self._event_enrichers: list[Callable[[AgentEvent], AgentEvent]] = []
         self._autonomous_planning_enabled = autonomous_planning_enabled
+        self._short_term_memory = short_term_memory
+        self._topic_history = topic_history
+        self._startup_completed = not require_startup_completion
+        self._async_initializers = async_initializers
+        self._initializers_completed = False
+        self._autonomous_planning_poll_seconds = max(
+            autonomous_planning_poll_seconds, 0.05
+        )
+        self._last_autonomous_planning_request_at: float | None = None
+        self._idle_sleep_seconds = 0.05
 
     @property
     def autonomous_planning_enabled(self) -> bool:
@@ -395,6 +414,15 @@ class RuntimeCoordinator:
                 if routed_event is None:
                     continue
                 filtered_event = routed_event
+            elif (
+                filtered_event.event_type == AgentEventType.APP_STARTED
+                and self._behavior_planner is not None
+                and self._activity_plan_validator is not None
+            ):
+                routed_event = await self._route_behavior(filtered_event)
+                if routed_event is None:
+                    continue
+                filtered_event = routed_event
             self._trace_logger.write(
                 "runtime_coordinator:publish_events:filtered",
                 event_type=event.event_type.value,
@@ -478,6 +506,55 @@ class RuntimeCoordinator:
         manager = self._plugin_manager
         return manager is not None and capability in manager.list_capabilities()
 
+    def _conversation_history(self) -> tuple[dict[str, object], ...]:
+        if self._short_term_memory is None:
+            return ()
+        return tuple(
+            {
+                "role": item.role,
+                "text": item.text,
+                "counterpart_id": item.counterpart_id,
+                "display_name": item.display_name,
+                "created_at": (
+                    item.created_at.isoformat() if item.created_at is not None else None
+                ),
+            }
+            for item in self._short_term_memory.recent_conversation(limit=6)
+        )
+
+    def _related_knowledge(
+        self, memory_context: dict[str, object]
+    ) -> tuple[dict[str, object], ...]:
+        knowledge: list[dict[str, object]] = []
+        semantic_facts = memory_context.get("semantic_facts")
+        if isinstance(semantic_facts, list):
+            knowledge.extend(
+                dict(item) for item in semantic_facts if isinstance(item, dict)
+            )
+        if self._topic_history is not None:
+            knowledge.extend(
+                {
+                    "category": item.category.value,
+                    "summary": item.summary,
+                    "source_text": item.source_text,
+                    "activity_type": item.activity_type,
+                }
+                for item in self._topic_history.recent_entries(limit=5)
+            )
+        return tuple(knowledge)
+
+    @staticmethod
+    def _startup_activity_definition() -> ActivityDefinition:
+        return ActivityDefinition(
+            activity_type=ActivityType.STARTUP_REACTION.value,
+            display_name="起動直後の反応",
+            required_capability=None,
+            provider_plugin_id="runtime",
+            description="現在状態を総合して起動直後の最初のActivityを行う",
+            supported_operations=(ActivityOperation.START,),
+            constraints_schema={"type": "object", "additionalProperties": True},
+        )
+
     async def _route_behavior(self, event: AgentEvent) -> AgentEvent | None:
         planner = self._behavior_planner
         validator = self._activity_plan_validator
@@ -492,6 +569,8 @@ class RuntimeCoordinator:
         )
         situation_context = agent_state.current_situation.as_context()
         memory_context = agent_state.memory.as_context()
+        conversation_history = self._conversation_history()
+        related_knowledge = self._related_knowledge(memory_context)
         event = replace(
             event,
             payload={
@@ -503,19 +582,32 @@ class RuntimeCoordinator:
                 "relationship": relationship_context,
                 "situation": situation_context,
                 "memory": memory_context,
+                "emotion": asdict(agent_state.current_emotion),
+                "drive": asdict(agent_state.current_drive),
+                "conversation_history": conversation_history,
+                "related_knowledge": related_knowledge,
             },
         )
+        definitions = (
+            self._activity_registry.list_definitions()
+            if self._activity_registry is not None
+            else manager.list_activity_definitions()
+        )
+        if event.event_type == AgentEventType.APP_STARTED:
+            definitions = (*definitions, self._startup_activity_definition())
         planning_context = BehaviorPlanningContext(
             user_text=str(event.payload.get("text") or ""),
             source_event_id=event.event_id,
             available_capabilities=manager.list_capabilities(),
+            event_type=event.event_type.value,
+            request_kind=(
+                interpret_user_request(str(event.payload.get("text") or "")).kind.value
+                if event.event_type == AgentEventType.USER_TEXT
+                else None
+            ),
             authority_role=event.authority.role,
             instruction_trusted=event.authority.instruction_trusted,
-            activity_definitions=(
-                self._activity_registry.list_definitions()
-                if self._activity_registry is not None
-                else manager.list_activity_definitions()
-            ),
+            activity_definitions=definitions,
             active_activity_definition=manager.active_activity_definition(),
             ongoing_activity_type=(
                 ongoing.activity_type if ongoing is not None else None
@@ -526,6 +618,8 @@ class RuntimeCoordinator:
             relationship=relationship_context,
             situation=situation_context,
             memory=memory_context,
+            conversation_history=conversation_history,
+            related_knowledge=related_knowledge,
             last_activity_result=self._activity_manager.last_activity_result,
             trace_context=event.trace_context,
         )
@@ -1592,7 +1686,22 @@ class RuntimeCoordinator:
                     "runtime_coordinator:run_once:autonomous_planning_disabled"
                 )
                 return None
+            if not self._startup_completed:
+                return None
+            now = monotonic()
+            request_recently_sent = (
+                self._last_autonomous_planning_request_at is not None
+                and now - self._last_autonomous_planning_request_at
+                < self._autonomous_planning_poll_seconds
+            )
+            if (
+                request_recently_sent
+                or not self._activity_planning_request_queue.empty()
+                or self._activity_planner_thread.is_busy
+            ):
+                return None
             self._activity_planning_request_queue.put(ActivityPlanningRequest())
+            self._last_autonomous_planning_request_at = now
             self._trace_logger.write(
                 "runtime_coordinator:run_once:activity_planning_requested",
                 request_queue_size=self._activity_planning_request_queue.qsize(),
@@ -1614,19 +1723,42 @@ class RuntimeCoordinator:
             discardable=event.discardable,
             replace_key=event.replace_key,
         )
-        return await self._handle_event(event)
+        result = await self._handle_event(event)
+        if event.event_type == AgentEventType.APP_STARTED:
+            self._startup_completed = True
+            self._trace_logger.info(
+                "runtime_coordinator:startup_completed",
+                source_event_id=event.event_id,
+            )
+        return result
 
     async def run(self) -> None:
         self._running = True
         self._trace_logger.info("runtime_coordinator:run:start")
 
+        await self._run_async_initializers()
         self._start_threads()
 
         while self._running:
             action_plan_group = await self.run_once()
             if action_plan_group is None:
                 self._trace_logger.write("runtime_coordinator:run:idle_sleep")
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(self._idle_sleep_seconds)
+
+    async def _run_async_initializers(self) -> None:
+        if self._initializers_completed:
+            return
+        for initializer in self._async_initializers:
+            try:
+                await initializer()
+            except Exception as error:
+                self._trace_logger.error(
+                    "runtime_coordinator:async_initializer_failed",
+                    initializer=getattr(initializer, "__qualname__", type(initializer).__name__),
+                    error_type=type(error).__name__,
+                    error_message=str(error),
+                )
+        self._initializers_completed = True
 
     def stop(self) -> None:
         self._trace_logger.info("runtime_coordinator:stop")

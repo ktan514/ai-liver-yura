@@ -116,23 +116,23 @@ class AgentState:
             updated_at=datetime.now(timezone.utc),
         )
 
-    def mark_user_input_received(self) -> AgentState:
+    def mark_user_input_received(self, occurred_at: datetime | None = None) -> AgentState:
         return replace(
             self,
-            last_user_input_at=datetime.now(timezone.utc),
+            last_user_input_at=occurred_at or datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
 
-    def mark_speech_started(self) -> AgentState:
+    def mark_speech_started(self, occurred_at: datetime | None = None) -> AgentState:
         return replace(
             self,
-            last_speech_started_at=datetime.now(timezone.utc),
+            last_speech_started_at=occurred_at or datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
 
-    def mark_speech_finished(self) -> AgentState:
+    def mark_speech_finished(self, occurred_at: datetime | None = None) -> AgentState:
         return replace(
             self,
-            last_speech_finished_at=datetime.now(timezone.utc),
+            last_speech_finished_at=occurred_at or datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )

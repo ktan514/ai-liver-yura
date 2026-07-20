@@ -52,6 +52,7 @@ def _context(
     definitions: tuple[ActivityDefinition, ...] = (),
     authority_role: str = "user",
     instruction_trusted: bool = False,
+    event_type: str = "user_text",
 ) -> BehaviorPlanningContext:
     return BehaviorPlanningContext(
         user_text=text,
@@ -60,6 +61,7 @@ def _context(
         activity_definitions=definitions,
         authority_role=authority_role,
         instruction_trusted=instruction_trusted,
+        event_type=event_type,
     )
 
 
@@ -338,8 +340,55 @@ async def test_behavior_llm_returns_only_structured_activity_plan() -> None:
     assert plan.required_capability == "plugin.first"
     assert len(generator.activities) == 1
     prompt = generator.activities[0].context["plugin_prompt_override"]
-    assert "発話本文は生成せず意味構造JSONだけ" in prompt
-    assert "認識可能なActivity定義" in prompt
+    assert "入力を総合して次のActivityを決定" in prompt
+    assert '"available_activities"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_autonomous_activity_keeps_candidate_when_referencing_past_topic() -> None:
+    definition = ActivityDefinition(
+        activity_type="autonomous_talk",
+        display_name="自律発話",
+        required_capability=None,
+        provider_plugin_id="runtime",
+        description="現在状態から話題を選んで話す",
+        supported_operations=(ActivityOperation.START,),
+        constraints_schema={
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string"},
+                "topic_relation": {
+                    "type": "string",
+                    "enum": ["continue", "shift", "new"],
+                },
+            },
+            "required": ["topic", "topic_relation"],
+            "additionalProperties": False,
+        },
+    )
+    generator = StubResponseGenerator(
+        _semantic_json(
+            activity_type="autonomous_talk",
+            goal="直前の話題を続ける",
+            constraints={"topic": "深海生物の発光", "topic_relation": "continue"},
+            speech_act="statement",
+            past_reference=True,
+        )
+    )
+
+    plan = await BehaviorPlanner(generator).plan(
+        _context(
+            "",
+            definitions=(definition,),
+            authority_role="system",
+            instruction_trusted=True,
+            event_type="curiosity_peak",
+        )
+    )
+
+    assert plan.decision == BehaviorDecision.START_ACTIVITY
+    assert plan.activity_type == "autonomous_talk"
+    assert plan.past_reference is True
 
 
 @pytest.mark.asyncio

@@ -307,6 +307,10 @@ class BehaviorPlanner:
                 constraints=dict(validation.normalized_constraints),
                 planner_constraints=("Capability検証後にのみ実行する",),
                 speech_act=analysis.speech_act,
+                negated=analysis.negated,
+                hypothetical=analysis.hypothetical,
+                past_reference=analysis.past_reference,
+                knowledge_question=analysis.knowledge_question,
                 confidence=analysis.confidence,
                 reason=analysis.reason,
                 planner_type=analysis.evaluator_type,
@@ -425,7 +429,10 @@ class ActivityPlanValidator:
 
     def validate(self, plan: ActivityPlan) -> ActivityPlanEvaluation:
         if plan.required_capability is None:
-            if plan.decision == BehaviorDecision.START_ACTIVITY:
+            if (
+                plan.decision == BehaviorDecision.START_ACTIVITY
+                and plan.provider_plugin_id != "runtime"
+            ):
                 return self._reject(plan, "required_capability_missing")
             evaluation = ActivityPlanEvaluation(
                 plan=plan,

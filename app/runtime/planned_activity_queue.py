@@ -21,6 +21,7 @@ class PlannedActivity:
     priority: int | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime | None = None
+    not_before: datetime | None = None
     planned_activity_id: str = field(default_factory=lambda: str(uuid4()))
     planned_drive: DriveState | None = None
     planned_emotion: EmotionState | None = None
@@ -75,6 +76,20 @@ class PlannedActivityQueue:
                 return None
 
             return self._items.pop(0)
+
+    def get_where(
+        self,
+        predicate: Callable[[PlannedActivity], bool],
+        now: datetime | None = None,
+    ) -> PlannedActivity | None:
+        """優先度順を保ったまま、準備可能な最初のActivityを取り出す。"""
+
+        with self._lock:
+            self._discard_expired_locked(now=now)
+            for index, item in enumerate(self._items):
+                if predicate(item):
+                    return self._items.pop(index)
+            return None
 
     def peek(self, now: datetime | None = None) -> PlannedActivity | None:
         """期限切れを除外し、次に実行予定の Activity を参照する。"""
@@ -136,8 +151,7 @@ class PlannedActivityQueue:
         """Lock 取得済みの状態で Queue を優先度順に並べる。"""
 
         self._items.sort(
-            key=lambda item: (item.effective_priority, item.created_at),
-            reverse=True,
+            key=lambda item: (-item.effective_priority, item.created_at),
         )
 
     def _discard_expired_locked(

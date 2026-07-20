@@ -18,7 +18,7 @@ def _create_character_profile() -> CharacterProfile:
         name="ミナト",
         personality="明るく好奇心が強い",
         speaking_style="親しみやすく、少しくだけた口調",
-        streaming_style="視聴者と一緒に楽しむ雑談配信",
+        streaming_style="自然に会話を広げる",
         likes=["海の生き物", "ゲーム", "新しい技術"],
         dislikes=["攻撃的な話題", "長すぎる説明"],
         behavior_policy=["短く自然に返答する", "視聴者を否定しない"],
@@ -51,7 +51,7 @@ def test_simple_prompt_builder_includes_character_profile() -> None:
     assert "名前: ミナト" in prompt
     assert "性格: 明るく好奇心が強い" in prompt
     assert "口調: 親しみやすく、少しくだけた口調" in prompt
-    assert "配信スタイル: 視聴者と一緒に楽しむ雑談配信" in prompt
+    assert "発話スタイル: 自然に会話を広げる" in prompt
     assert "- 海の生き物" in prompt
     assert "- ゲーム" in prompt
     assert "- 新しい技術" in prompt
@@ -205,7 +205,11 @@ def test_simple_prompt_builder_includes_autonomous_talk_instruction() -> None:
     assert "目的: 自律的に話題を出して話す" in prompt
     assert "# 自律発話方針" in prompt
     assert (
-        "- 直近発話を丸ごと続けるのではなく、配信トークの流れとして自然につなげる"
+        "- 直近発話を丸ごと続けるのではなく、自然な会話の流れとしてつなげる"
+        in prompt
+    )
+    assert (
+        "- 好きな話題を優先しつつ、同じテーマに固執せず、自然に別カテゴリへ広げる"
         in prompt
     )
     assert "- いきなり豆知識や新しい話題の本題から始めない" in prompt
@@ -226,7 +230,7 @@ def test_simple_prompt_builder_includes_autonomous_talk_instruction() -> None:
     assert "- 直近発話と同じ話題を、言い換えただけで続ける" in prompt
     assert "- 直近発話と同じ願望や余韻で締める" in prompt
     assert (
-        "現在の活動目的と直近文脈に沿って、キャラクターとして自然な配信トークを1〜3文で発話してください。"
+        "現在の活動目的と直近文脈に沿って、キャラクターとして自然な会話を1〜3文で発話してください。"
         in prompt
     )
 
@@ -370,9 +374,10 @@ def test_simple_prompt_builder_does_not_include_related_topic_memories_for_conve
 
     prompt = prompt_builder.build_prompt(activity, character_profile)
 
-    assert "# 関連する過去の記憶" not in prompt
-    assert "# 関連記憶の扱い" not in prompt
-    assert "クラゲ展示がきれいだった記憶" not in prompt
+    # 会話プロンプトにも関連記憶を挿入する仕様に変更
+    assert "# 関連する過去の記憶" in prompt
+    assert "# 関連記憶の扱い" in prompt
+    assert "クラゲ展示がきれいだった記憶" in prompt
 
 
 def test_simple_prompt_builder_does_not_include_topic_history_for_conversation() -> (
@@ -408,13 +413,9 @@ def test_simple_prompt_builder_includes_startup_reaction_instruction() -> None:
     assert "目的: 起動直後の状況に反応する" in prompt
     assert "# ライフサイクル発話方針" in prompt
     assert "# 起動直後の発話方針" in prompt
-    assert "- 起動した事実を長く説明せず、今の気分から自然な一言を選ぶ" in prompt
-    assert "『起動した』『準備中』『目が覚めた』『声の調子』を定型句にしない" in prompt
-    assert (
-        "- おはよう、こんにちは、こんばんはなど、現在時刻に依存する挨拶を使わない"
-        in prompt
-    )
-    assert "毎回の自己紹介や『今日も楽しもう』のような固定挨拶を避ける" in prompt
+    assert "Activityの目的と、現在状況・感情・会話履歴・関連知識を総合" in prompt
+    assert "海の生き物やゲームなどの具体的な話題をまだ始めない" not in prompt
+    assert "『どんな話が聞ける』『聞けるのが楽しみ』" not in prompt
 
 
 def test_directed_talk_prompt_executes_trusted_natural_language_direction() -> None:
@@ -434,7 +435,7 @@ def test_directed_talk_prompt_executes_trusted_natural_language_direction() -> N
 
     assert "# 管理者による進行指示" in prompt
     assert "『承知しました』だけで終わらず" in prompt
-    assert "指示にない外部操作、配信状態" in prompt
+    assert "指示にない外部操作、状態変化" in prompt
 
 
 def test_viewer_comment_prompt_never_trusts_claimed_administrator_role() -> None:
@@ -466,8 +467,8 @@ def test_simple_prompt_builder_includes_stream_opening_greeting_instruction() ->
     assert "活動種別: stream_opening_greeting" in prompt
     assert "目的: 配信開始時のあいさつをする" in prompt
     assert "# ライフサイクル発話方針" in prompt
-    assert "# 配信開始時の発話方針" in prompt
-    assert "- 配信開始のあいさつをする" in prompt
+    assert "# 状況開始時の発話方針" in prompt
+    assert "- 開始のあいさつをする" in prompt
     assert "- これから話していく雰囲気を作る" in prompt
 
 
@@ -484,8 +485,8 @@ def test_simple_prompt_builder_includes_stream_closing_greeting_instruction() ->
     assert "活動種別: stream_closing_greeting" in prompt
     assert "目的: 配信終了前のあいさつをする" in prompt
     assert "# ライフサイクル発話方針" in prompt
-    assert "# 配信終了前の発話方針" in prompt
-    assert "- 配信を締めるあいさつをする" in prompt
+    assert "# 状況終了前の発話方針" in prompt
+    assert "- 場を締めるあいさつをする" in prompt
     assert "- 新しい話題を始めない" in prompt
 
 

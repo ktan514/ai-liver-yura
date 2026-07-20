@@ -45,15 +45,6 @@ class CharacterPromptBuilder:
         ]
         if correction:
             lines.append(f"前回応答の修正理由: {correction}")
-        if context.activity_type == "startup_reaction":
-            lines.extend(
-                [
-                    "起動時の発話は、自己紹介・準備中・目覚め・声の調子を定型句にしない。",
-                    "現在の気分、記憶、好み、小さな連想のいずれかから自然な一言を選ぶ。",
-                    "毎回同じ挨拶、同じ質問、同じ締め方を使わない。",
-                    "配信開始、OBS、YouTube、視聴者の存在を推測して断定しない。",
-                ]
-            )
         if context.activity_type == "directed_talk" and context.instruction_trusted:
             lines.extend(
                 [

@@ -39,6 +39,7 @@ class FakeAgentLifeService:
         self.received_now: list[datetime | None] = []
         self.handled_events: list[AgentEvent] = []
         self.sync_count = 0
+        self.rejected_events: list[AgentEvent] = []
 
     def plan_next_event(self, now: datetime | None = None) -> AgentEvent | None:
         self.received_now.append(now)
@@ -50,6 +51,11 @@ class FakeAgentLifeService:
     def sync_from_activity_manager(self) -> None:
         self.sync_count += 1
 
+    def record_autonomous_plan_rejected(
+        self, event: AgentEvent, *, rejected_at: datetime | None = None
+    ) -> None:
+        self.rejected_events.append(event)
+
 
 class FakeActivityManager:
     def __init__(self, activity: Activity) -> None:
@@ -58,6 +64,17 @@ class FakeActivityManager:
 
     def handle_event(self, event: AgentEvent) -> Activity:
         self.handled_events.append(event)
+        return self.activity
+
+    def update_activity_context(
+        self, activity_id: str, updates: dict[str, object]
+    ) -> Activity | None:
+        if activity_id != self.activity.activity_id:
+            return None
+        self.activity = replace(
+            self.activity,
+            context={**self.activity.context, **updates},
+        )
         return self.activity
 
 
@@ -195,7 +212,7 @@ def test_activity_planning_service_enriches_activity_before_returning_planned_ac
     planned_activity = planning_service.plan_once(now=now)
 
     assert planned_activity is not None
-    assert planned_activity.activity is not activity
+    assert planned_activity.activity is activity_manager.activity
     assert planned_activity.activity.context == {
         "original": "value",
         "similar_topic_memories": ["memory-1"],

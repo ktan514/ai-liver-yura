@@ -62,6 +62,22 @@ class SituationEvaluator:
             ongoing_activity_type=context.ongoing_activity_type,
         )
         definitions = self._candidate_definitions(context)
+        if context.event_type != "user_text":
+            semantic = await self._evaluate_with_llm(
+                replace(context, activity_definitions=definitions)
+            )
+            if semantic is not None:
+                return semantic
+            return SituationAnalysis(
+                activity_candidate=(
+                    definitions[0].activity_type if len(definitions) == 1 else None
+                ),
+                operation=ActivityOperation.START,
+                goal="現在状態に応じたActivityを開始する",
+                confidence=0.0,
+                reason="system_event_evaluation_failed",
+                evaluator_type="fallback",
+            )
         request = interpret_user_request(context.user_text)
         if self._is_negated_expression(context.user_text):
             request = replace(
@@ -93,12 +109,15 @@ class SituationEvaluator:
                 evaluator_type="administrator_direction",
             )
 
-        if definitions:
-            semantic = await self._evaluate_with_llm(
-                replace(context, activity_definitions=definitions)
+        semantic = await self._evaluate_with_llm(
+            replace(
+                context,
+                request_kind=request.kind.value,
+                activity_definitions=definitions,
             )
-            if semantic is not None:
-                return semantic
+        )
+        if semantic is not None:
+            return semantic
 
         if (
             context.ongoing_activity is not None
@@ -187,7 +206,12 @@ class SituationEvaluator:
                     attempt=attempt,
                 )
                 return None
-            analysis = self.parse(raw, context.activity_definitions)
+            analysis = self.parse(
+                raw,
+                context.activity_definitions,
+                intent_flags_can_cancel_activity=context.event_type
+                != "curiosity_peak",
+            )
             self._trace_logger.llm_response(
                 purpose="behavior_planning",
                 provider="situation_evaluator",
@@ -233,6 +257,8 @@ class SituationEvaluator:
         self,
         raw: str,
         definitions: tuple[ActivityDefinition, ...] = (),
+        *,
+        intent_flags_can_cancel_activity: bool = True,
     ) -> SituationAnalysis | None:
         text = raw.strip()
         if text.startswith("```"):
@@ -289,7 +315,9 @@ class SituationEvaluator:
         if not 0.0 <= float(confidence) <= 1.0:
             return None
         activity_type = str(payload["activity_type"])
-        flags_force_conversation = any(bool(payload[field]) for field in flags)
+        flags_force_conversation = intent_flags_can_cancel_activity and any(
+            bool(payload[field]) for field in flags
+        )
         candidate = (
             None
             if activity_type == "conversation" or flags_force_conversation

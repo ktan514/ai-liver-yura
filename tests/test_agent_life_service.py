@@ -22,12 +22,17 @@ def test_agent_life_service_has_default_agent_state() -> None:
 def test_agent_life_service_marks_user_input_received() -> None:
     activity_manager = ActivityManager()
     agent_life_service = AgentLifeService(activity_manager)
+    occurred_at = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
 
     agent_state = agent_life_service.handle_event(
-        AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"})
+        AgentEvent(
+            event_type=AgentEventType.USER_TEXT,
+            payload={"text": "こんにちは"},
+            occurred_at=occurred_at,
+        )
     )
 
-    assert agent_state.last_user_input_at is not None
+    assert agent_state.last_user_input_at == occurred_at
 
 
 def test_idle_timeout_skip_is_debug_only(tmp_path) -> None:
@@ -79,23 +84,31 @@ def test_agent_life_service_marks_youtube_comment_as_user_input() -> None:
 def test_agent_life_service_marks_speech_started() -> None:
     activity_manager = ActivityManager()
     agent_life_service = AgentLifeService(activity_manager)
+    occurred_at = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
 
     agent_state = agent_life_service.handle_event(
-        AgentEvent(event_type=AgentEventType.SPEECH_STARTED)
+        AgentEvent(
+            event_type=AgentEventType.SPEECH_STARTED,
+            occurred_at=occurred_at,
+        )
     )
 
-    assert agent_state.last_speech_started_at is not None
+    assert agent_state.last_speech_started_at == occurred_at
 
 
 def test_agent_life_service_marks_speech_finished() -> None:
     activity_manager = ActivityManager()
     agent_life_service = AgentLifeService(activity_manager)
+    occurred_at = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
 
     agent_state = agent_life_service.handle_event(
-        AgentEvent(event_type=AgentEventType.SPEECH_FINISHED)
+        AgentEvent(
+            event_type=AgentEventType.SPEECH_FINISHED,
+            occurred_at=occurred_at,
+        )
     )
 
-    assert agent_state.last_speech_finished_at is not None
+    assert agent_state.last_speech_finished_at == occurred_at
 
 
 def test_agent_life_service_updates_drive_by_speech_finished_event() -> None:
@@ -185,9 +198,7 @@ def test_agent_life_service_syncs_suspended_activity_from_activity_manager() -> 
     assert agent_state.suspended_activities[0].status == ActivityStatus.SUSPENDED
 
 
-def test_agent_life_service_plan_next_event_returns_curiosity_peak_when_internal_drive_is_strong() -> (
-    None
-):
+def test_plan_next_event_returns_curiosity_peak_when_internal_drive_is_strong() -> None:
     activity_manager = ActivityManager()
     now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
     agent_life_service = AgentLifeService(activity_manager, now=now)
@@ -197,7 +208,9 @@ def test_agent_life_service_plan_next_event_returns_curiosity_peak_when_internal
 
     assert event is not None
     assert event.event_type == AgentEventType.CURIOSITY_PEAK
-    assert event.payload == {"reason": "internal_drive", "drive": "curiosity"}
+    assert event.payload["reason"] == "internal_drive"
+    assert event.payload["drive"] == "curiosity"
+    assert event.payload["autonomous_planned_for"] == now.isoformat()
     assert event.discardable is True
     assert event.replace_key == "agent_life_service:curiosity_peak"
 
@@ -212,9 +225,7 @@ def test_agent_life_service_plan_next_event_returns_none_when_internal_drive_is_
     assert agent_life_service.plan_next_event(now=now) is None
 
 
-def test_agent_life_service_plan_next_event_returns_curiosity_peak_after_elapsed_time_updates_drive() -> (
-    None
-):
+def test_plan_next_event_returns_curiosity_peak_after_elapsed_time_updates_drive() -> None:
     activity_manager = ActivityManager()
     initial_time = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
     agent_life_service = AgentLifeService(activity_manager, now=initial_time)
@@ -240,6 +251,57 @@ def test_agent_life_service_plan_next_event_returns_none_when_active_activity_ex
     )
 
     assert agent_life_service.plan_next_event(now=now) is None
+
+
+def test_agent_life_service_preplans_one_autonomous_turn_after_script_is_ready() -> (
+    None
+):
+    activity_manager = ActivityManager()
+    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
+    service = AgentLifeService(activity_manager, now=now)
+    service.update_drive(DriveState(curiosity=0.9, energy=0.9))
+    first_event = service.plan_next_event(now=now)
+    assert first_event is not None
+    current = activity_manager.handle_event(first_event)
+    service.handle_event(first_event)
+    current.context["action_plan_prepared"] = True
+
+    lookahead = service.plan_next_event(now=now + timedelta(seconds=1))
+
+    assert lookahead is not None
+    assert lookahead.payload["lookahead"] is True
+    assert datetime.fromisoformat(lookahead.payload["not_before"]) > now
+
+
+def test_rejected_autonomous_candidate_does_not_consume_talk_interval() -> None:
+    activity_manager = ActivityManager()
+    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
+    service = AgentLifeService(activity_manager, now=now)
+    service.update_drive(DriveState(curiosity=0.9, energy=0.9))
+
+    rejected = service.plan_next_event(now=now)
+    assert rejected is not None
+    service.record_autonomous_plan_rejected(rejected, rejected_at=now)
+    during_backoff = service.plan_next_event(now=now + timedelta(seconds=1))
+    retry = service.plan_next_event(now=now + timedelta(seconds=2))
+
+    assert during_backoff is None
+    assert retry is not None
+
+
+def test_accepted_autonomous_candidate_consumes_talk_interval() -> None:
+    activity_manager = ActivityManager()
+    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
+    service = AgentLifeService(activity_manager, now=now)
+    service.update_drive(DriveState(curiosity=0.9, energy=0.9))
+    accepted = service.plan_next_event(now=now)
+    assert accepted is not None
+    service.handle_event(accepted)
+    activity_manager.complete_foreground_activity()
+
+    retry = service.plan_next_event(now=now + timedelta(seconds=1))
+
+    assert retry is None
 
 
 def test_agent_life_service_plan_next_event_returns_none_immediately_after_speech_finished() -> (

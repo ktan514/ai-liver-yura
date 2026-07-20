@@ -90,6 +90,36 @@ def test_queue_get_uses_explicit_priority_before_activity_priority() -> None:
     assert queue.get() == activity_high
 
 
+def test_queue_keeps_fifo_order_for_equal_priority() -> None:
+    queue = PlannedActivityQueue()
+    created_at = datetime(2026, 7, 5, 12, 0, tzinfo=timezone.utc)
+    first = PlannedActivity(
+        activity=_create_activity(priority=50), created_at=created_at
+    )
+    second = PlannedActivity(
+        activity=_create_activity(priority=50),
+        created_at=created_at + timedelta(microseconds=1),
+    )
+
+    queue.put(first)
+    queue.put(second)
+
+    assert queue.get() == first
+    assert queue.get() == second
+
+
+def test_queue_get_where_skips_blocked_item_without_removing_it() -> None:
+    queue = PlannedActivityQueue()
+    blocked = PlannedActivity(activity=_create_activity(priority=90), source="blocked")
+    eligible = PlannedActivity(activity=_create_activity(priority=10), source="eligible")
+    queue.extend([blocked, eligible])
+
+    selected = queue.get_where(lambda item: item.source == "eligible")
+
+    assert selected == eligible
+    assert queue.items() == [blocked]
+
+
 def test_queue_peek_does_not_remove_activity() -> None:
     queue = PlannedActivityQueue()
     planned_activity = PlannedActivity(activity=_create_activity(priority=10))

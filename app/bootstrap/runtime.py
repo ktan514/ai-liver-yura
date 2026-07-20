@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -609,6 +610,9 @@ def create_topic_memory_store(config: AppConfig) -> TopicMemoryStore | None:
         PostgresTopicMemoryStoreConfig(
             dsn=dsn,
             embedding_dimension=_embedding_dimension(config),
+            duplicate_threshold=topic_memory_config.duplicate_threshold,
+            max_entries=topic_memory_config.max_entries,
+            retention_days=topic_memory_config.retention_days,
         )
     )
     trace_logger.write(
@@ -617,6 +621,9 @@ def create_topic_memory_store(config: AppConfig) -> TopicMemoryStore | None:
         database_type=database_config.type,
         dsn_env=dsn_env,
         embedding_dimension=_embedding_dimension(config),
+        duplicate_threshold=topic_memory_config.duplicate_threshold,
+        max_entries=topic_memory_config.max_entries,
+        retention_days=topic_memory_config.retention_days,
     )
     return topic_memory_store
 
@@ -1034,6 +1041,18 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
     topic_classifier = create_topic_classifier(config)
     embedding_generator = create_embedding_generator(config)
     topic_memory_store = create_topic_memory_store(config)
+    async_initializers: tuple[Callable[[], Awaitable[None]], ...] = ()
+    if topic_memory_store is not None:
+        initialize_topic_memory = getattr(topic_memory_store, "initialize", None)
+        if callable(initialize_topic_memory):
+            async def initialize_topic_memory_store() -> None:
+                await initialize_topic_memory()
+                TraceLogger().write(
+                    "runtime_factory:topic_memory_store:initialized",
+                    topic_memory_store_class=type(topic_memory_store).__name__,
+                )
+
+            async_initializers = (initialize_topic_memory_store,)
     memory_summary_generator = create_memory_summary_generator(config)
     enrich_activity_with_topic_memory_usecase = EnrichActivityWithTopicMemoryUsecase(
         embedding_generator=embedding_generator,
@@ -1042,7 +1061,13 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
 
     def activity_is_active(activity_id: str) -> bool:
         current = activity_manager.get_activity(activity_id)
-        return current is not None and current.status == ActivityStatus.ACTIVE
+        return current is not None and (
+            current.status == ActivityStatus.ACTIVE
+            or (
+                current.status == ActivityStatus.PENDING
+                and current.activity_type == ActivityType.AUTONOMOUS_TALK
+            )
+        )
 
     action_planner = ActionPlanner(
         response_generator=response_generator,
@@ -1070,6 +1095,7 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         memory_summary_generator=memory_summary_generator,
         speech_synthesizer=speech_synthesizer,
         audio_player=audio_player,
+        background_topic_memory=True,
     )
 
     planned_activity_queue = PlannedActivityQueue()
@@ -1113,6 +1139,10 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         pending_confirmation_manager=pending_confirmation_manager,
         confirmation_resolver=ConfirmationResolver(),
         autonomous_planning_enabled=config.app.mode != "streaming_demo",
+        short_term_memory=short_term_memory,
+        topic_history=topic_history,
+        require_startup_completion=True,
+        async_initializers=async_initializers,
     )
     trace_logger.write(
         "runtime_factory:create_runtime_coordinator:finished",

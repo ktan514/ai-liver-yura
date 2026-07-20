@@ -121,6 +121,8 @@ class BehaviorPlanningContext:
     user_text: str
     source_event_id: str
     available_capabilities: frozenset[str]
+    event_type: str = "user_text"
+    request_kind: str | None = None
     authority_role: str = "user"
     instruction_trusted: bool = False
     activity_definitions: tuple[ActivityDefinition, ...] = ()
@@ -132,5 +134,7 @@ class BehaviorPlanningContext:
     relationship: dict[str, object] = field(default_factory=dict)
     situation: dict[str, object] = field(default_factory=dict)
     memory: dict[str, object] = field(default_factory=dict)
+    conversation_history: tuple[dict[str, object], ...] = ()
+    related_knowledge: tuple[dict[str, object], ...] = ()
     last_activity_result: ActivityResult | None = None
     trace_context: TraceContext | None = None

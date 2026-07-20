@@ -17,6 +17,7 @@ from app.domain.activity_turn_result import (
     CharacterGenerationResult,
     CharacterGenerationStatus,
 )
+from app.domain.autonomous_planning import AutonomousSituationContext
 from app.domain.character_response import (
     CharacterResponse,
     ResponseClaim,
@@ -37,6 +38,7 @@ from app.runtime.activity_planner_thread import (
 from app.runtime.agent_life_service import AgentLifeService
 from app.runtime.agent_state import AgentState
 from app.runtime.autonomous_activity_execution import prepare_autonomous_execution
+from app.runtime.autonomous_situation_evaluator import AutonomousSituationEvaluator
 from app.runtime.behavior_planner import BehaviorPlanner
 from app.runtime.character_response_pipeline import (
     ResponseContextBuilder,
@@ -52,6 +54,41 @@ class ForbiddenLegacyGenerator:
     async def generate_response(self, activity: Activity) -> str:
         self.call_count += 1
         raise AssertionError("legacy generator must not generate autonomous speech")
+
+
+class AutonomousSelectionGenerator:
+    def __init__(self) -> None:
+        self.activities: list[Activity] = []
+
+    async def generate_response(self, activity: Activity) -> str:
+        self.activities.append(activity)
+        return (
+            '{"decision":"start_activity","activity_type":"autonomous_talk",'
+            '"operation":"start","goal":"探索ゲームの仕掛けについて話す",'
+            '"constraints":{"topic":"探索ゲームの仕掛け",'
+            '"topic_relation":"shift"},"speech_act":"statement",'
+            '"negated":false,"hypothetical":false,"past_reference":false,'
+            '"knowledge_question":false,"confidence":0.96,'
+            '"reason":"state_and_memory"}'
+        )
+
+
+class TopicMemoryPlanningStub:
+    def __init__(self) -> None:
+        self.enriched_activities: list[Activity] = []
+
+    async def load_recent_context(self) -> tuple[dict[str, object], ...]:
+        return (
+            {
+                "category": "game",
+                "summary": "以前は海の探索について話した",
+                "activity_type": "speak",
+            },
+        )
+
+    async def enrich(self, activity: Activity) -> Activity:
+        self.enriched_activities.append(activity)
+        return activity
 
 
 class CharacterPipelineStub:
@@ -167,6 +204,30 @@ def _autonomous_activity(topic: str = "深海生物の発光") -> Activity:
     return activity
 
 
+def test_autonomous_evaluator_exposes_state_for_context_derived_topic() -> None:
+    context = AutonomousSituationContext(
+        source_event_id="event-auto",
+        agent_state={},
+        drive_state={"curiosity": 0.9, "energy": 0.7},
+        emotion_state={"talkativeness": 0.8},
+        topic_state={},
+        recent_speech_summary="前回の発話",
+        recent_topic_summary="前回の話題",
+        interrupted_topic=None,
+        stream_status="live",
+        ongoing_activity=None,
+        available_activity_definitions=(),
+        current_time_context="2026-07-20T12:00:00+09:00",
+    )
+
+    analysis = AutonomousSituationEvaluator().evaluate(context)
+
+    assert analysis.topic_candidate == "現在の状況から話題を選ぶ"
+    assert analysis.constraints["topic_selection_mode"] == "derive_from_context"
+    assert analysis.constraints["dominant_drive"] == "curiosity"
+    assert analysis.constraints["recent_topic_novelty_required"] is True
+
+
 def test_autonomous_planning_builds_situation_and_behavior_plan_without_speech() -> (
     None
 ):
@@ -204,6 +265,42 @@ def test_autonomous_planning_builds_situation_and_behavior_plan_without_speech()
     assert "さっきはクラゲ" in situation["recent_speech_summary"]
     assert situation["stream_status"] == "live"
     assert planned.planned_topic == "深海生物の発光"
+
+
+def test_autonomous_planning_uses_llm_topic_and_recent_topic_memories() -> None:
+    event = AgentEvent(
+        event_type=AgentEventType.CURIOSITY_PEAK,
+        payload={"reason": "internal_drive", "drive": "curiosity"},
+    )
+    manager = ActivityManager()
+    life = PlanningLifeStub(event)
+    memory = ShortTermMemory()
+    memory.add_speech("海の生き物について話した")
+    generator = AutonomousSelectionGenerator()
+    topic_memory = TopicMemoryPlanningStub()
+    planner = BehaviorPlanner(
+        response_generator=generator,
+        situation_prompt_builder=SituationEvaluatorPromptBuilder(),
+    )
+    service = ActivityPlanningService(
+        agent_life_service=life,  # type: ignore[arg-type]
+        activity_manager=manager,
+        enrich_activity_with_topic_memory_usecase=topic_memory,  # type: ignore[arg-type]
+        behavior_planner=planner,
+        short_term_memory=memory,
+    )
+
+    planned = service.plan_once(now=datetime.now(timezone.utc))
+
+    assert planned is not None
+    assert planned.planned_topic == "探索ゲームの仕掛け"
+    payload = planned.activity.context["event_payload"]
+    assert payload["behavior_plan"]["topic"] == "探索ゲームの仕掛け"
+    assert payload["behavior_plan"]["constraints"]["topic_relation"] == "shift"
+    prompt = generator.activities[0].context["plugin_prompt_override"]
+    assert '"topic_memories"' in prompt
+    assert "以前は海の探索について話した" in prompt
+    assert "現在の状況から話題を選ぶ" not in prompt
 
 
 @pytest.mark.asyncio

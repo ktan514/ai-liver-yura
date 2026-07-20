@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 
 from app.core.contracts.activity_policy import ActivityPolicy
 from app.domain.activities import (
@@ -44,6 +45,30 @@ class ActivityManager:
     def get_activity(self, activity_id: str) -> Activity | None:
         with self._lock:
             return self._activities.get(activity_id)
+
+    def update_activity_context(
+        self,
+        activity_id: str,
+        updates: dict[str, object],
+    ) -> Activity | None:
+        """Managerが保持する正規Activityのcontextを更新する。"""
+
+        with self._lock:
+            current = self._activities.get(activity_id)
+            if current is None:
+                return None
+            updated = replace(
+                current,
+                context={**current.context, **updates},
+            )
+            self._activities[activity_id] = updated
+            self._trace_logger.write(
+                "activity_manager:activity_context_updated",
+                activity_id=updated.activity_id,
+                activity_type=updated.activity_type.value,
+                updated_context_keys=sorted(updates),
+            )
+            return updated
 
     def register_plugin_activity(self, activity: Activity) -> Activity:
         """Pluginが要求した汎用ActivityをCoreのライフサイクルへ登録する。"""
@@ -688,24 +713,31 @@ class ActivityManager:
             )
 
         if event.event_type == AgentEventType.APP_STARTED:
-            startup_focuses = (
-                "今の気分を一言だけこぼす",
-                "好きなものへの小さな連想から話し始める",
-                "これから話したいことを軽く予告する",
-                "静かな独り言のように場を開く",
-                "最近の記憶へ短く触れて話を始める",
+            behavior_plan_value = event.payload.get("behavior_plan")
+            behavior_plan = (
+                behavior_plan_value if isinstance(behavior_plan_value, dict) else {}
             )
-            startup_focus = startup_focuses[
-                sum(event.event_id.encode("utf-8")) % len(startup_focuses)
-            ]
             return Activity(
                 activity_type=ActivityType.STARTUP_REACTION,
-                goal="起動した現在の気分を短く表し、その時らしい自然な最初の一言を話す",
+                goal=str(
+                    behavior_plan.get("goal")
+                    or "現在状態に応じた起動直後のActivityを行う"
+                ),
                 priority=90 + event.priority,
                 context={
                     "event_payload": event.payload,
+                    "behavior_plan": behavior_plan,
+                    "emotion": event.payload.get("emotion", {}),
+                    "drive": event.payload.get("drive", {}),
+                    "situation": event.payload.get("situation", {}),
+                    "memory": event.payload.get("memory", {}),
+                    "recent_conversation": event.payload.get(
+                        "conversation_history", ()
+                    ),
+                    "related_knowledge": event.payload.get(
+                        "related_knowledge", ()
+                    ),
                     "trace_context": event.trace_context,
-                    "startup_focus": startup_focus,
                 },
                 interruptible=False,
                 source_event_id=event.event_id,

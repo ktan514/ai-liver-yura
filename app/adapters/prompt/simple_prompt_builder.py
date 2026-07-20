@@ -21,7 +21,7 @@ class CharacterPromptSections:
             f"名前: {character_profile.name}",
             f"性格: {character_profile.personality}",
             f"口調: {character_profile.speaking_style}",
-            f"配信スタイル: {character_profile.streaming_style}",
+            f"発話スタイル: {character_profile.streaming_style}",
             "",
             "# 好きな話題・もの",
             *self._format_items(character_profile.likes),
@@ -213,6 +213,7 @@ class ConversationPromptBuilder(PromptBuilder):
         self._character_section = CharacterPromptSections()
         self._quality_section = ResponseQualityPromptSection()
         self._activity_section = ActivityPromptSection()
+        self._related_topic_memory_section = RelatedTopicMemoryPromptSection()
 
     def build_prompt(
         self, activity: Activity, character_profile: CharacterProfile
@@ -229,6 +230,8 @@ class ConversationPromptBuilder(PromptBuilder):
             user_text,
             *plugin_lines,
             *ongoing_activity_lines,
+            # Insert related topic memories and guidance when available
+            *self._related_topic_memory_section.build(activity),
             "",
             "# 会話応答方針",
             "- これはユーザー入力への応答である",
@@ -257,7 +260,7 @@ class ConversationPromptBuilder(PromptBuilder):
                     "- 『承知しました』だけで終わらず、指示されたトークをこの応答で行う",
                     "- オープニングなら軽い導入から短い雑談へ自然につなぐ",
                     "- 本題への移行なら、唐突な宣言ではなく短い橋渡しを入れて内容を始める",
-                    "- 指示にない外部操作、配信状態、視聴者数、コメント受信を捏造しない",
+                    "- 指示にない外部操作、状態変化、視聴者数、コメント受信を捏造しない",
                     "- 指示文をそのまま復唱せず、キャラクター自身の言葉で話す",
                 ]
             )
@@ -378,7 +381,7 @@ class AutonomousTalkPromptBuilder(PromptBuilder):
             "# 自律発話方針",
             "- これはユーザー入力への返答ではない",
             "- 話題の主導権はAIライバー自身にある",
-            "- 直近発話を丸ごと続けるのではなく、配信トークの流れとして自然につなげる",
+            "- 直近発話を丸ごと続けるのではなく、自然な会話の流れとしてつなげる",
             "- いきなり豆知識や新しい話題の本題から始めない",
             "- 話題を変える場合は、話題転換の理由や橋渡しを短く入れる",
             "- 起動直後の最初の自律発話では、現在の流れを軽く受けてから話題に入る",
@@ -387,8 +390,9 @@ class AutonomousTalkPromptBuilder(PromptBuilder):
             "- キャラクターの好きなこと、現在の内的な気分、ふと思いついた連想から自然に話題を選ぶ",
             "- 同じ豆知識や同じ感想を続けすぎない",
             "- 直近発話と同じ主題、同じ情景、同じ願望を続けて繰り返さない",
-            "- 同じ大テーマが続いている場合は、ゲーム、新しい技術、配信のこと、"
-            "今の気分、視聴者に聞いてみたいことへ自然に広げる",
+            "- 好きな話題を優先しつつ、同じテーマに固執せず、自然に別カテゴリへ広げる",
+            "- 同じ大テーマが続いている場合は、ゲーム、新しい技術、今の気分、"
+            "興味のあることへ自然に広げる",
             "- 話題を変える場合は、直前の話題との共通点を短く使って橋渡しする",
             "- 3〜5発話に1回程度、視聴者が答えやすい軽い問いかけを入れてもよい",
             "- ただし、毎回質問で終わらせない",
@@ -415,7 +419,7 @@ class AutonomousTalkPromptBuilder(PromptBuilder):
             "- 毎回、観察したい、見てみたい、気になる、ワクワクする、で締める",
             "- コメントが来ている前提で話す",
             "",
-            "現在の活動目的と直近文脈に沿って、キャラクターとして自然な配信トークを1〜3文で発話してください。",
+            "現在の活動目的と直近文脈に沿って、キャラクターとして自然な会話を1〜3文で発話してください。",
         ]
         return "\n".join(lines)
 
@@ -463,8 +467,8 @@ class LifecycleGreetingPromptBuilder(PromptBuilder):
             *self._recent_speech_section.build(),
             "",
             "# ライフサイクル発話方針",
-            "- これは通常の雑談ではなく、配信やアプリ状態の節目に行う短い発話である",
-            "- 起動直後、配信開始、配信終了の状況に合った自然な一言にする",
+            "- これは通常の雑談ではなく、状態の節目に行う短い発話である",
+            "- 起動直後、状況の変化に合った自然な一言にする",
             "- いきなり自由な話題を始めず、まず現在の状況に反応する",
             "- 視聴者がいる前提でも、不自然に人数やコメントの有無を断定しない",
             "- 前回の発話がある場合でも、その続きを長く話し始めない",
@@ -479,37 +483,27 @@ class LifecycleGreetingPromptBuilder(PromptBuilder):
 
     def _build_activity_specific_policy(self, activity: Activity) -> list[str]:
         if activity.activity_type == ActivityType.STARTUP_REACTION:
-            focus = str(
-                activity.context.get("startup_focus") or "今の気分から自然に選ぶ"
-            )
             return [
                 "# 起動直後の発話方針",
-                f"- 今回の導入フォーカス: {focus}",
-                "- 起動した事実を長く説明せず、今の気分から自然な一言を選ぶ",
-                "- 配信がすでに始まっているとは断定しない",
-                "- おはよう、こんにちは、こんばんはなど、現在時刻に依存する挨拶を使わない",
-                "- 『起動した』『準備中』『目が覚めた』『声の調子』を定型句にしない",
-                "- 毎回の自己紹介や『今日も楽しもう』のような固定挨拶を避ける",
-                "- 直近記憶があれば軽くつなぎ、なければ好み・気分・小さな連想から選ぶ",
-                "- 質問で終えるか、感想で終えるか、話題の予告にするかを毎回固定しない",
+                "- Activityの目的と、現在状況・感情・会話履歴・関連知識を総合して発話する",
             ]
 
         if activity.activity_type == ActivityType.STREAM_OPENING_GREETING:
             return [
-                "# 配信開始時の発話方針",
-                "- 配信開始のあいさつをする",
+                "# 状況開始時の発話方針",
+                "- 開始のあいさつをする",
                 "- これから話していく雰囲気を作る",
                 "- 視聴者への呼びかけは自然に短くする",
                 "- event_payloadのopening_segmentの意図・タイトルに従う",
-                "- 配信状態はevent_payloadのverified_stream_stateだけを事実として扱う",
+                "- 状態情報はevent_payloadのverified_stream_stateだけを事実として扱う",
                 "- 音声が全員へ届いている、映像が完全に正常、コメントが読めているとは断定しない",
                 "- stream titleや予定Segmentはevent_payloadにある値だけを使い、推測しない",
             ]
 
         if activity.activity_type == ActivityType.STREAM_CLOSING_GREETING:
             return [
-                "# 配信終了前の発話方針",
-                "- 配信を締めるあいさつをする",
+                "# 状況終了前の発話方針",
+                "- 場を締めるあいさつをする",
                 "- 見てくれた人への感謝を短く伝える",
                 "- また次回につながる余韻を残す",
                 "- 新しい話題を始めない",
@@ -520,7 +514,7 @@ class LifecycleGreetingPromptBuilder(PromptBuilder):
                 "# 本編Segment発話方針",
                 "- event_payloadのmain_segment、segment_intent、current_topicに従う",
                 "- 1回の短い発話Turnだけを生成し、次Segmentを開始しない",
-                "- verified_stream_stateだけを配信状態の事実として扱う",
+                "- verified_stream_stateだけを状態の事実として扱う",
                 "- recent_topicsと同じ内容の繰り返しを避ける",
                 "- コメントを受信・閲覧しているとは断定しない",
             ]
@@ -535,7 +529,7 @@ class LifecycleGreetingPromptBuilder(PromptBuilder):
                 "- コメント全文を復唱せず、未確認の内容を事実として断定しない",
                 "- response_styleの文字数・文数・質問・名前呼びPolicyに従う",
                 "- paidや投稿者権限を過度に特別扱いしない",
-                "- verified_stream_state以外の配信状態を推測しない",
+                "- verified_stream_state以外の状況を推測しない",
             ]
 
         return [

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from app.domain.actions import ActionPlanGroup
 from app.domain.activities import ActivityStatus, ActivityType
@@ -18,6 +20,12 @@ from app.runtime.autonomous_activity_execution import prepare_autonomous_executi
 from app.runtime.autonomous_output import completed_speech_text
 from app.runtime.planned_activity_queue import PlannedActivity, PlannedActivityQueue
 from app.utils.trace import TraceLogger
+
+
+@dataclass(frozen=True)
+class _PreparedActivity:
+    planned_activity: PlannedActivity
+    action_plan_group: ActionPlanGroup
 
 
 class ActivityExecutorThread(threading.Thread):
@@ -47,7 +55,9 @@ class ActivityExecutorThread(threading.Thread):
     async def run_once(self) -> ActionPlanGroup | None:
         """Queue から1件取り出し、ActionPlanGroup に変換して実行する。"""
 
-        planned_activity = self._planned_activity_queue.get()
+        planned_activity = self._planned_activity_queue.get_where(
+            self._can_execute_immediately
+        )
         if planned_activity is None:
             self._trace_logger.write(
                 "activity_executor_thread:run_once:no_activity",
@@ -65,23 +75,31 @@ class ActivityExecutorThread(threading.Thread):
             planning_reason=planned_activity.planning_reason,
         )
 
-        current_activity = self._activity_manager.get_activity(
+        prepared = await self._prepare(planned_activity)
+        if prepared is None:
+            return None
+        return await self._execute_prepared(prepared, wait_for_activation=False)
+
+    def _can_prepare(self, planned_activity: PlannedActivity) -> bool:
+        current = self._activity_manager.get_activity(
             planned_activity.activity.activity_id
         )
-        if (
-            current_activity is not None
-            and current_activity.status != ActivityStatus.ACTIVE
-        ):
-            self._trace_logger.debug(
-                "activity_executor_thread:run_once:activity_skipped",
-                planned_activity_id=planned_activity.planned_activity_id,
-                activity_id=current_activity.activity_id,
-                activity_type=current_activity.activity_type.value,
-                activity_status=current_activity.status.value,
-                reason="activity_not_active_before_action_planning",
-            )
-            return None
+        if current is None or current.status == ActivityStatus.ACTIVE:
+            return True
+        return (
+            current.status == ActivityStatus.PENDING
+            and current.activity_type == ActivityType.AUTONOMOUS_TALK
+        )
 
+    def _can_execute_immediately(self, planned_activity: PlannedActivity) -> bool:
+        current = self._activity_manager.get_activity(
+            planned_activity.activity.activity_id
+        )
+        return current is None or current.status == ActivityStatus.ACTIVE
+
+    async def _prepare(
+        self, planned_activity: PlannedActivity
+    ) -> _PreparedActivity | None:
         execution_result = prepare_autonomous_execution(planned_activity.activity)
         if execution_result is not None:
             self._trace_logger.info(
@@ -116,7 +134,7 @@ class ActivityExecutorThread(threading.Thread):
                 failure_stage="action_planning",
                 error_type=type(error).__name__,
             )
-            return action_plan_group
+            return _PreparedActivity(planned_activity, action_plan_group)
         self._trace_logger.write(
             "activity_executor_thread:run_once:actions_planned",
             planned_activity_id=planned_activity.planned_activity_id,
@@ -127,9 +145,12 @@ class ActivityExecutorThread(threading.Thread):
         current_activity = self._activity_manager.get_activity(
             planned_activity.activity.activity_id
         )
-        if (
-            current_activity is not None
-            and current_activity.status != ActivityStatus.ACTIVE
+        if current_activity is not None and not (
+            current_activity.status == ActivityStatus.ACTIVE
+            or (
+                current_activity.status == ActivityStatus.PENDING
+                and current_activity.activity_type == ActivityType.AUTONOMOUS_TALK
+            )
         ):
             self._trace_logger.info(
                 "activity_executor_thread:run_once:actions_canceled",
@@ -157,7 +178,44 @@ class ActivityExecutorThread(threading.Thread):
                 self._activity_manager.record_turn_result(
                     canceled_group.activity_turn_result
                 )
-            return canceled_group
+            self._activity_manager.cancel_activity(
+                planned_activity.activity.activity_id,
+                reason="activity_not_active_before_action_execution",
+            )
+            self._agent_life_service.sync_from_activity_manager()
+            return _PreparedActivity(planned_activity, canceled_group)
+
+        if planned_activity.activity.activity_type == ActivityType.AUTONOMOUS_TALK:
+            self._activity_manager.update_activity_context(
+                planned_activity.activity.activity_id,
+                {"action_plan_prepared": True},
+            )
+            self._agent_life_service.sync_from_activity_manager()
+        return _PreparedActivity(planned_activity, action_plan_group)
+
+    async def _execute_prepared(
+        self,
+        prepared: _PreparedActivity,
+        *,
+        wait_for_activation: bool,
+    ) -> ActionPlanGroup:
+        planned_activity = prepared.planned_activity
+        action_plan_group = prepared.action_plan_group
+        if action_plan_group.is_empty():
+            return action_plan_group
+
+        if wait_for_activation:
+            executable = await self._wait_until_executable(planned_activity)
+            if not executable:
+                canceled_group = canceled_output_group(
+                    action_plan_group,
+                    reason="activity_canceled_before_fifo_output",
+                )
+                if canceled_group.activity_turn_result is not None:
+                    self._activity_manager.record_turn_result(
+                        canceled_group.activity_turn_result
+                    )
+                return canceled_group
 
         output_result = await self._action_scheduler.execute(action_plan_group)
         if (
@@ -248,6 +306,38 @@ class ActivityExecutorThread(threading.Thread):
 
         return action_plan_group
 
+    async def _wait_until_executable(
+        self, planned_activity: PlannedActivity
+    ) -> bool:
+        """FIFO先頭のActivityが前面化し、実行時刻になるまでだけ待つ。"""
+
+        while not self._stop_requested.is_set():
+            current = self._activity_manager.get_activity(
+                planned_activity.activity.activity_id
+            )
+            if current is None:
+                return True
+            if current.status in {ActivityStatus.CANCELED, ActivityStatus.COMPLETED}:
+                return False
+            if current.status == ActivityStatus.SUSPENDED:
+                self._activity_manager.cancel_activity(
+                    current.activity_id,
+                    reason="suspended_prepared_activity_discarded",
+                )
+                self._agent_life_service.sync_from_activity_manager()
+                return False
+            if current.status == ActivityStatus.ACTIVE:
+                not_before = planned_activity.not_before
+                if not_before is None:
+                    return True
+                remaining = (not_before - datetime.now(timezone.utc)).total_seconds()
+                if remaining <= 0:
+                    return True
+                await asyncio.sleep(min(remaining, self._idle_sleep_seconds))
+                continue
+            await asyncio.sleep(self._idle_sleep_seconds)
+        return False
+
     def cancel_pending_autonomous(
         self,
         *,
@@ -282,19 +372,60 @@ class ActivityExecutorThread(threading.Thread):
         asyncio.run(self._run_async())
 
     async def _run_async(self) -> None:
-        """Thread 内の asyncio event loop で Activity 実行を継続する。"""
+        """Action準備とFIFO出力を別Taskで動かし、LLMとTTSを重ねる。"""
 
         self._started_running.set()
         self._trace_logger.write("activity_executor_thread:run:start")
 
+        prepared_queue: asyncio.Queue[_PreparedActivity] = asyncio.Queue(maxsize=2)
+        preparation_task = asyncio.create_task(
+            self._prepare_loop(prepared_queue), name="activity-preparation"
+        )
+        output_task = asyncio.create_task(
+            self._output_loop(prepared_queue), name="activity-fifo-output"
+        )
         try:
-            while not self._stop_requested.is_set():
-                action_plan_group = await self.run_once()
-                if action_plan_group is None:
-                    await asyncio.sleep(self._idle_sleep_seconds)
+            await asyncio.gather(preparation_task, output_task)
         finally:
+            preparation_task.cancel()
+            output_task.cancel()
+            await asyncio.gather(
+                preparation_task, output_task, return_exceptions=True
+            )
             self._started_running.clear()
             self._trace_logger.write("activity_executor_thread:run:stopped")
+
+    async def _prepare_loop(
+        self, prepared_queue: asyncio.Queue[_PreparedActivity]
+    ) -> None:
+        while not self._stop_requested.is_set():
+            if prepared_queue.full():
+                await asyncio.sleep(self._idle_sleep_seconds)
+                continue
+            planned_activity = self._planned_activity_queue.get_where(
+                self._can_prepare
+            )
+            if planned_activity is None:
+                await asyncio.sleep(self._idle_sleep_seconds)
+                continue
+            prepared = await self._prepare(planned_activity)
+            if prepared is not None:
+                await prepared_queue.put(prepared)
+
+    async def _output_loop(
+        self, prepared_queue: asyncio.Queue[_PreparedActivity]
+    ) -> None:
+        while not self._stop_requested.is_set():
+            try:
+                prepared = await asyncio.wait_for(
+                    prepared_queue.get(), timeout=self._idle_sleep_seconds
+                )
+            except asyncio.TimeoutError:
+                continue
+            try:
+                await self._execute_prepared(prepared, wait_for_activation=True)
+            finally:
+                prepared_queue.task_done()
 
     def stop(self) -> None:
         """継続実行処理を停止する。"""

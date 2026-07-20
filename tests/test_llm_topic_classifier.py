@@ -88,6 +88,7 @@ async def test_llm_topic_classifier_builds_prompt_with_categories_and_input_text
     assert "- other" in prompt
     assert "# 判定ルール" in prompt
     assert "- 出力はカテゴリIDのみ" in prompt
+    assert "発話全体の主題" in prompt
     assert "波、海辺、潮風、空、雨、森、自然音、季節" in prompt
     assert "# 発話" in prompt
     assert "マイクの音量を少し調整してから話すね。" in prompt

@@ -93,8 +93,8 @@ class ActivityMatcher(Protocol):
 class ActivityDefinition:
     activity_type: str
     display_name: str
-    required_capability: str
-    provider_plugin_id: str
+    required_capability: str | None
+    provider_plugin_id: str | None
     start_markers: tuple[str, ...] = ()
     stop_markers: tuple[str, ...] = ()
     description: str = ""

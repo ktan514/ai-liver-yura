@@ -108,6 +108,9 @@ def _create_runtime(
     activity_manager: ActivityManager | None = None,
     agent_life_service: AgentLifeService | None = None,
     response_generator: ResponseGenerator | None = None,
+    require_startup_completion: bool = False,
+    autonomous_planning_poll_seconds: float = 0.5,
+    async_initializers: tuple[object, ...] = (),
 ) -> RuntimeCoordinator:
     activity_manager = activity_manager or ActivityManager()
     agent_life_service = agent_life_service or AgentLifeService(activity_manager)
@@ -152,6 +155,9 @@ def _create_runtime(
         activity_planner_thread=activity_planner_thread,
         activity_executor_thread=activity_executor_thread,
         agent_life_service=agent_life_service,
+        require_startup_completion=require_startup_completion,
+        autonomous_planning_poll_seconds=autonomous_planning_poll_seconds,
+        async_initializers=async_initializers,  # type: ignore[arg-type]
     )
 
 
@@ -492,6 +498,52 @@ async def test_run_once_plans_autonomous_event_when_event_queue_is_empty() -> No
     assert action_plan_group is None
     assert runtime._activity_planning_request_queue.qsize() == 1  # noqa: SLF001
     assert agent_life_service.agent_state.active_activity is None
+
+
+@pytest.mark.asyncio
+async def test_autonomous_planning_waits_until_startup_activity_completes() -> None:
+    runtime = _create_runtime(require_startup_completion=True)
+
+    assert await runtime.run_once() is None
+    assert runtime._activity_planning_request_queue.empty()  # noqa: SLF001
+
+    await runtime.publish_event(AgentEvent(event_type=AgentEventType.APP_STARTED))
+    startup_result = await runtime.run_once()
+
+    assert startup_result is not None
+    assert await runtime.run_once() is None
+    assert runtime._activity_planning_request_queue.qsize() == 1  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_autonomous_planning_requests_are_rate_limited() -> None:
+    runtime = _create_runtime(autonomous_planning_poll_seconds=0.2)
+
+    await runtime.run_once()
+    request = runtime._activity_planning_request_queue.get_nowait()  # noqa: SLF001
+    runtime._activity_planning_request_queue.task_done()  # noqa: SLF001
+    await runtime.run_once()
+
+    assert isinstance(request, ActivityPlanningRequest)
+    assert runtime._activity_planning_request_queue.empty()  # noqa: SLF001
+
+
+@pytest.mark.asyncio
+async def test_run_awaits_async_initializers_before_starting_loop() -> None:
+    initialized = asyncio.Event()
+
+    async def initialize() -> None:
+        initialized.set()
+
+    runtime = _create_runtime(async_initializers=(initialize,))
+    run_task = asyncio.create_task(runtime.run())
+    try:
+        await asyncio.wait_for(initialized.wait(), timeout=1.0)
+    finally:
+        runtime.stop()
+        await run_task
+
+    assert initialized.is_set()
 
 
 @pytest.mark.asyncio

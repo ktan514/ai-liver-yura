@@ -23,6 +23,23 @@ def test_user_text_becomes_foreground_activity() -> None:
     assert manager.suspended_activities() == []
 
 
+def test_update_activity_context_updates_the_canonical_activity() -> None:
+    manager = ActivityManager()
+    activity = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK)
+    )
+
+    updated = manager.update_activity_context(
+        activity.activity_id,
+        {"action_plan_prepared": True},
+    )
+
+    assert updated is not None
+    assert updated.context["action_plan_prepared"] is True
+    assert manager.foreground_activity is updated
+    assert manager.get_activity(activity.activity_id) is updated
+
+
 def test_trusted_administrator_direction_becomes_directed_talk() -> None:
     manager = ActivityManager()
     event = AgentEvent(
@@ -175,6 +192,31 @@ def test_app_started_becomes_startup_reaction_activity() -> None:
     assert foreground.status == ActivityStatus.ACTIVE
     assert foreground.interruptible is False
     assert manager.foreground_activity == foreground
+    assert foreground.goal == "現在状態に応じた起動直後のActivityを行う"
+    assert "startup_focus" not in foreground.context
+
+
+def test_app_started_uses_llm_behavior_plan_as_activity_goal() -> None:
+    manager = ActivityManager()
+
+    foreground = manager.handle_event(
+        AgentEvent(
+            event_type=AgentEventType.APP_STARTED,
+            payload={
+                "behavior_plan": {
+                    "goal": "現在の落ち着いた気分を反映して場を開く"
+                },
+                "emotion": {"mood": "calm"},
+                "conversation_history": ({"role": "assistant", "text": "前回"},),
+                "related_knowledge": ({"summary": "以前の話題"},),
+            },
+        )
+    )
+
+    assert foreground.goal == "現在の落ち着いた気分を反映して場を開く"
+    assert foreground.context["emotion"] == {"mood": "calm"}
+    assert foreground.context["recent_conversation"][0]["text"] == "前回"
+    assert foreground.context["related_knowledge"][0]["summary"] == "以前の話題"
 
 
 def test_stream_started_becomes_opening_greeting_activity() -> None:
