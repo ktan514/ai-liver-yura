@@ -141,6 +141,15 @@ class ActivityExecutorThread(threading.Thread):
             activity_id=planned_activity.activity.activity_id,
             action_count=len(action_plan_group.action_plans),
         )
+        prepare_actions = getattr(self._action_scheduler, "prepare", None)
+        if callable(prepare_actions):
+            action_plan_group = await prepare_actions(action_plan_group)
+        self._trace_logger.write(
+            "activity_executor_thread:run_once:actions_prepared",
+            planned_activity_id=planned_activity.planned_activity_id,
+            activity_id=planned_activity.activity.activity_id,
+            action_count=len(action_plan_group.action_plans),
+        )
 
         current_activity = self._activity_manager.get_activity(
             planned_activity.activity.activity_id

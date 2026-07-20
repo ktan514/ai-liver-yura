@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from dataclasses import replace
 from datetime import datetime, timezone
 
 from app.domain.actions import ActionPlan, ActionType
@@ -50,6 +51,48 @@ class ExecuteActionUsecase:
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._background_tasks_lock = threading.RLock()
         self._trace_logger = TraceLogger()
+
+    async def prepare(self, action_plan: ActionPlan) -> ActionPlan:
+        """音声を先に合成する。イベント発行・再生・記憶保存は行わない。"""
+
+        if (
+            action_plan.action_type != ActionType.SPEAK
+            or self._speech_synthesizer is None
+            or self._audio_player is None
+            or isinstance(action_plan.metadata.get("prepared_audio"), bytes)
+        ):
+            return action_plan
+        voice_intent = action_plan.metadata.get("voice_intent")
+        self._trace_logger.write(
+            "execute_action_usecase:speak:synthesis_started",
+            action_id=action_plan.action_id,
+            phase="prepare",
+        )
+        try:
+            audio_data = await self._speech_synthesizer.synthesize(
+                action_plan.text,
+                voice_intent=(
+                    voice_intent if isinstance(voice_intent, VoiceIntent) else None
+                ),
+            )
+        except Exception as error:
+            self._trace_logger.warning(
+                "execute_action_usecase:speak:synthesis_prepare_failed",
+                action_id=action_plan.action_id,
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
+            return action_plan
+        self._trace_logger.write(
+            "execute_action_usecase:speak:synthesis_finished",
+            action_id=action_plan.action_id,
+            audio_bytes=len(audio_data),
+            phase="prepare",
+        )
+        return replace(
+            action_plan,
+            metadata={**action_plan.metadata, "prepared_audio": audio_data},
+        )
 
     async def execute(self, action_plan: ActionPlan) -> ActionExecutionResult | None:
         self._trace_logger.write(
@@ -194,22 +237,30 @@ class ExecuteActionUsecase:
     async def _play_speech(self, action_plan: ActionPlan) -> str | None:
         if self._speech_synthesizer is not None and self._audio_player is not None:
             try:
-                voice_intent = action_plan.metadata.get("voice_intent")
-                self._trace_logger.write(
-                    "execute_action_usecase:speak:synthesis_started",
-                    action_id=action_plan.action_id,
-                )
-                audio_data = await self._speech_synthesizer.synthesize(
-                    action_plan.text,
-                    voice_intent=(
-                        voice_intent if isinstance(voice_intent, VoiceIntent) else None
-                    ),
-                )
-                self._trace_logger.write(
-                    "execute_action_usecase:speak:synthesis_finished",
-                    action_id=action_plan.action_id,
-                    audio_bytes=len(audio_data),
-                )
+                prepared_audio = action_plan.metadata.get("prepared_audio")
+                if isinstance(prepared_audio, bytes):
+                    audio_data = prepared_audio
+                else:
+                    voice_intent = action_plan.metadata.get("voice_intent")
+                    self._trace_logger.write(
+                        "execute_action_usecase:speak:synthesis_started",
+                        action_id=action_plan.action_id,
+                        phase="playback_fallback",
+                    )
+                    audio_data = await self._speech_synthesizer.synthesize(
+                        action_plan.text,
+                        voice_intent=(
+                            voice_intent
+                            if isinstance(voice_intent, VoiceIntent)
+                            else None
+                        ),
+                    )
+                    self._trace_logger.write(
+                        "execute_action_usecase:speak:synthesis_finished",
+                        action_id=action_plan.action_id,
+                        audio_bytes=len(audio_data),
+                        phase="playback_fallback",
+                    )
                 self._trace_logger.write(
                     "execute_action_usecase:speak:playback_started",
                     action_id=action_plan.action_id,

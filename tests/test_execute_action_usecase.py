@@ -178,6 +178,25 @@ async def test_speak_action_synthesizes_and_plays_audio() -> None:
 
 
 @pytest.mark.asyncio
+async def test_prepared_speech_is_not_synthesized_again_during_playback() -> None:
+    synthesizer = FakeSpeechSynthesizer()
+    player = FakeAudioPlayer()
+    usecase = ExecuteActionUsecase(
+        speech_synthesizer=synthesizer,
+        audio_player=player,
+    )
+    original = ActionPlan(action_type=ActionType.SPEAK, text="次の発話")
+
+    prepared = await usecase.prepare(original)
+
+    assert synthesizer.received_texts == ["次の発話"]
+    assert player.received_audio == []
+    await usecase.execute(prepared)
+    assert synthesizer.received_texts == ["次の発話"]
+    assert player.received_audio == [b"RIFF-test-wav"]
+
+
+@pytest.mark.asyncio
 async def test_speak_keeps_original_text_for_display_and_memory(capsys) -> None:
     synthesizer = FakeSpeechSynthesizer()
     memory = ShortTermMemory()

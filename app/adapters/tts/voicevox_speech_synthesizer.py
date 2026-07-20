@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
 from dataclasses import dataclass
@@ -14,6 +13,7 @@ from app.adapters.tts.audio_query_corrector import (
 from app.adapters.tts.pronunciation_corrector import PronunciationCorrector
 from app.domain.character_response import VoiceIntent
 from app.ports.speech_synthesizer import SpeechSynthesizer
+from app.utils.async_blocking import run_cancellable_blocking
 from app.utils.trace import TraceLogger
 
 
@@ -54,7 +54,7 @@ class VoiceVoxSpeechSynthesizer(SpeechSynthesizer):
         if not text.strip():
             raise ValueError("音声合成するテキストが空です。")
         profile = self._resolve_profile(voice_intent)
-        return await asyncio.to_thread(self._synthesize_sync, text, profile)
+        return await run_cancellable_blocking(self._synthesize_sync, text, profile)
 
     def _synthesize_sync(self, text: str, profile: VoiceVoxSpeechProfile) -> bytes:
         corrected_text = self._correct_pronunciation(text)

@@ -25,6 +25,9 @@ class ActionExecutor(Protocol):
     async def execute(self, action_plan: ActionPlan) -> ActionExecutionResult | None:
         """ActionPlan を実行する。"""
 
+    async def prepare(self, action_plan: ActionPlan) -> ActionPlan:
+        """外部出力を開始せず、実行に必要なデータだけを準備する。"""
+
 
 class ActionScheduler:
     """ActionPlanGroup をリソース単位で安全に実行する。"""
@@ -55,6 +58,17 @@ class ActionScheduler:
                 task.cancel()
                 canceled = True
         return canceled
+
+    async def prepare(self, action_plan_group: ActionPlanGroup) -> ActionPlanGroup:
+        """TTSなどの副作用を伴わない準備を、FIFO出力より前に済ませる。"""
+
+        prepare_action = getattr(self._action_executor, "prepare", None)
+        if not callable(prepare_action):
+            return action_plan_group
+        prepared_actions: list[ActionPlan] = []
+        for action in action_plan_group.action_plans:
+            prepared_actions.append(await prepare_action(action))
+        return replace(action_plan_group, action_plans=prepared_actions)
 
     async def execute(self, action_plan_group: ActionPlanGroup) -> ActivityOutputResult:
         if self._prevent_new_actions:
