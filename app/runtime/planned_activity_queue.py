@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.domain.activities import Activity
+from app.domain.behavior import ActivityOperation
 from app.domain.drives import DriveState
 from app.domain.emotions import EmotionState
 
@@ -26,6 +27,8 @@ class PlannedActivity:
     planned_drive: DriveState | None = None
     planned_emotion: EmotionState | None = None
     planned_topic: str | None = None
+    operation: ActivityOperation | None = None
+    activity_turn_id: str | None = None
 
     @property
     def effective_priority(self) -> int:

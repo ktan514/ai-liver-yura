@@ -28,6 +28,8 @@ class ActivityManager:
         self._ongoing_activity_history: list[OngoingActivity] = []
         self._last_activity_result: ActivityResult | None = None
         self._turn_results: dict[str, ActivityTurnResult] = {}
+        self._pending_turn_counts: dict[str, int] = {}
+        self._complete_when_turns_finish: set[str] = set()
         self._lock = threading.RLock()
         self._trace_logger = TraceLogger()
         self._lifecycle_gate: ActivityPolicy | None = None
@@ -69,6 +71,80 @@ class ActivityManager:
                 updated_context_keys=sorted(updates),
             )
             return updated
+
+    def continue_activity(self, activity_id: str, turn: Activity) -> Activity | None:
+        """既存Activityを維持したまま、次Turn用のsnapshotを作る。"""
+
+        with self._lock:
+            current = self._activities.get(activity_id)
+            if current is None or current.status in {
+                ActivityStatus.COMPLETED,
+                ActivityStatus.CANCELED,
+            }:
+                return None
+            canonical = replace(
+                current,
+                goal=turn.goal,
+                status=ActivityStatus.ACTIVE,
+                context={**current.context, **turn.context},
+            )
+            self._activities[activity_id] = canonical
+            self._foreground_activity_id = activity_id
+            snapshot = replace(
+                canonical,
+                source_event_id=turn.source_event_id,
+                context=dict(turn.context),
+            )
+            self._trace_logger.info(
+                "activity_manager:activity_continued",
+                activity_id=activity_id,
+                source_event_id=turn.source_event_id,
+            )
+            return snapshot
+
+    def register_activity_turn(self, activity_id: str) -> None:
+        """計画済みで未完了のTurn数をActivity単位で保持する。"""
+
+        with self._lock:
+            self._pending_turn_counts[activity_id] = (
+                self._pending_turn_counts.get(activity_id, 0) + 1
+            )
+
+    def request_activity_completion(self, activity_id: str) -> Activity | None:
+        """未完了Turnがあれば完了を予約し、なければ直ちに完了する。"""
+
+        with self._lock:
+            if self._pending_turn_counts.get(activity_id, 0) > 0:
+                self._complete_when_turns_finish.add(activity_id)
+                return None
+            completed = self.complete_activity(activity_id)
+            if completed is not None:
+                self.resume_next_pending()
+            return completed
+
+    def complete_processed_turn(
+        self,
+        activity_id: str,
+        *,
+        result: ActivityResult | None = None,
+    ) -> Activity | None:
+        """Turnだけを完了し、終了予約済みの場合だけActivityも完了する。"""
+
+        with self._lock:
+            if result is not None:
+                self._last_activity_result = result
+            remaining = max(self._pending_turn_counts.get(activity_id, 1) - 1, 0)
+            if remaining:
+                self._pending_turn_counts[activity_id] = remaining
+            else:
+                self._pending_turn_counts.pop(activity_id, None)
+            if activity_id not in self._complete_when_turns_finish or remaining:
+                return None
+            self._complete_when_turns_finish.discard(activity_id)
+            completed = self.complete_activity(activity_id)
+            if completed is not None:
+                self.resume_next_pending()
+            return completed
 
     def register_plugin_activity(self, activity: Activity) -> Activity:
         """Pluginが要求した汎用ActivityをCoreのライフサイクルへ登録する。"""
@@ -367,6 +443,12 @@ class ActivityManager:
         with self._lock:
             return self._handle_event_locked(event)
 
+    def create_activity_from_event(self, event: AgentEvent) -> Activity:
+        """調停せず、継続Turn用のActivity snapshotだけを生成する。"""
+
+        with self._lock:
+            return self._create_activity_from_event(event)
+
     def _handle_event_locked(self, event: AgentEvent) -> Activity:
         operation = {
             AgentEventType.STREAM_STARTED: "start_opening",
@@ -467,6 +549,8 @@ class ActivityManager:
 
         completed = activity.with_status(ActivityStatus.COMPLETED)
         self._activities[activity_id] = completed
+        self._pending_turn_counts.pop(activity_id, None)
+        self._complete_when_turns_finish.discard(activity_id)
 
         if self._foreground_activity_id == activity_id:
             self._foreground_activity_id = None
@@ -491,6 +575,8 @@ class ActivityManager:
                 return activity
             canceled = activity.with_status(ActivityStatus.CANCELED)
             self._activities[activity_id] = canceled
+            self._pending_turn_counts.pop(activity_id, None)
+            self._complete_when_turns_finish.discard(activity_id)
             if self._foreground_activity_id == activity_id:
                 self._foreground_activity_id = None
             self._trace_logger.info(

@@ -123,9 +123,17 @@ class ActivityExecutorThread(threading.Thread):
                 self._activity_manager.record_turn_result(
                     action_plan_group.activity_turn_result
                 )
-            self._activity_manager.complete_processed_activity(
-                planned_activity.activity.activity_id
-            )
+            if (
+                planned_activity.activity.activity_type == ActivityType.AUTONOMOUS_TALK
+                and planned_activity.operation is not None
+            ):
+                self._activity_manager.complete_processed_turn(
+                    planned_activity.activity.activity_id
+                )
+            else:
+                self._activity_manager.complete_processed_activity(
+                    planned_activity.activity.activity_id
+                )
             self._agent_life_service.sync_from_activity_manager()
             self._trace_logger.warning(
                 "activity_executor_thread:action_planning:failed",
@@ -211,6 +219,13 @@ class ActivityExecutorThread(threading.Thread):
         planned_activity = prepared.planned_activity
         action_plan_group = prepared.action_plan_group
         if action_plan_group.is_empty():
+            if (
+                planned_activity.activity.activity_type == ActivityType.AUTONOMOUS_TALK
+                and planned_activity.operation is not None
+            ):
+                self._activity_manager.complete_processed_turn(
+                    planned_activity.activity.activity_id
+                )
             return action_plan_group
 
         if wait_for_activation:
@@ -234,7 +249,6 @@ class ActivityExecutorThread(threading.Thread):
             self._activity_manager.record_output_result(
                 action_plan_group.activity_turn_result, output_result
             )
-        autonomous_output_saved = False
         if planned_activity.activity.activity_type == ActivityType.AUTONOMOUS_TALK:
             speech_text = (
                 completed_speech_text(action_plan_group, output_result)
@@ -247,7 +261,6 @@ class ActivityExecutorThread(threading.Thread):
                     text=speech_text,
                     context=planned_activity.activity.context,
                 )
-                autonomous_output_saved = True
                 self._trace_logger.info(
                     "activity_executor_thread:autonomous_memory_saved",
                     activity_id=planned_activity.activity.activity_id,
@@ -276,20 +289,30 @@ class ActivityExecutorThread(threading.Thread):
             action_count=len(action_plan_group.action_plans),
         )
 
-        completed_activity = self._activity_manager.complete_processed_activity(
-            planned_activity.activity.activity_id,
-            result=build_activity_result(action_plan_group, output_result),
-        )
+        activity_result = build_activity_result(action_plan_group, output_result)
         if (
             planned_activity.activity.activity_type == ActivityType.AUTONOMOUS_TALK
-            and autonomous_output_saved
+            and planned_activity.operation is not None
+        ):
+            completed_activity = self._activity_manager.complete_processed_turn(
+                planned_activity.activity.activity_id,
+                result=activity_result,
+            )
+        else:
+            completed_activity = self._activity_manager.complete_processed_activity(
+                planned_activity.activity.activity_id,
+                result=activity_result,
+            )
+        if (
+            planned_activity.activity.activity_type == ActivityType.AUTONOMOUS_TALK
+            and completed_activity is not None
         ):
             self._agent_life_service.complete_autonomous_topic(
                 activity_id=planned_activity.activity.activity_id
             )
         self._agent_life_service.sync_from_activity_manager()
         self._trace_logger.write(
-            "activity_executor_thread:run_once:activity_completed",
+            "activity_executor_thread:run_once:turn_completed",
             planned_activity_id=planned_activity.planned_activity_id,
             activity_id=planned_activity.activity.activity_id,
             completed=completed_activity is not None,

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from queue import Empty, Queue
+from uuid import uuid4
 
 from app.domain.activities import Activity
 from app.domain.autonomous_planning import (
@@ -18,6 +20,7 @@ from app.domain.behavior import (
     ActivityPlan,
     BehaviorDecision,
     BehaviorPlanningContext,
+    SituationAnalysis,
 )
 from app.domain.events import AgentEvent, AgentEventType
 from app.domain.short_term_memory import ShortTermMemory
@@ -69,7 +72,11 @@ class ActivityPlanningService:
         self._short_term_memory = short_term_memory
         self._topic_history = topic_history
         self._available_activity_definitions = available_activity_definitions
+        self._stop_requested: Callable[[], bool] = lambda: False
         self._trace_logger = TraceLogger()
+
+    def set_stop_requested(self, callback: Callable[[], bool]) -> None:
+        self._stop_requested = callback
 
     def plan_once(self, now: datetime | None = None) -> PlannedActivity | None:
         """必要であれば Activity を1件計画する。"""
@@ -92,8 +99,31 @@ class ActivityPlanningService:
                 )
                 return None
 
-        activity = self._create_activity(event)
+        activity = (
+            self._create_or_continue_activity(event, autonomous_plan)
+            if autonomous_plan is not None
+            else self._create_activity(event)
+        )
         activity = self._enrich_activity(activity)
+        turn_id = None
+        if autonomous_plan is not None:
+            turn_id = str(uuid4())
+            trace = trace_context_from(activity.context)
+            activity = replace(
+                activity,
+                context={
+                    **activity.context,
+                    "activity_turn_id": turn_id,
+                    "trace_context": (
+                        trace.derive(activity_turn_id=turn_id)
+                        if trace is not None
+                        else TraceContext.new(
+                            source_event_id=activity.source_event_id
+                        ).derive(activity_turn_id=turn_id)
+                    ),
+                },
+            )
+            self._activity_manager.register_activity_turn(activity.activity_id)
         return PlannedActivity(
             activity=activity,
             source="agent_life_service",
@@ -110,6 +140,8 @@ class ActivityPlanningService:
                 autonomous_plan.topic if autonomous_plan is not None else None
             ),
             not_before=self._not_before(event),
+            operation=(autonomous_plan.operation if autonomous_plan is not None else None),
+            activity_turn_id=turn_id,
         )
 
     @staticmethod
@@ -247,7 +279,10 @@ class ActivityPlanningService:
             required_capability=None,
             provider_plugin_id="runtime",
             description="現在状態を総合して具体的な話題を選び、短く自律的に話す",
-            supported_operations=(ActivityOperation.START,),
+            supported_operations=(
+                ActivityOperation.START,
+                ActivityOperation.CONTINUE,
+            ),
             constraints_schema={
                 "type": "object",
                 "properties": {
@@ -293,7 +328,9 @@ class ActivityPlanningService:
             trace_context=context.trace_context,
         )
         try:
-            situation = asyncio.run(planner.evaluate_situation(planning_context))
+            situation = asyncio.run(
+                self._evaluate_situation_until_stopped(planner, planning_context)
+            )
         except Exception as error:
             self._trace_logger.warning(
                 "activity_planning_service:autonomous_situation_failed",
@@ -301,6 +338,8 @@ class ActivityPlanningService:
                 error_type=type(error).__name__,
                 error_message=str(error),
             )
+            return None
+        if situation is None:
             return None
         topic = str(situation.constraints.get("topic") or "").strip()
         if situation.activity_candidate != "autonomous_talk" or not topic:
@@ -356,6 +395,21 @@ class ActivityPlanningService:
         )
         return result
 
+    async def _evaluate_situation_until_stopped(
+        self,
+        planner: BehaviorPlanner,
+        context: BehaviorPlanningContext,
+    ) -> SituationAnalysis | None:
+        task = asyncio.create_task(planner.evaluate_situation(context))
+        while not task.done():
+            if self._stop_requested():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+                return None
+            await asyncio.sleep(0.05)
+        return await task
+
     def _load_recent_topic_memory_context(self) -> tuple[dict[str, object], ...]:
         usecase = self._enrich_activity_with_topic_memory_usecase
         if usecase is None:
@@ -369,6 +423,47 @@ class ActivityPlanningService:
         self._agent_life_service.handle_event(event)
         self._agent_life_service.sync_from_activity_manager()
         return activity
+
+    def _create_or_continue_activity(
+        self,
+        event: AgentEvent,
+        plan: ActivityPlan | None,
+    ) -> Activity:
+        """話題継続時は同じActivityへTurnを追加し、それ以外は新規開始する。"""
+
+        current = self._activity_manager.foreground_activity
+        can_continue = (
+            plan is not None
+            and plan.operation == ActivityOperation.CONTINUE
+            and current is not None
+            and current.activity_type.value == "autonomous_talk"
+        )
+        if can_continue and current is not None:
+            turn = self._activity_manager.create_activity_from_event(event)
+            continued = self._activity_manager.continue_activity(
+                current.activity_id,
+                turn,
+            )
+            if continued is not None:
+                self._agent_life_service.handle_event(event)
+                self._agent_life_service.sync_from_activity_manager()
+                return continued
+
+        if (
+            current is not None
+            and current.activity_type.value == "autonomous_talk"
+            and plan is not None
+            and plan.operation == ActivityOperation.START
+        ):
+            completed = self._activity_manager.request_activity_completion(
+                current.activity_id
+            )
+            if completed is not None:
+                self._agent_life_service.complete_autonomous_topic(
+                    activity_id=current.activity_id
+                )
+                self._agent_life_service.sync_from_activity_manager()
+        return self._create_activity(event)
 
     def _enrich_activity(self, activity: Activity) -> Activity:
         """Activity に関連長期記憶を追加する。"""
@@ -418,6 +513,11 @@ class ActivityPlannerThread(threading.Thread):
         self._autonomous_cancellation_generation = 0
         self._canceling_trace_context: TraceContext | None = None
         self._trace_logger = TraceLogger()
+        set_stop_requested = getattr(
+            self._planning_service, "set_stop_requested", None
+        )
+        if callable(set_stop_requested):
+            set_stop_requested(self._stop_requested.is_set)
 
     def run_once(self, request: ActivityPlanningRequest) -> PlannedActivity | None:
         """Activity 計画要求を1件処理し、結果を PlannedActivityQueue に追加する。"""
@@ -507,6 +607,15 @@ class ActivityPlannerThread(threading.Thread):
         """継続実行処理を停止する。"""
 
         self._stop_requested.set()
+        with self._cancellation_lock:
+            self._autonomous_cancellation_generation += 1
+        while True:
+            try:
+                self._request_queue.get_nowait()
+            except Empty:
+                break
+            else:
+                self._request_queue.task_done()
         self._trace_logger.write("activity_planner_thread:stop:requested")
 
     def cancel_inflight_autonomous(

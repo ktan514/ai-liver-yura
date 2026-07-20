@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from datetime import datetime, timezone
 from queue import Queue
@@ -17,7 +18,11 @@ from app.domain.activity_turn_result import (
     CharacterGenerationResult,
     CharacterGenerationStatus,
 )
-from app.domain.autonomous_planning import AutonomousSituationContext
+from app.domain.autonomous_planning import (
+    AutonomousSituationAnalysis,
+    AutonomousSituationContext,
+)
+from app.domain.behavior import ActivityOperation, BehaviorDecision
 from app.domain.character_response import (
     CharacterResponse,
     ResponseClaim,
@@ -176,6 +181,11 @@ class PlanningLifeStub:
     def sync_from_activity_manager(self) -> None:
         return None
 
+    def record_autonomous_plan_rejected(
+        self, event: AgentEvent, *, rejected_at: datetime | None = None
+    ) -> None:
+        return None
+
 
 def _autonomous_activity(topic: str = "深海生物の発光") -> Activity:
     activity = Activity(
@@ -226,6 +236,37 @@ def test_autonomous_evaluator_exposes_state_for_context_derived_topic() -> None:
     assert analysis.constraints["topic_selection_mode"] == "derive_from_context"
     assert analysis.constraints["dominant_drive"] == "curiosity"
     assert analysis.constraints["recent_topic_novelty_required"] is True
+
+
+def test_same_topic_adds_a_turn_to_the_active_autonomous_activity() -> None:
+    context = AutonomousSituationContext(
+        source_event_id="event-auto-2",
+        agent_state={"active_activity": "autonomous_talk"},
+        drive_state={"curiosity": 0.9, "energy": 0.7},
+        emotion_state={"talkativeness": 0.8},
+        topic_state={},
+        recent_speech_summary="深海生物の発光について話した",
+        recent_topic_summary="深海生物",
+        interrupted_topic=None,
+        stream_status="live",
+        ongoing_activity=None,
+        available_activity_definitions=(),
+        current_time_context="2026-07-20T12:00:00+09:00",
+    )
+    analysis = AutonomousSituationAnalysis(
+        suggested_action="topic_continue",
+        topic_candidate="深海生物が発光する理由",
+        planning_reason="same_topic",
+        relation_to_interrupted_topic="continue",
+    )
+
+    plan = BehaviorPlanner(
+        response_generator=ForbiddenLegacyGenerator(),
+        situation_prompt_builder=SituationEvaluatorPromptBuilder(),
+    ).plan_autonomous(context, analysis)
+
+    assert plan.decision == BehaviorDecision.CONTINUE_ACTIVITY
+    assert plan.operation == ActivityOperation.CONTINUE
 
 
 def test_autonomous_planning_builds_situation_and_behavior_plan_without_speech() -> (
@@ -301,6 +342,104 @@ def test_autonomous_planning_uses_llm_topic_and_recent_topic_memories() -> None:
     assert '"topic_memories"' in prompt
     assert "以前は海の探索について話した" in prompt
     assert "現在の状況から話題を選ぶ" not in prompt
+
+
+def test_autonomous_planning_reuses_activity_id_for_the_same_topic() -> None:
+    class SequencedLifeService(AgentLifeService):
+        def __init__(
+            self, manager: ActivityManager, events: list[AgentEvent]
+        ) -> None:
+            super().__init__(
+                manager,
+                initial_state=AgentState(
+                    current_drive=DriveState(
+                        curiosity=0.9,
+                        engagement=0.7,
+                        boredom=0.4,
+                        energy=0.8,
+                    ),
+                    current_emotion=EmotionState(talkativeness=0.8),
+                    stream_status="live",
+                ),
+            )
+            self.events = events
+
+        def plan_next_event(self, now: datetime | None = None) -> AgentEvent | None:
+            return self.events.pop(0) if self.events else None
+
+    events = [
+        AgentEvent(
+            event_type=AgentEventType.CURIOSITY_PEAK,
+            payload={"selected_topic": "深海生物", "reason": "start"},
+        ),
+        AgentEvent(
+            event_type=AgentEventType.CURIOSITY_PEAK,
+            payload={
+                "selected_topic": "深海生物が発光する理由",
+                "continuation_decision": "resume_original",
+                "reason": "continue",
+            },
+        ),
+    ]
+    manager = ActivityManager()
+    life = SequencedLifeService(manager, events)
+    service = ActivityPlanningService(
+        agent_life_service=life,
+        activity_manager=manager,
+        behavior_planner=BehaviorPlanner(
+            response_generator=ForbiddenLegacyGenerator(),
+            situation_prompt_builder=SituationEvaluatorPromptBuilder(),
+        ),
+    )
+
+    first = service.plan_once(now=datetime.now(timezone.utc))
+    second = service.plan_once(now=datetime.now(timezone.utc))
+
+    assert first is not None
+    assert second is not None
+    assert first.activity.activity_id == second.activity.activity_id
+    assert first.activity_turn_id != second.activity_turn_id
+    assert first.operation == ActivityOperation.START
+    assert second.operation == ActivityOperation.CONTINUE
+
+
+def test_planner_thread_stops_while_autonomous_llm_is_waiting() -> None:
+    class BlockingSelectionGenerator:
+        async def generate_response(self, activity: Activity) -> str:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    event = AgentEvent(
+        event_type=AgentEventType.CURIOSITY_PEAK,
+        payload={"reason": "internal_drive"},
+    )
+    manager = ActivityManager()
+    service = ActivityPlanningService(
+        agent_life_service=PlanningLifeStub(event),  # type: ignore[arg-type]
+        activity_manager=manager,
+        behavior_planner=BehaviorPlanner(
+            response_generator=BlockingSelectionGenerator(),  # type: ignore[arg-type]
+            situation_prompt_builder=SituationEvaluatorPromptBuilder(),
+        ),
+    )
+    requests: Queue[ActivityPlanningRequest] = Queue()
+    thread = ActivityPlannerThread(
+        request_queue=requests,
+        planned_activity_queue=PlannedActivityQueue(),
+        planning_service=service,
+        idle_sleep_seconds=0.01,
+    )
+
+    thread.start()
+    requests.put(ActivityPlanningRequest())
+    for _ in range(100):
+        if thread.is_busy:
+            break
+        threading.Event().wait(0.01)
+    thread.stop()
+    thread.join(timeout=1.0)
+
+    assert thread.is_alive() is False
 
 
 @pytest.mark.asyncio

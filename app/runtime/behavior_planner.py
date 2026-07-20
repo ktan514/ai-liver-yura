@@ -115,7 +115,16 @@ class BehaviorPlanner:
             goal = "発話せず内的状態の変化を待つ"
             action = "no_action"
         else:
-            decision = BehaviorDecision.START_ACTIVITY
+            continues_current_topic = (
+                analysis.relation_to_interrupted_topic
+                in {"continue", "resume_original", "resume_with_reframing"}
+                and context.agent_state.get("active_activity") == "autonomous_talk"
+            )
+            decision = (
+                BehaviorDecision.CONTINUE_ACTIVITY
+                if continues_current_topic
+                else BehaviorDecision.START_ACTIVITY
+            )
             activity_type = "autonomous_talk"
             action = analysis.suggested_action
             goal = f"{analysis.topic_candidate}について短く自律的に話す"
@@ -124,7 +133,9 @@ class BehaviorPlanner:
             activity_type=activity_type,
             goal=goal,
             operation=(
-                ActivityOperation.START
+                ActivityOperation.CONTINUE
+                if decision == BehaviorDecision.CONTINUE_ACTIVITY
+                else ActivityOperation.START
                 if decision == BehaviorDecision.START_ACTIVITY
                 else None
             ),

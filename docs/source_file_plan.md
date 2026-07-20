@@ -588,10 +588,15 @@ ActionScheduler の確定仕様:
 - すでに音声再生を開始したSPEAK Actionは初回実装では強制停止せず、現在の再生完了を待つ
 - 再生中Actionの強制停止はAudioPlayerの中断契約と音声リソース解放を別途設計してから導入する
 - 現在再生中の音声が完了した後は、キャンセル済み自律発話を再生せずユーザー応答を次に処理する
+- SPEAK ActionのTTS合成はFIFO出力前の準備段階で行い、前Turnの再生中に次Turnの音声を準備する
+- 字幕、表情、音声再生、発話イベント、記憶保存はFIFO先頭が実行可能になってから行う
 
 ### 複数ターン活動の状態保持
 
-- 1入力ごとの処理を表す`Activity`はAction実行後に完了し、複数ターンの状態は`OngoingActivity`として別に保持する
+- `Activity`は継続する目的を表し、同じ目的が続く間は同じ`activity_id`を維持する
+- 1回の入力または発話は`ActivityTurn`として区切り、Turnごとに`ActionPlanGroup`を生成・完了する
+- `AUTONOMOUS_TALK`は同一話題・同一目的なら`CONTINUE`でTurnを追加し、話題転換時に旧Activityを完了して新しいActivityを`START`する
+- TurnのLLM生成、TTS合成、FIFO出力、キャンセル、記憶保存は`activity_turn_id`または`output_unit_id`を実行単位にする
 - `OngoingActivity`は活動種別、状態、開始時の目的、直前のActivityResult、次に期待する入力、終了条件、活動固有contextを持つ
 - 複数ターン活動中のUSER_TEXTから作る会話Activityには、同じ`ongoing_activity_id`と状態スナップショットを引き継ぐ
 - 継続中入力のgoalとcontextには通常会話との識別情報を持たせ、Promptへ活動状態を明示する

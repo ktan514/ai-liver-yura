@@ -614,3 +614,40 @@ def test_explicit_resume_requires_no_foreground_and_deferred_status() -> None:
     assert resumed is not None
     assert resumed.status == ActivityStatus.ACTIVE
     assert manager.resume_activity(foreground.activity_id, reason="invalid") is None
+
+
+def test_activity_stays_active_while_continuation_turns_complete() -> None:
+    manager = ActivityManager()
+    activity = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, payload={})
+    )
+    next_turn = manager.create_activity_from_event(
+        AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, payload={})
+    )
+
+    continued = manager.continue_activity(activity.activity_id, next_turn)
+    manager.register_activity_turn(activity.activity_id)
+    manager.register_activity_turn(activity.activity_id)
+
+    assert continued is not None
+    assert continued.activity_id == activity.activity_id
+    assert continued.source_event_id == next_turn.source_event_id
+    assert manager.complete_processed_turn(activity.activity_id) is None
+    assert manager.complete_processed_turn(activity.activity_id) is None
+    current = manager.get_activity(activity.activity_id)
+    assert current is not None
+    assert current.status == ActivityStatus.ACTIVE
+
+
+def test_activity_completes_after_last_turn_when_topic_change_is_requested() -> None:
+    manager = ActivityManager()
+    activity = manager.handle_event(
+        AgentEvent(event_type=AgentEventType.CURIOSITY_PEAK, payload={})
+    )
+    manager.register_activity_turn(activity.activity_id)
+
+    assert manager.request_activity_completion(activity.activity_id) is None
+    completed = manager.complete_processed_turn(activity.activity_id)
+
+    assert completed is not None
+    assert completed.status == ActivityStatus.COMPLETED
