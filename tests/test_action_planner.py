@@ -89,6 +89,18 @@ class SegmentedCharacterResponsePipeline(FakeCharacterResponsePipeline):
         )
 
 
+class FallbackCharacterResponsePipeline(FakeCharacterResponsePipeline):
+    async def generate_with_result(
+        self, activity: Activity
+    ) -> tuple[CharacterResponse, CharacterGenerationResult]:
+        response = CharacterResponse(speech="うまく言葉にできなかったよ。")
+        return response, CharacterGenerationResult(
+            status=CharacterGenerationStatus.FALLBACK_USED,
+            activity_turn_id=activity.activity_id,
+            adopted_text=response.speech,
+        )
+
+
 @pytest.mark.asyncio
 async def test_action_planner_uses_response_generator_for_conversation() -> None:
     activity = Activity(
@@ -147,6 +159,25 @@ async def test_action_planner_expands_reaction_segments_without_engine_parameter
 
 
 @pytest.mark.asyncio
+async def test_fallback_speech_is_excluded_from_topic_memory() -> None:
+    activity = Activity(
+        activity_type=ActivityType.AUTONOMOUS_TALK,
+        goal="話題について話す",
+    )
+    planner = ActionPlanner(
+        response_generator=FakeResponseGenerator(),
+        character_response_pipeline=FallbackCharacterResponsePipeline(),
+    )
+
+    group = await planner.plan(activity)
+
+    speak = next(
+        plan for plan in group.action_plans if plan.action_type == ActionType.SPEAK
+    )
+    assert speak.metadata["skip_topic_memory"] is True
+
+
+@pytest.mark.asyncio
 async def test_action_planner_uses_safe_fallback_only_after_generation_failure() -> (
     None
 ):
@@ -164,6 +195,26 @@ async def test_action_planner_uses_safe_fallback_only_after_generation_failure()
 
 
 # Additional tests for startup, stream opening, and stream closing greetings
+@pytest.mark.asyncio
+async def test_action_planner_awakening_has_no_speech() -> None:
+    activity = Activity(
+        activity_type=ActivityType.AWAKENING,
+        goal="起動後の状態を整える",
+    )
+    planner = ActionPlanner(response_generator=FakeResponseGenerator())
+
+    action_plan_group = await planner.plan(activity)
+
+    assert [plan.action_type for plan in action_plan_group.action_plans] == [
+        ActionType.CHANGE_EXPRESSION
+    ]
+    assert all(
+        plan.action_type != ActionType.SPEAK
+        for plan in action_plan_group.action_plans
+    )
+    assert action_plan_group.action_plans[0].metadata["non_speech_activity"] is True
+
+
 @pytest.mark.asyncio
 async def test_action_planner_uses_response_generator_for_startup_reaction() -> None:
     activity = Activity(

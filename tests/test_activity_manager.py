@@ -177,7 +177,7 @@ def test_ending_ongoing_activity_returns_next_input_to_normal_conversation() -> 
     assert "ongoing_activity" not in conversation.context
 
 
-def test_app_started_becomes_startup_reaction_activity() -> None:
+def test_app_started_becomes_non_speech_awakening_activity() -> None:
     manager = ActivityManager()
 
     foreground = manager.handle_event(
@@ -188,11 +188,11 @@ def test_app_started_becomes_startup_reaction_activity() -> None:
         )
     )
 
-    assert foreground.activity_type == ActivityType.STARTUP_REACTION
+    assert foreground.activity_type == ActivityType.AWAKENING
     assert foreground.status == ActivityStatus.ACTIVE
     assert foreground.interruptible is False
     assert manager.foreground_activity == foreground
-    assert foreground.goal == "現在状態に応じた起動直後のActivityを行う"
+    assert foreground.goal == "起動後の状態を整えて周囲を認識する"
     assert "startup_focus" not in foreground.context
 
 

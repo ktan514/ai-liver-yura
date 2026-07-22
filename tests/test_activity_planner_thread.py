@@ -52,7 +52,11 @@ class FakeAgentLifeService:
         self.sync_count += 1
 
     def record_autonomous_plan_rejected(
-        self, event: AgentEvent, *, rejected_at: datetime | None = None
+        self,
+        event: AgentEvent,
+        *,
+        rejected_at: datetime | None = None,
+        reconsider_after_seconds: float | None = None,
     ) -> None:
         self.rejected_events.append(event)
 

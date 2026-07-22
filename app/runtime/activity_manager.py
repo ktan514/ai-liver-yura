@@ -110,6 +110,18 @@ class ActivityManager:
                 self._pending_turn_counts.get(activity_id, 0) + 1
             )
 
+    def pending_turn_count(self, activity_id: str) -> int:
+        """計画済みで、まだ出力完了していないTurn数を返す。"""
+
+        with self._lock:
+            return self._pending_turn_counts.get(activity_id, 0)
+
+    def activity_completion_requested(self, activity_id: str) -> bool:
+        """Activityが、残りTurn完了後の自然終了を予約済みか返す。"""
+
+        with self._lock:
+            return activity_id in self._complete_when_turns_finish
+
     def request_activity_completion(self, activity_id: str) -> Activity | None:
         """未完了Turnがあれば完了を予約し、なければ直ちに完了する。"""
 
@@ -804,10 +816,10 @@ class ActivityManager:
                 behavior_plan_value if isinstance(behavior_plan_value, dict) else {}
             )
             return Activity(
-                activity_type=ActivityType.STARTUP_REACTION,
+                activity_type=ActivityType.AWAKENING,
                 goal=str(
                     behavior_plan.get("goal")
-                    or "現在状態に応じた起動直後のActivityを行う"
+                    or "起動後の状態を整えて周囲を認識する"
                 ),
                 priority=90 + event.priority,
                 context={

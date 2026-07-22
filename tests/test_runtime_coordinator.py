@@ -511,6 +511,12 @@ async def test_autonomous_planning_waits_until_startup_activity_completes() -> N
     startup_result = await runtime.run_once()
 
     assert startup_result is not None
+    assert [plan.action_type for plan in startup_result.action_plans] == [
+        ActionType.CHANGE_EXPRESSION
+    ]
+    assert all(
+        plan.action_type != ActionType.SPEAK for plan in startup_result.action_plans
+    )
     assert await runtime.run_once() is None
     assert runtime._activity_planning_request_queue.qsize() == 1  # noqa: SLF001
 

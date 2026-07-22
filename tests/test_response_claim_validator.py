@@ -78,6 +78,33 @@ def _response(speech: str, claims: tuple[ResponseClaim, ...] = ()) -> CharacterR
     return CharacterResponse(speech=speech, claims=claims)
 
 
+@pytest.mark.asyncio
+async def test_low_initiative_greeting_does_not_expand_into_question() -> None:
+    context = ResponseContext(
+        user_input="こんにちは",
+        activity_type="conversation",
+        operation="discuss",
+        status=ActivityExecutionStatus.WAITING_INPUT,
+        failure_reason=None,
+        result_summary="挨拶に応答する",
+        allowed_claims=(ResponseClaim.CONVERSATION_ONLY,),
+        forbidden_claims=(),
+        activity_goal="社会的な接触に一往復分応答する",
+        speech_act="greeting",
+        conversation_phase="greeting",
+        initiative_level=0.15,
+    )
+
+    result = await ResponseValidator().validate(
+        _activity(ActivityExecutionStatus.WAITING_INPUT),
+        context,
+        CharacterResponse(speech="こんにちは。今日は何を話しますか？"),
+    )
+
+    assert result.accepted is False
+    assert result.reason == "response_exceeds_planned_initiative"
+
+
 def test_response_context_contains_safe_structured_ongoing_activity_summary() -> None:
     ongoing = OngoingActivity(
         activity_type="game_with_user",

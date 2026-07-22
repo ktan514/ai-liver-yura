@@ -78,6 +78,19 @@ class AutonomousSelectionGenerator:
         )
 
 
+class IdleObservationSelectionGenerator:
+    async def generate_response(self, activity: Activity) -> str:
+        return (
+            '{"decision":"wait","activity_type":"idle_observation",'
+            '"operation":"start","goal":"現在の状況を観察する",'
+            '"constraints":{"reconsider_after_seconds":45},'
+            '"speech_act":"statement","conversation_phase":"opening",'
+            '"initiative_level":0.1,"negated":false,"hypothetical":false,'
+            '"past_reference":false,"knowledge_question":false,'
+            '"confidence":0.94,"reason":"interruption_value_is_low"}'
+        )
+
+
 class TopicMemoryPlanningStub:
     def __init__(self) -> None:
         self.enriched_activities: list[Activity] = []
@@ -171,6 +184,7 @@ class PlanningLifeStub:
             stream_status="live",
         )
         self.autonomous_topic = None
+        self.reconsider_after_seconds: list[float | None] = []
 
     def plan_next_event(self, now: datetime | None = None) -> AgentEvent:
         return self.event
@@ -182,8 +196,13 @@ class PlanningLifeStub:
         return None
 
     def record_autonomous_plan_rejected(
-        self, event: AgentEvent, *, rejected_at: datetime | None = None
+        self,
+        event: AgentEvent,
+        *,
+        rejected_at: datetime | None = None,
+        reconsider_after_seconds: float | None = None,
     ) -> None:
+        self.reconsider_after_seconds.append(reconsider_after_seconds)
         return None
 
 
@@ -337,11 +356,37 @@ def test_autonomous_planning_uses_llm_topic_and_recent_topic_memories() -> None:
     assert planned.planned_topic == "探索ゲームの仕掛け"
     payload = planned.activity.context["event_payload"]
     assert payload["behavior_plan"]["topic"] == "探索ゲームの仕掛け"
-    assert payload["behavior_plan"]["constraints"]["topic_relation"] == "shift"
+    assert payload["behavior_plan"]["constraints"]["topic_relation"] == "revisit"
+    assert payload["behavior_plan"]["constraints"]["session_continuity"] is False
+    assert payload["behavior_plan"]["conversation_phase"] == "opening"
     prompt = generator.activities[0].context["plugin_prompt_override"]
     assert '"topic_memories"' in prompt
     assert "以前は海の探索について話した" in prompt
     assert "現在の状況から話題を選ぶ" not in prompt
+
+
+def test_autonomous_llm_can_choose_observation_without_speech() -> None:
+    event = AgentEvent(
+        event_type=AgentEventType.CURIOSITY_PEAK,
+        payload={"reason": "internal_drive", "drive": "curiosity"},
+    )
+    manager = ActivityManager()
+    life = PlanningLifeStub(event)
+    planner = BehaviorPlanner(
+        response_generator=IdleObservationSelectionGenerator(),
+        situation_prompt_builder=SituationEvaluatorPromptBuilder(),
+    )
+    service = ActivityPlanningService(
+        agent_life_service=life,  # type: ignore[arg-type]
+        activity_manager=manager,
+        behavior_planner=planner,
+    )
+
+    planned = service.plan_once(now=datetime.now(timezone.utc))
+
+    assert planned is None
+    assert life.reconsider_after_seconds == [45.0]
+    assert manager.foreground_activity is None
 
 
 def test_autonomous_planning_reuses_activity_id_for_the_same_topic() -> None:

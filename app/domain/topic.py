@@ -47,6 +47,7 @@ class InterruptedTopic:
     interest: float = 0.5
     incompleteness: float = 0.5
     exhaustion: float = 0.0
+    turn_count: int = 0
     interrupted_at: datetime | None = None
     interruption_turns: int = 0
     interruption_topics: tuple[str, ...] = ()
@@ -56,6 +57,8 @@ class InterruptedTopic:
             value = getattr(self, name)
             if not 0.0 <= value <= 1.0:
                 raise ValueError(f"{name} は0.0以上1.0以下で指定してください。")
+        if self.turn_count < 0:
+            raise ValueError("turn_count は0以上で指定してください。")
 
     def with_status(
         self,

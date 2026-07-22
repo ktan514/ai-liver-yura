@@ -93,9 +93,20 @@ class ActivityPlanningService:
             source_event = event
             event, autonomous_plan = self._plan_autonomous_event(event, now=now)
             if event is None:
+                reconsider_value = (
+                    autonomous_plan.constraints.get("reconsider_after_seconds")
+                    if autonomous_plan is not None
+                    else None
+                )
                 self._agent_life_service.record_autonomous_plan_rejected(
                     source_event,
                     rejected_at=now,
+                    reconsider_after_seconds=(
+                        float(reconsider_value)
+                        if isinstance(reconsider_value, (int, float))
+                        and not isinstance(reconsider_value, bool)
+                        else None
+                    ),
                 )
                 return None
 
@@ -174,6 +185,16 @@ class ActivityPlanningService:
             source_event_id=event.event_id,
             agent_state={
                 "attention_target": state.attention_target,
+                "last_user_input_at": (
+                    state.last_user_input_at.isoformat()
+                    if state.last_user_input_at is not None
+                    else None
+                ),
+                "last_speech_finished_at": (
+                    state.last_speech_finished_at.isoformat()
+                    if state.last_speech_finished_at is not None
+                    else None
+                ),
                 "active_activity": (
                     state.active_activity.activity_type.value
                     if state.active_activity is not None
@@ -241,6 +262,8 @@ class ActivityPlanningService:
                 "topic": plan.topic,
                 "planning_reason": plan.planning_reason,
                 "autonomous_action": plan.autonomous_action,
+                "conversation_phase": plan.conversation_phase,
+                "initiative_level": plan.initiative_level,
                 "constraints": dict(plan.constraints),
                 "planner_constraints": list(plan.planner_constraints),
                 "behavior_plan_id": plan.behavior_plan_id,
@@ -294,13 +317,28 @@ class ActivityPlanningService:
                     },
                     "topic_relation": {
                         "type": "string",
-                        "enum": ["continue", "shift", "new"],
+                        "enum": [
+                            "continue",
+                            "resume",
+                            "revisit",
+                            "shift",
+                            "new",
+                        ],
                         "description": "直近話題との関係",
                     },
                 },
                 "required": ["topic", "topic_relation"],
                 "additionalProperties": False,
             },
+        )
+        idle_definition = ActivityDefinition(
+            activity_type="idle_observation",
+            display_name="状況観察",
+            required_capability=None,
+            provider_plugin_id="runtime",
+            description="現在の状況と介入価値を観察し、後で再評価する",
+            supported_operations=(ActivityOperation.START,),
+            constraints_schema={"type": "object", "additionalProperties": True},
         )
         planning_context = BehaviorPlanningContext(
             user_text="",
@@ -309,7 +347,7 @@ class ActivityPlanningService:
             event_type=AgentEventType.CURIOSITY_PEAK.value,
             authority_role="system",
             instruction_trusted=True,
-            activity_definitions=(definition,),
+            activity_definitions=(definition, idle_definition),
             drive=dict(context.drive_state),
             emotion=dict(context.emotion_state),
             relationship=dict(context.relationship_state),
@@ -341,6 +379,29 @@ class ActivityPlanningService:
             return None
         if situation is None:
             return None
+        if situation.activity_candidate == "idle_observation":
+            reconsider_value = situation.constraints.get(
+                "reconsider_after_seconds", 30.0
+            )
+            reconsider_after_seconds = (
+                float(reconsider_value)
+                if isinstance(reconsider_value, (int, float))
+                and not isinstance(reconsider_value, bool)
+                else 30.0
+            )
+            return AutonomousSituationAnalysis(
+                suggested_action="idle_observation",
+                topic_candidate="",
+                planning_reason=situation.reason or "situation_observation_selected",
+                relation_to_interrupted_topic="none",
+                conversation_phase=situation.conversation_phase,
+                initiative_level=situation.initiative_level,
+                constraints={
+                    "reconsider_after_seconds": min(
+                        300.0, max(5.0, reconsider_after_seconds)
+                    )
+                },
+            )
         topic = str(situation.constraints.get("topic") or "").strip()
         if situation.activity_candidate != "autonomous_talk" or not topic:
             self._trace_logger.warning(
@@ -350,9 +411,18 @@ class ActivityPlanningService:
                 reason=situation.reason,
             )
             return None
-        relation = str(situation.constraints.get("topic_relation") or "new")
+        requested_relation = str(
+            situation.constraints.get("topic_relation") or "new"
+        )
+        relation = self._normalize_topic_relation(
+            requested_relation,
+            context=context,
+            has_topic_memories=bool(recent_memories),
+        )
         action = {
             "continue": "topic_continue",
+            "resume": "topic_continue",
+            "revisit": "topic_revisit",
             "shift": "topic_shift",
             "new": "autonomous_talk",
         }.get(relation, "autonomous_talk")
@@ -364,9 +434,9 @@ class ActivityPlanningService:
                     "selected_topic": topic,
                     "continuation_decision": (
                         "resume_original"
-                        if relation == "continue"
+                        if relation == "resume"
                         else "start_new_topic"
-                        if relation == "shift"
+                        if relation in {"revisit", "shift"}
                         else ""
                     ),
                 },
@@ -375,6 +445,8 @@ class ActivityPlanningService:
         merged_constraints = {
             **analysis.constraints,
             "topic_relation": relation,
+            "topic_origin": self._topic_origin(relation),
+            "session_continuity": relation in {"continue", "resume", "shift"},
             "avoid_repetition": True,
             "do_not_claim_external_execution": True,
         }
@@ -384,6 +456,12 @@ class ActivityPlanningService:
             topic_candidate=topic,
             planning_reason=situation.reason or analysis.planning_reason,
             relation_to_interrupted_topic=relation,
+            conversation_phase=(
+                "active"
+                if context.agent_state.get("active_activity") == "autonomous_talk"
+                else "opening"
+            ),
+            initiative_level=situation.initiative_level,
             constraints=merged_constraints,
         )
         self._trace_logger.info(
@@ -394,6 +472,46 @@ class ActivityPlanningService:
             recent_memory_count=len(recent_memories),
         )
         return result
+
+    @staticmethod
+    def _normalize_topic_relation(
+        relation: str,
+        *,
+        context: AutonomousSituationContext,
+        has_topic_memories: bool,
+    ) -> str:
+        active_topic = (
+            context.agent_state.get("active_activity") == "autonomous_talk"
+        )
+        interrupted_status = (
+            str(context.interrupted_topic.get("status") or "")
+            if context.interrupted_topic is not None
+            else ""
+        )
+        interrupted_topic = interrupted_status in {"interrupted", "suspended"}
+        if relation == "continue":
+            if active_topic:
+                return "continue"
+            if interrupted_topic:
+                return "resume"
+            return "revisit" if has_topic_memories else "new"
+        if relation == "resume" and not interrupted_topic:
+            return "revisit" if has_topic_memories else "new"
+        if relation == "shift" and not active_topic and not interrupted_topic:
+            return "revisit" if has_topic_memories else "new"
+        if relation in {"revisit", "shift", "new"}:
+            return relation
+        return "new"
+
+    @staticmethod
+    def _topic_origin(relation: str) -> str:
+        return {
+            "continue": "current_session",
+            "resume": "interrupted_session",
+            "revisit": "topic_memory",
+            "shift": "current_session_related",
+            "new": "spontaneous",
+        }.get(relation, "spontaneous")
 
     async def _evaluate_situation_until_stopped(
         self,

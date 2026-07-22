@@ -34,4 +34,6 @@ class AutonomousSituationAnalysis:
     topic_candidate: str
     planning_reason: str
     relation_to_interrupted_topic: str
+    conversation_phase: str | None = None
+    initiative_level: float | None = None
     constraints: dict[str, object] = field(default_factory=dict)

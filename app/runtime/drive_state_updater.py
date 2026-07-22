@@ -118,13 +118,7 @@ class DriveStateUpdater:
                 boredom=drive.boredom + 0.02,
                 energy=drive.energy + 0.04,
             )
-
-        return DriveState(
-            curiosity=drive.curiosity + 0.06,
-            engagement=drive.engagement + 0.10,
-            boredom=drive.boredom + 0.02,
-            energy=drive.energy + 0.02,
-        )
+        return drive
 
     def _apply_user_input(self, drive: DriveState) -> DriveState:
         return DriveState(

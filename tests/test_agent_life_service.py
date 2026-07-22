@@ -19,6 +19,20 @@ def test_agent_life_service_has_default_agent_state() -> None:
     assert agent_life_service.agent_state.active_activity is None
 
 
+def test_awakening_settle_delays_autonomous_talk() -> None:
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+    service = AgentLifeService(ActivityManager(), now=now)
+    service.update_drive(DriveState(curiosity=0.9, energy=0.9))
+    service.record_awakening_completed(now)
+
+    during_settle = service.plan_next_event(now=now + timedelta(seconds=1))
+    after_settle = service.plan_next_event(now=now + timedelta(seconds=7))
+
+    assert during_settle is None
+    assert after_settle is not None
+    assert after_settle.event_type == AgentEventType.CURIOSITY_PEAK
+
+
 def test_agent_life_service_marks_user_input_received() -> None:
     activity_manager = ActivityManager()
     agent_life_service = AgentLifeService(activity_manager)
@@ -270,7 +284,26 @@ def test_agent_life_service_preplans_one_autonomous_turn_after_script_is_ready()
 
     assert lookahead is not None
     assert lookahead.payload["lookahead"] is True
-    assert datetime.fromisoformat(lookahead.payload["not_before"]) > now
+    assert "not_before" not in lookahead.payload
+    assert lookahead.payload["autonomous_planned_for"] == (
+        now + timedelta(seconds=1)
+    ).isoformat()
+
+
+def test_agent_life_service_limits_autonomous_lookahead_to_one_turn() -> None:
+    activity_manager = ActivityManager()
+    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
+    service = AgentLifeService(activity_manager, now=now)
+    service.update_drive(DriveState(curiosity=0.9, energy=0.9))
+    first_event = service.plan_next_event(now=now)
+    assert first_event is not None
+    current = activity_manager.handle_event(first_event)
+    service.handle_event(first_event)
+    current.context["action_plan_prepared"] = True
+    activity_manager.register_activity_turn(current.activity_id)
+    activity_manager.register_activity_turn(current.activity_id)
+
+    assert service.plan_next_event(now=now + timedelta(seconds=1)) is None
 
 
 def test_rejected_autonomous_candidate_does_not_consume_talk_interval() -> None:
@@ -287,6 +320,24 @@ def test_rejected_autonomous_candidate_does_not_consume_talk_interval() -> None:
 
     assert during_backoff is None
     assert retry is not None
+
+
+def test_llm_selected_reconsideration_interval_is_honored() -> None:
+    activity_manager = ActivityManager()
+    now = datetime(2026, 7, 5, 12, 0, 0, tzinfo=timezone.utc)
+    service = AgentLifeService(activity_manager, now=now)
+    service.update_drive(DriveState(curiosity=0.9, energy=0.9))
+
+    rejected = service.plan_next_event(now=now)
+    assert rejected is not None
+    service.record_autonomous_plan_rejected(
+        rejected,
+        rejected_at=now,
+        reconsider_after_seconds=45.0,
+    )
+
+    assert service.plan_next_event(now=now + timedelta(seconds=44)) is None
+    assert service.plan_next_event(now=now + timedelta(seconds=45)) is not None
 
 
 def test_accepted_autonomous_candidate_consumes_talk_interval() -> None:
@@ -429,6 +480,25 @@ def test_interrupted_important_topic_is_evaluated_and_added_to_event() -> None:
     assert event.payload["reintroduction_required"] is True
     assert event.payload["interrupted_topic"].startswith("将来の配信")
     assert "resume_score_high" in event.payload["continuation_reasons"]
+
+
+def test_autonomous_topic_exhaustion_accumulates_until_activity_can_end() -> None:
+    service = AgentLifeService(ActivityManager())
+    service.update_drive(DriveState(curiosity=0.7, engagement=0.5, energy=0.5))
+    service.update_emotion(EmotionState(arousal=0.4, talkativeness=0.4))
+
+    for _ in range(6):
+        topic = service.record_autonomous_output(
+            activity_id="autonomous-1",
+            text="同じ話題について話しているよ。",
+        )
+
+    assert topic.turn_count == 6
+    assert topic.exhaustion > 0.5
+    assert topic.interest < 0.5
+    assert service.should_complete_autonomous_activity(
+        activity_id="autonomous-1"
+    )
 
 
 def test_agent_life_service_plan_next_event_returns_none_when_emotion_reduces_speech() -> (

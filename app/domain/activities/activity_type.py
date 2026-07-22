@@ -9,6 +9,7 @@ class ActivityType(str, Enum):
     PLUGIN_ACTIVITY = "plugin_activity"
     BEHAVIOR_PLANNING = "behavior_planning"
     AUTONOMOUS_TALK = "autonomous_talk"
+    AWAKENING = "awakening"
     STARTUP_REACTION = "startup_reaction"
     STREAM_OPENING_GREETING = "stream_opening_greeting"
     STREAM_MAIN_SEGMENT = "stream_main_segment"

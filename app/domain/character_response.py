@@ -149,6 +149,9 @@ class ResponseContext:
     allowed_claims: tuple[ResponseClaim, ...]
     forbidden_claims: tuple[ResponseClaim, ...]
     activity_goal: str
+    speech_act: str = "statement"
+    conversation_phase: str = "active"
+    initiative_level: float = 0.5
     input_authority_role: str = "user"
     instruction_trusted: bool = False
     emotion: dict[str, object] = field(default_factory=dict)
@@ -186,6 +189,7 @@ class CharacterResponse:
     expression: str = "smile"
     gesture: str | None = None
     voice_intent: VoiceIntent = field(default_factory=VoiceIntent)
+    pause_after_seconds: float = 0.0
     claims: tuple[ResponseClaim, ...] = ()
     claim_details: tuple[Claim, ...] = ()
     reaction_plan: ReactionPlan | None = None
@@ -200,6 +204,7 @@ class CharacterResponse:
                     expression=self.expression,
                     gesture=self.gesture,
                     voice_intent=self.voice_intent,
+                    pause_after_seconds=self.pause_after_seconds,
                 ),
             )
         )

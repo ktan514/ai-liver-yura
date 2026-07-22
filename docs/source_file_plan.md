@@ -592,6 +592,9 @@ ActionScheduler の確定仕様:
 - 現在再生中の音声が完了した後は、キャンセル済み自律発話を再生せずユーザー応答を次に処理する
 - SPEAK ActionのTTS合成はFIFO出力前の準備段階で行い、前Turnの再生中に次Turnの音声を準備する
 - 字幕、表情、音声再生、発話イベント、記憶保存はFIFO先頭が実行可能になってから行う
+- 同一Activityでは未完了Turnを「現在分と次の1件」までとし、古い会話状態による過剰な先読みを行わない
+- 同一Activity内の次Turnへ絶対予定時刻を付けず、前Turnの音声再生完了と内容・感情から決めた`pause_after_seconds`の後にFIFOで開始する
+- Activity間の自律発話間隔と、Activity内の短いTurn間隔は別の状態として扱う
 
 ### 複数ターン活動の状態保持
 
@@ -624,7 +627,8 @@ ActionScheduler の確定仕様:
 - wait、suspend_original、abandon_originalではその評価時点に自律Eventを生成しない
 - 再開・派生・新規開始ではCURIOSITY_PEAK Eventへ判断、理由、元話題、選択話題、再導入要否を格納する
 - 元話題へ戻る場合は原則として短い再導入を付け、同じ内容を繰り返さないようPromptへ指示する
-- 消耗度は直近の自律発話との表層類似度から暫定算出し、明示的なtopic_metricsがあればそちらを優先する
+- 同一ActivityのTurnごとに、関心度と未完了度を減衰させ、表層類似度・EmotionState・DriveStateから消耗度を累積する
+- 関心度、未完了度、talkativeness、arousal、curiosityに対して消耗度が上回った場合はActivity終了を予約し、準備済みTurnの完了後に次のActivityへ移る
 - 本格的な意味類似度、候補生成、重要度・関心度推定は将来のTopic Engineへ移管する
 
 テストで確認済みの内容:

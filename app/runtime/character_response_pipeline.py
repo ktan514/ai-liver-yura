@@ -120,6 +120,13 @@ class ResponseContextBuilder:
             allowed_claims=allowed,
             forbidden_claims=forbidden,
             activity_goal=activity.goal,
+            speech_act=str(behavior_plan.get("speech_act") or "statement"),
+            conversation_phase=str(
+                behavior_plan.get("conversation_phase") or "active"
+            ),
+            initiative_level=self._initiative_level(
+                behavior_plan.get("initiative_level")
+            ),
             input_authority_role=str(
                 activity.context.get("input_authority", {}).get("role", "user")
                 if isinstance(activity.context.get("input_authority"), dict)
@@ -244,6 +251,16 @@ class ResponseContextBuilder:
     @staticmethod
     def _optional_str(value: object) -> str | None:
         return str(value) if value is not None else None
+
+    @staticmethod
+    def _initiative_level(value: object) -> float:
+        if (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and 0.0 <= float(value) <= 1.0
+        ):
+            return float(value)
+        return 0.5
 
     @staticmethod
     def _memory_context(
@@ -638,12 +655,20 @@ class CharacterLlmService:
             return None
         speech_value = value.get("speech")
         speech = str(speech_value).strip() if isinstance(speech_value, str) else ""
+        pause_after_seconds = value.get("pause_after_seconds", 0.0)
+        if (
+            not isinstance(pause_after_seconds, (int, float))
+            or isinstance(pause_after_seconds, bool)
+            or not 0.0 <= float(pause_after_seconds) <= 3.0
+        ):
+            return None
         if reaction_plan is not None:
             speech = reaction_plan.speech
             first = reaction_plan.segments[0]
             expression = first.expression
             gesture = first.gesture
             voice_intent = first.voice_intent
+            pause_after_seconds = reaction_plan.segments[-1].pause_after_seconds
         if not speech:
             return None
         return CharacterResponse(
@@ -651,6 +676,7 @@ class CharacterLlmService:
             expression=expression,
             gesture=gesture,
             voice_intent=voice_intent,
+            pause_after_seconds=float(pause_after_seconds),
             claims=claims,
             claim_details=claim_details,
             reaction_plan=reaction_plan,
@@ -733,34 +759,48 @@ class CharacterLlmService:
             try:
                 claim_type = ClaimType(str(item["claim_type"]))
                 response_claim = ResponseClaim(claim_type.value)
-                status = (
-                    ActivityExecutionStatus(str(item["status"]))
-                    if item.get("status") is not None
-                    else None
-                )
                 confidence = float(item.get("confidence", 1.0))
             except (KeyError, TypeError, ValueError):
                 return None
             if not 0.0 <= confidence <= 1.0:
                 return None
+            if claim_type == ClaimType.CONVERSATION_ONLY:
+                activity_type = None
+                operation = None
+                status = None
+                target = None
+            else:
+                try:
+                    status = (
+                        ActivityExecutionStatus(str(item["status"]))
+                        if item.get("status") is not None
+                        else None
+                    )
+                except ValueError:
+                    return None
+                activity_type = (
+                    str(item["activity_type"])
+                    if item.get("activity_type") is not None
+                    else None
+                )
+                operation = (
+                    str(item["operation"])
+                    if item.get("operation") is not None
+                    else None
+                )
+                target = (
+                    str(item["target"])
+                    if item.get("target") is not None
+                    else None
+                )
             claims.append(response_claim)
             details.append(
                 Claim(
                     claim_type=claim_type,
-                    activity_type=(
-                        str(item["activity_type"])
-                        if item.get("activity_type") is not None
-                        else None
-                    ),
-                    operation=(
-                        str(item["operation"])
-                        if item.get("operation") is not None
-                        else None
-                    ),
+                    activity_type=activity_type,
+                    operation=operation,
                     status=status,
-                    target=(
-                        str(item["target"]) if item.get("target") is not None else None
-                    ),
+                    target=target,
                     confidence=confidence,
                     evidence=str(item.get("evidence") or ""),
                 )
@@ -794,6 +834,17 @@ class ResponseValidator:
         *,
         attempt: int = 1,
     ) -> ResponseValidationResult:
+        if (
+            context.conversation_phase == "greeting"
+            and context.initiative_level <= 0.25
+            and ("?" in response.speech or "？" in response.speech)
+        ):
+            result = ResponseValidationResult(
+                False,
+                "response_exceeds_planned_initiative",
+            )
+            self._trace_result(source, result)
+            return result
         try:
             extracted_claims = self._claim_extractor.extract(context, response.speech)
         except Exception as error:
@@ -1143,7 +1194,11 @@ class CharacterResponsePipeline:
         instruction = (
             "直近発話とは異なる主題または内容を選ぶ"
             if validation.reason == "recent_speech_too_similar"
-            else "未実行処理を実行済みと表現しない"
+            else (
+                "確定済みのconversation_phaseとinitiative_levelの範囲に発話を収める"
+                if validation.reason == "response_exceeds_planned_initiative"
+                else "未実行処理を実行済みと表現しない"
+            )
         )
         return json.dumps(
             {

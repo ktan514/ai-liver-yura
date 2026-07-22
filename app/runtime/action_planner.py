@@ -57,6 +57,30 @@ class ActionPlanner:
             activity_status=activity.status.value,
             activity_priority=activity.priority,
         )
+        if activity.activity_type == ActivityType.AWAKENING:
+            output_unit_id = str(uuid4())
+            self._require_lifecycle(activity, "create_action_plan")
+            action_plan = ActionPlan(
+                action_type=ActionType.CHANGE_EXPRESSION,
+                text="neutral",
+                required_resources={ActionResource.FACE},
+                source_activity_id=activity.activity_id,
+                output_unit_id=output_unit_id,
+                metadata={
+                    **self._lifecycle_metadata(activity),
+                    "non_speech_activity": True,
+                    "skip_topic_memory": True,
+                },
+            )
+            return ActionPlanGroup(
+                action_plans=[action_plan],
+                source_activity_id=activity.activity_id,
+                output_priority=self._output_priority(activity.activity_type),
+                group_id=output_unit_id,
+                activity_turn_result=self._turn_result(
+                    activity, None, output_unit_id=output_unit_id
+                ),
+            )
         if activity.activity_type in {
             ActivityType.CONVERSATION_WITH_USER,
             ActivityType.DIRECTED_TALK,
@@ -178,7 +202,11 @@ class ActionPlanner:
                 fallback_speech=response_text,
                 output_unit_id=output_unit_id,
                 base_metadata=self._lifecycle_metadata(activity),
-                skip_topic_memory=self._should_skip_topic_memory(activity),
+                skip_topic_memory=(
+                    self._should_skip_topic_memory(activity)
+                    or character_generation_result.status
+                    == CharacterGenerationStatus.FALLBACK_USED
+                ),
             )
             action_plan_group = ActionPlanGroup(
                 action_plans=action_plans,
@@ -257,7 +285,10 @@ class ActionPlanner:
                 fallback_speech=response_text,
                 output_unit_id=output_unit_id,
                 base_metadata={},
-                skip_topic_memory=False,
+                skip_topic_memory=(
+                    character_generation_result.status
+                    == CharacterGenerationStatus.FALLBACK_USED
+                ),
             )
             action_plan_group = ActionPlanGroup(
                 action_plans=action_plans,

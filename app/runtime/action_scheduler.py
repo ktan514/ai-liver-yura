@@ -42,6 +42,8 @@ class ActionScheduler:
         self._prevent_new_actions = False
         self._running_tasks: set[asyncio.Task[object]] = set()
         self._lifecycle_gate: ActivityPolicy | None = None
+        self._segment_cancel_lock = threading.Lock()
+        self._cancel_pending_segment_activity_ids: set[str] = set()
 
     def set_activity_policy(self, gate: ActivityPolicy) -> None:
         self._lifecycle_gate = gate
@@ -58,6 +60,28 @@ class ActionScheduler:
                 task.cancel()
                 canceled = True
         return canceled
+
+    def cancel_pending_segments(self, source_activity_id: str) -> None:
+        """再生中のsegmentは維持し、同じActivityの未開始segmentを破棄する。"""
+
+        with self._segment_cancel_lock:
+            self._cancel_pending_segment_activity_ids.add(source_activity_id)
+        self._trace_logger.info(
+            "action_scheduler:pending_segments:cancel_requested",
+            source_activity_id=source_activity_id,
+        )
+
+    def _pending_segments_canceled(self, source_activity_id: str | None) -> bool:
+        if source_activity_id is None:
+            return False
+        with self._segment_cancel_lock:
+            return source_activity_id in self._cancel_pending_segment_activity_ids
+
+    def _clear_pending_segment_cancel(self, source_activity_id: str | None) -> None:
+        if source_activity_id is None:
+            return
+        with self._segment_cancel_lock:
+            self._cancel_pending_segment_activity_ids.discard(source_activity_id)
 
     async def prepare(self, action_plan_group: ActionPlanGroup) -> ActionPlanGroup:
         """TTSなどの副作用を伴わない準備を、FIFO出力より前に済ませる。"""
@@ -110,6 +134,7 @@ class ActionScheduler:
         finally:
             if task is not None:
                 self._running_tasks.discard(task)
+            self._clear_pending_segment_cancel(action_plan_group.source_activity_id)
 
     async def _execute_allowed(
         self, action_plan_group: ActionPlanGroup
@@ -312,7 +337,40 @@ class ActionScheduler:
                 source_activity_id=action_plan_group.source_activity_id,
             )
             results: list[ActionExecutionResult] = []
-            for action_plan in self._synchronized_action_order(action_plan_group):
+            ordered_actions = self._synchronized_action_order(action_plan_group)
+            completed_speech_segment = -1
+            for action_index, action_plan in enumerate(ordered_actions):
+                segment_index = self._segment_index(action_plan)
+                if (
+                    self._pending_segments_canceled(
+                        action_plan_group.source_activity_id
+                    )
+                    and segment_index > completed_speech_segment
+                ):
+                    now = datetime.now(timezone.utc)
+                    canceled_actions = ordered_actions[action_index:]
+                    results.extend(
+                        ActionExecutionResult(
+                            action_id=pending.action_id,
+                            action_type=pending.action_type.value,
+                            status=ActionExecutionStatus.CANCELED,
+                            output_unit_id=output_unit_id,
+                            activity_turn_id=activity_turn_id,
+                            error="pending_segment_canceled_by_user_input",
+                            started_at=now,
+                            finished_at=now,
+                        )
+                        for pending in canceled_actions
+                    )
+                    self._trace_logger.info(
+                        "action_scheduler:pending_segments:canceled",
+                        output_unit_id=output_unit_id,
+                        source_activity_id=action_plan_group.source_activity_id,
+                        canceled_action_ids=[
+                            pending.action_id for pending in canceled_actions
+                        ],
+                    )
+                    break
                 self._trace_logger.debug(
                     "action_scheduler:output_unit:action_started",
                     output_unit_id=output_unit_id,
@@ -332,12 +390,19 @@ class ActionScheduler:
                     action_id=action_plan.action_id,
                     action_type=action_plan.action_type.value,
                 )
+                if action_plan.action_type == ActionType.SPEAK:
+                    completed_speech_segment = segment_index
             self._trace_logger.info(
                 "action_scheduler:output_unit:finished",
                 output_unit_id=output_unit_id,
                 source_activity_id=action_plan_group.source_activity_id,
             )
             return results
+
+    @staticmethod
+    def _segment_index(action_plan: ActionPlan) -> int:
+        segment = action_plan.metadata.get("reaction_segment_index", 0)
+        return segment if isinstance(segment, int) and segment >= 0 else 0
 
     @staticmethod
     def _synchronized_action_order(
@@ -351,9 +416,9 @@ class ActionScheduler:
         }
 
         def key(action_plan: ActionPlan) -> tuple[int, int]:
-            segment = action_plan.metadata.get("reaction_segment_index", 0)
-            segment_index = segment if isinstance(segment, int) and segment >= 0 else 0
-            return segment_index, action_order.get(action_plan.action_type, 4)
+            return ActionScheduler._segment_index(
+                action_plan
+            ), action_order.get(action_plan.action_type, 4)
 
         return sorted(
             action_plan_group.action_plans,

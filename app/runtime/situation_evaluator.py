@@ -92,6 +92,19 @@ class SituationEvaluator:
         if non_execution is not None:
             return non_execution
 
+        if self._is_greeting(context.user_text):
+            return SituationAnalysis(
+                activity_candidate=None,
+                operation=ActivityOperation.DISCUSS,
+                goal="ユーザーからの社会的な接触を受け取り、一往復分応答する",
+                speech_act=SpeechAct.GREETING,
+                conversation_phase="greeting",
+                initiative_level=0.15,
+                confidence=0.99,
+                reason="social_greeting",
+                evaluator_type="deterministic",
+            )
+
         deterministic = self._deterministic(context, definitions)
         if deterministic is not None:
             return deterministic
@@ -301,6 +314,25 @@ class SituationEvaluator:
             )
         except ValueError:
             return None
+        conversation_phase_value = payload.get("conversation_phase")
+        conversation_phase = (
+            str(conversation_phase_value)
+            if conversation_phase_value is not None
+            else None
+        )
+        if conversation_phase not in {None, "greeting", "opening", "active", "winding_down"}:
+            return None
+        initiative_value = payload.get("initiative_level")
+        if initiative_value is None:
+            initiative_level = None
+        elif (
+            isinstance(initiative_value, (int, float))
+            and not isinstance(initiative_value, bool)
+            and 0.0 <= float(initiative_value) <= 1.0
+        ):
+            initiative_level = float(initiative_value)
+        else:
+            return None
         constraints = payload["constraints"]
         confidence = payload["confidence"]
         flags = ("negated", "hypothetical", "past_reference", "knowledge_question")
@@ -379,6 +411,8 @@ class SituationEvaluator:
                 else dict(constraints)
             ),
             speech_act=speech_act,
+            conversation_phase=conversation_phase,
+            initiative_level=initiative_level,
             negated=bool(payload["negated"]),
             hypothetical=bool(payload["hypothetical"]),
             past_reference=bool(payload["past_reference"]),
@@ -552,6 +586,8 @@ class SituationEvaluator:
     @staticmethod
     def _speech_act(text: str) -> SpeechAct:
         normalized = text.strip()
+        if SituationEvaluator._is_greeting(normalized):
+            return SpeechAct.GREETING
         if any(
             marker in normalized for marker in ("しませんか", "しない？", "しようか")
         ):
@@ -563,3 +599,17 @@ class SituationEvaluator:
         if normalized.endswith(("始めて", "やめて")):
             return SpeechAct.COMMAND
         return SpeechAct.STATEMENT
+
+    @staticmethod
+    def _is_greeting(text: str) -> bool:
+        normalized = text.strip().lower().rstrip("。.!！?？")
+        return normalized in {
+            "こんにちは",
+            "こんばんは",
+            "おはよう",
+            "おはようございます",
+            "やあ",
+            "どうも",
+            "hello",
+            "hi",
+        }

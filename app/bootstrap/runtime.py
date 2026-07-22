@@ -72,7 +72,6 @@ from app.config.app_config import (
 from app.core.plugins import PluginManager
 from app.domain.activities import Activity, ActivityStatus, ActivityType
 from app.domain.character import CharacterProfile
-from app.domain.drives import DriveState
 from app.domain.memory import AgentMemoryState
 from app.domain.relationships import RelationshipMemory
 from app.domain.short_term_memory import ShortTermMemory
@@ -1000,14 +999,6 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         short_term_memory=short_term_memory,
         relationship_memory_store=relationship_memory_store,
         agent_memory_store=agent_memory_store,
-    )
-    agent_life_service.update_drive(
-        DriveState(
-            curiosity=0.72,
-            engagement=0.6,
-            boredom=0.2,
-            energy=0.8,
-        )
     )
     response_generator: ResponseGenerator = default_llm_plugin
     situation_generator: ResponseGenerator = situation_llm_plugin

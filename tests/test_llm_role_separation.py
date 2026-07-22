@@ -141,6 +141,30 @@ async def test_situation_evaluator_is_generic_and_does_not_select_capability() -
 
 
 @pytest.mark.asyncio
+async def test_greeting_is_planned_as_low_initiative_social_response() -> None:
+    context = BehaviorPlanningContext(
+        user_text="こんにちは",
+        source_event_id="event-greeting",
+        available_capabilities=frozenset(),
+    )
+
+    analysis = await SituationEvaluator(
+        StubRoleModel([]), prompt_builder=SITUATION_PROMPT
+    ).evaluate(context)
+    plan = BehaviorPlanner(
+        response_generator=StubResponseGenerator(),
+        situation_evaluator=SituationEvaluator(
+            StubRoleModel([]), prompt_builder=SITUATION_PROMPT
+        ),
+    ).plan_from_analysis(context, analysis)
+
+    assert analysis.speech_act.value == "greeting"
+    assert plan.conversation_phase == "greeting"
+    assert plan.initiative_level == 0.15
+    assert plan.goal == "ユーザーからの社会的な接触を受け取り、一往復分応答する"
+
+
+@pytest.mark.asyncio
 async def test_system_event_uses_llm_to_generate_activity_from_state() -> None:
     response = json.dumps(
         {
@@ -421,6 +445,46 @@ def test_character_response_parses_engine_independent_voice_intent() -> None:
 
     assert response is not None
     assert response.voice_intent == VoiceIntent(style="bright")
+
+
+def test_character_response_parses_pause_after_speech() -> None:
+    response = CharacterLlmService.parse(
+        '{"speech":"少し考えるね","pause_after_seconds":1.2,"claims":[]}'
+    )
+
+    assert response is not None
+    assert response.pause_after_seconds == 1.2
+    assert response.effective_reaction_plan().segments[0].pause_after_seconds == 1.2
+
+
+def test_conversation_only_claim_ignores_execution_self_report_fields() -> None:
+    response = CharacterLlmService.parse(
+        json.dumps(
+            {
+                "speech": "こんにちは",
+                "claims": [
+                    {
+                        "claim_type": "conversation_only",
+                        "activity_type": "discussion",
+                        "operation": "continue",
+                        "status": "active",
+                        "target": "宇宙",
+                        "confidence": 0.9,
+                        "evidence": "こんにちは",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert response is not None
+    assert len(response.claim_details) == 1
+    detail = response.claim_details[0]
+    assert detail.activity_type is None
+    assert detail.operation is None
+    assert detail.status is None
+    assert detail.target is None
 
 
 def test_character_response_parses_ordered_high_level_reaction_segments() -> None:

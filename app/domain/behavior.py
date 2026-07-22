@@ -56,6 +56,8 @@ class SituationAnalysis:
     goal: str
     constraints: dict[str, object] = field(default_factory=dict)
     speech_act: SpeechAct = SpeechAct.STATEMENT
+    conversation_phase: str | None = None
+    initiative_level: float | None = None
     negated: bool = False
     hypothetical: bool = False
     past_reference: bool = False
@@ -82,6 +84,8 @@ class ActivityPlan:
     constraints: dict[str, object] = field(default_factory=dict)
     planner_constraints: tuple[str, ...] = ()
     speech_act: SpeechAct = SpeechAct.STATEMENT
+    conversation_phase: str | None = None
+    initiative_level: float | None = None
     negated: bool = False
     hypothetical: bool = False
     past_reference: bool = False

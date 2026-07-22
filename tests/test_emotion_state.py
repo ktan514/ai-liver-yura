@@ -27,6 +27,7 @@ def test_autonomous_policy_shortens_activity_interval_for_excited_emotion() -> N
 
     assert not policy.should_defer_talking(emotion_state)
     assert policy.minimum_talk_interval_seconds(emotion_state) == 0.5
+    assert policy.awakening_settle_seconds(emotion_state) >= 2.0
 
 
 def test_low_talkativeness_reduces_speech() -> None:

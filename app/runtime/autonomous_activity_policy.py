@@ -29,3 +29,13 @@ class AutonomousActivityPolicy:
         if emotion.talkativeness > 0.7:
             return 0.8
         return 1.5
+
+    def awakening_settle_seconds(self, emotion: EmotionState) -> float:
+        """覚醒直後に状況を受け取る時間を、現在の感情状態から決める。"""
+
+        settle = 6.0 - emotion.arousal * 2.0 - emotion.talkativeness * 1.5
+        if emotion.mood == MoodType.TIRED:
+            settle += 2.0
+        elif emotion.mood == MoodType.EXCITED:
+            settle -= 1.0
+        return min(8.0, max(2.0, settle))

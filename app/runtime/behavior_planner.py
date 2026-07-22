@@ -104,7 +104,17 @@ class BehaviorPlanner:
             if isinstance(talkativeness_value, (int, float))
             else 0.0
         )
-        if context.ongoing_activity is not None:
+        if analysis.suggested_action == "idle_observation":
+            decision = BehaviorDecision.NO_ACTION
+            activity_type = "idle_observation"
+            goal = "現在の状況を観察し、次に判断するための変化を待つ"
+            action = "idle_observation"
+        elif analysis.suggested_action == "wait":
+            decision = BehaviorDecision.WAIT
+            activity_type = "wait"
+            goal = "現在の状況を維持して再評価を待つ"
+            action = "wait"
+        elif context.ongoing_activity is not None:
             decision = BehaviorDecision.WAIT
             activity_type = "wait"
             goal = "進行中Activityを優先して待機する"
@@ -148,6 +158,8 @@ class BehaviorPlanner:
             confidence=1.0,
             reason=analysis.planning_reason,
             planner_type="autonomous_deterministic",
+            conversation_phase=analysis.conversation_phase,
+            initiative_level=analysis.initiative_level,
             topic=analysis.topic_candidate,
             planning_reason=analysis.planning_reason,
             autonomous_action=action,
@@ -219,6 +231,8 @@ class BehaviorPlanner:
                     "OBS、YouTube、配信状態を操作・確認したとは主張しない",
                 ),
                 speech_act=analysis.speech_act,
+                conversation_phase=analysis.conversation_phase,
+                initiative_level=analysis.initiative_level,
                 confidence=analysis.confidence,
                 reason=analysis.reason,
                 planner_type=analysis.evaluator_type,
@@ -247,6 +261,8 @@ class BehaviorPlanner:
                     constraints=dict(validation.normalized_constraints),
                     planner_constraints=("constraints検証完了前に実行しない",),
                     speech_act=analysis.speech_act,
+                    conversation_phase=analysis.conversation_phase,
+                    initiative_level=analysis.initiative_level,
                     confidence=analysis.confidence,
                     reason="activity_constraints_invalid",
                     planner_type=analysis.evaluator_type,
@@ -291,6 +307,8 @@ class BehaviorPlanner:
                 constraints=dict(analysis.constraints),
                 planner_constraints=("低確信度のためActivityを実行しない",),
                 speech_act=analysis.speech_act,
+                conversation_phase=analysis.conversation_phase,
+                initiative_level=analysis.initiative_level,
                 confidence=analysis.confidence,
                 reason="semantic_confidence_below_threshold",
                 planner_type=analysis.evaluator_type,
@@ -318,6 +336,8 @@ class BehaviorPlanner:
                 constraints=dict(validation.normalized_constraints),
                 planner_constraints=("Capability検証後にのみ実行する",),
                 speech_act=analysis.speech_act,
+                conversation_phase=analysis.conversation_phase,
+                initiative_level=analysis.initiative_level,
                 negated=analysis.negated,
                 hypothetical=analysis.hypothetical,
                 past_reference=analysis.past_reference,
@@ -347,6 +367,8 @@ class BehaviorPlanner:
             constraints=analysis.constraints,
             planner_constraints=planner_constraints,
             speech_act=analysis.speech_act,
+            conversation_phase=analysis.conversation_phase,
+            initiative_level=analysis.initiative_level,
             negated=analysis.negated,
             hypothetical=analysis.hypothetical,
             past_reference=analysis.past_reference,

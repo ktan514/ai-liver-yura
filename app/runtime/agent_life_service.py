@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable
 from dataclasses import asdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from typing import Any
 from uuid import uuid4
@@ -80,8 +80,12 @@ class AgentLifeService:
         self._last_emotion_updated_at = self._last_drive_updated_at
         self._last_autonomous_talk_planned_at: datetime | None = None
         self._last_autonomous_plan_rejected_at: datetime | None = None
+        self._awakening_completed_at: datetime | None = None
         self._autonomous_plan_retry_backoff_seconds = max(
             autonomous_plan_retry_backoff_seconds, 0.0
+        )
+        self._autonomous_reconsider_after_seconds = (
+            self._autonomous_plan_retry_backoff_seconds
         )
         self._conversation_idle_timeout_seconds = conversation_idle_timeout_seconds
         self._observed_ongoing_activity_id: str | None = None
@@ -110,6 +114,9 @@ class AgentLifeService:
     def autonomous_topic(self) -> InterruptedTopic | None:
         return self._autonomous_topic
 
+    def record_awakening_completed(self, now: datetime | None = None) -> None:
+        self._awakening_completed_at = now or datetime.now(timezone.utc)
+
     def record_autonomous_output(
         self,
         *,
@@ -126,6 +133,50 @@ class AgentLifeService:
         same_activity = (
             existing is not None and existing.source_activity_id == activity_id
         )
+        observed_interest = self._metric(
+            metrics,
+            "interest",
+            (self._agent_state.current_drive.curiosity * 0.6)
+            + (self._agent_state.current_drive.engagement * 0.4),
+        )
+        observed_incompleteness = self._metric(
+            metrics, "incompleteness", self._estimate_incompleteness(text)
+        )
+        observed_exhaustion = self._metric(
+            metrics, "exhaustion", self._estimate_exhaustion(text)
+        )
+        if same_activity and existing is not None:
+            similarity = SequenceMatcher(
+                None,
+                self._normalize_text(existing.original_text),
+                self._normalize_text(text),
+            ).ratio()
+            emotion = self._agent_state.current_emotion
+            drive = self._agent_state.current_drive
+            interest = self._clamp01(
+                (existing.interest * 0.78)
+                + (observed_interest * 0.22)
+                - 0.04
+                - (similarity * 0.05)
+            )
+            incompleteness = self._clamp01(
+                (existing.incompleteness * 0.70)
+                + (observed_incompleteness * 0.30)
+                - 0.08
+            )
+            exhaustion = self._clamp01(
+                existing.exhaustion
+                + 0.10
+                + ((1.0 - emotion.talkativeness) * 0.05)
+                + ((1.0 - drive.energy) * 0.04)
+                + (similarity * 0.06)
+            )
+            turn_count = existing.turn_count + 1
+        else:
+            interest = observed_interest
+            incompleteness = observed_incompleteness
+            exhaustion = observed_exhaustion
+            turn_count = 1
         topic = InterruptedTopic(
             topic_id=(
                 existing.topic_id
@@ -142,18 +193,10 @@ class AgentLifeService:
             importance=self._metric(
                 metrics, "importance", self._estimate_importance(text)
             ),
-            interest=self._metric(
-                metrics,
-                "interest",
-                (self._agent_state.current_drive.curiosity * 0.6)
-                + (self._agent_state.current_drive.engagement * 0.4),
-            ),
-            incompleteness=self._metric(
-                metrics, "incompleteness", self._estimate_incompleteness(text)
-            ),
-            exhaustion=self._metric(
-                metrics, "exhaustion", self._estimate_exhaustion(text)
-            ),
+            interest=interest,
+            incompleteness=incompleteness,
+            exhaustion=exhaustion,
+            turn_count=turn_count,
             interrupted_at=(
                 existing.interrupted_at if same_activity and existing else None
             ),
@@ -174,8 +217,42 @@ class AgentLifeService:
             interest=topic.interest,
             incompleteness=topic.incompleteness,
             exhaustion=topic.exhaustion,
+            turn_count=topic.turn_count,
         )
         return topic
+
+    def should_complete_autonomous_activity(self, *, activity_id: str) -> bool:
+        """感情・動機と、話題の減衰状態から発話Activityの自然終了を判断する。"""
+
+        topic = self._autonomous_topic
+        if topic is None or topic.source_activity_id != activity_id:
+            return False
+        emotion = self._agent_state.current_emotion
+        drive = self._agent_state.current_drive
+        continuation_strength = (
+            topic.interest * 0.35
+            + topic.incompleteness * 0.35
+            + emotion.talkativeness * 0.15
+            + emotion.arousal * 0.05
+            + drive.curiosity * 0.10
+            - topic.exhaustion * 0.35
+        )
+        should_complete = topic.turn_count >= 2 and continuation_strength <= 0.20
+        self._trace_logger.info(
+            "agent_life_service:autonomous_topic:continuation_evaluated",
+            topic_id=topic.topic_id,
+            source_activity_id=activity_id,
+            turn_count=topic.turn_count,
+            interest=topic.interest,
+            incompleteness=topic.incompleteness,
+            exhaustion=topic.exhaustion,
+            emotion_arousal=emotion.arousal,
+            emotion_talkativeness=emotion.talkativeness,
+            drive_curiosity=drive.curiosity,
+            continuation_strength=continuation_strength,
+            should_complete=should_complete,
+        )
+        return should_complete
 
     def interrupt_autonomous_topic(
         self,
@@ -251,6 +328,11 @@ class AgentLifeService:
             active_activity is not None
             and active_activity.activity_type == ActivityType.AUTONOMOUS_TALK
             and active_activity.context.get("action_plan_prepared") is True
+            and self._activity_manager.pending_turn_count(active_activity.activity_id)
+            < 2
+            and not self._activity_manager.activity_completion_requested(
+                active_activity.activity_id
+            )
             and not self._agent_state.pending_activities
             and not self._agent_state.suspended_activities
         )
@@ -279,6 +361,28 @@ class AgentLifeService:
                 reason="ongoing_activity_active",
                 ongoing_activity_id=ongoing_activity.ongoing_activity_id,
                 ongoing_activity_type=ongoing_activity.activity_type,
+            )
+            return None
+
+        awakening_settle_seconds = (
+            self._autonomous_activity_policy.awakening_settle_seconds(
+                self._agent_state.current_emotion
+            )
+        )
+        if self._is_within_pause(
+            since=self._awakening_completed_at,
+            now=now,
+            pause_seconds=awakening_settle_seconds,
+        ):
+            self._trace_logger.debug(
+                "agent_life_service:plan_next_event:skipped",
+                reason="awakening_settle",
+                awakening_completed_at=self._awakening_completed_at,
+                settle_seconds=awakening_settle_seconds,
+                emotion_arousal=self._agent_state.current_emotion.arousal,
+                emotion_talkativeness=(
+                    self._agent_state.current_emotion.talkativeness
+                ),
             )
             return None
 
@@ -374,12 +478,12 @@ class AgentLifeService:
         if self._is_within_pause(
             since=self._last_autonomous_plan_rejected_at,
             now=now,
-            pause_seconds=self._autonomous_plan_retry_backoff_seconds,
+            pause_seconds=self._autonomous_reconsider_after_seconds,
         ):
             self._trace_logger.write(
                 "agent_life_service:plan_next_event:skipped",
                 reason="autonomous_plan_retry_backoff",
-                backoff_seconds=self._autonomous_plan_retry_backoff_seconds,
+                backoff_seconds=self._autonomous_reconsider_after_seconds,
                 last_rejected_at=self._last_autonomous_plan_rejected_at,
             )
             return None
@@ -399,13 +503,6 @@ class AgentLifeService:
             )
             return None
 
-        not_before = now
-        if is_autonomous_lookahead and self._last_autonomous_talk_planned_at is not None:
-            not_before = max(
-                now,
-                self._last_autonomous_talk_planned_at
-                + timedelta(seconds=autonomous_talk_interval_seconds),
-            )
         self._trace_logger.write(
             "agent_life_service:plan_next_event:planned",
             event_type=AgentEventType.CURIOSITY_PEAK.value,
@@ -424,15 +521,20 @@ class AgentLifeService:
         payload: dict[str, Any] = {
             "reason": "internal_drive",
             "drive": self._agent_state.current_drive.strongest_drive_name(),
-            "autonomous_planned_for": not_before.isoformat(),
+            "autonomous_planned_for": now.isoformat(),
+            "interaction_environment": {
+                "observation_source": "internal_state",
+                "input_authority_role": "system",
+                "direct_user_addressed": False,
+                "ambient_activity_observed": False,
+                "foreground_activity_kind": None,
+                "interruption_cost": "unknown",
+            },
         }
         if is_autonomous_lookahead:
-            payload.update(
-                {
-                    "lookahead": True,
-                    "not_before": not_before.isoformat(),
-                }
-            )
+            # 同じActivity内のTurn間隔は、前Turnの発声後pauseで決める。
+            # 先読み時点の絶対時刻を予約すると、LLM/TTS待ちが未来へ累積する。
+            payload["lookahead"] = True
         if resume_reason is not None and resume_reason != "no_conversation":
             payload["resume_reason"] = resume_reason
         if continuation_result is not None:
@@ -513,6 +615,9 @@ class AgentLifeService:
                 accepted_at = event.occurred_at
             self._last_autonomous_talk_planned_at = accepted_at
             self._last_autonomous_plan_rejected_at = None
+            self._autonomous_reconsider_after_seconds = (
+                self._autonomous_plan_retry_backoff_seconds
+            )
             self._explicit_resume_reason = None
             self._observed_ongoing_activity_id = None
             self._trace_logger.write(
@@ -675,19 +780,25 @@ class AgentLifeService:
         event: AgentEvent,
         *,
         rejected_at: datetime | None = None,
+        reconsider_after_seconds: float | None = None,
     ) -> None:
-        """採用されなかった自律候補に短い再試行バックオフだけを適用する。"""
+        """LLMが採用しなかった候補の再評価時刻を保持する。"""
 
         if event.event_type != AgentEventType.CURIOSITY_PEAK:
             return
         self._last_autonomous_plan_rejected_at = (
             rejected_at or datetime.now(timezone.utc)
         )
+        self._autonomous_reconsider_after_seconds = (
+            min(300.0, max(5.0, reconsider_after_seconds))
+            if reconsider_after_seconds is not None
+            else self._autonomous_plan_retry_backoff_seconds
+        )
         self._trace_logger.write(
             "agent_life_service:autonomous_plan:rejected",
             source_event_id=event.event_id,
             rejected_at=self._last_autonomous_plan_rejected_at,
-            retry_backoff_seconds=self._autonomous_plan_retry_backoff_seconds,
+            retry_backoff_seconds=self._autonomous_reconsider_after_seconds,
         )
 
     def _persist_relationship_memory(
@@ -873,6 +984,14 @@ class AgentLifeService:
         if not isinstance(value, (int, float)):
             return max(0.0, min(1.0, default))
         return max(0.0, min(1.0, float(value)))
+
+    @staticmethod
+    def _clamp01(value: float) -> float:
+        return max(0.0, min(1.0, value))
+
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return "".join(character for character in text if not character.isspace())
 
     @staticmethod
     def _estimate_importance(text: str) -> float:

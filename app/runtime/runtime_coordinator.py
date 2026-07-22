@@ -286,6 +286,7 @@ class RuntimeCoordinator:
             self._activity_manager.complete_processed_activity(activity.activity_id)
             self._agent_life_service.sync_from_activity_manager()
             raise
+        action_plan_group = await self._action_scheduler.prepare(action_plan_group)
         output_result = await self._action_scheduler.execute(action_plan_group)
         if (
             output_result is not None
@@ -373,6 +374,7 @@ class RuntimeCoordinator:
             filtered_event = self._event_filter.filter(event)
             if filtered_event is None:
                 continue
+            foreground_at_receipt = self._activity_manager.foreground_activity
             self._record_conversation_input(filtered_event)
             self._agent_life_service.handle_event(filtered_event)
             subscriber = next(
@@ -388,6 +390,14 @@ class RuntimeCoordinator:
                 await subscriber(filtered_event)
                 continue
             if filtered_event.event_type == AgentEventType.USER_TEXT:
+                if (
+                    foreground_at_receipt is not None
+                    and foreground_at_receipt.activity_type
+                    == ActivityType.AUTONOMOUS_TALK
+                ):
+                    self._action_scheduler.cancel_pending_segments(
+                        foreground_at_receipt.activity_id
+                    )
                 self._trace_logger.info(
                     "runtime_coordinator:event_received",
                     **filtered_event.trace_context.as_log_fields(),
@@ -433,7 +443,11 @@ class RuntimeCoordinator:
                 event_id=event.event_id,
             )
             prioritized_event = self._event_prioritizer.prioritize(filtered_event)
-            foreground_before_input = self._activity_manager.foreground_activity
+            foreground_before_input = (
+                foreground_at_receipt
+                if prioritized_event.event_type == AgentEventType.USER_TEXT
+                else self._activity_manager.foreground_activity
+            )
             prepared_activity = self._activity_manager.prepare_user_input(
                 prioritized_event
             )
@@ -580,11 +594,11 @@ class RuntimeCoordinator:
     @staticmethod
     def _startup_activity_definition() -> ActivityDefinition:
         return ActivityDefinition(
-            activity_type=ActivityType.STARTUP_REACTION.value,
-            display_name="起動直後の反応",
+            activity_type=ActivityType.AWAKENING.value,
+            display_name="覚醒と状況認識",
             required_capability=None,
             provider_plugin_id="runtime",
-            description="現在状態を総合して起動直後の最初のActivityを行う",
+            description="起動後の状態を整え、発話せずに周囲を認識する",
             supported_operations=(ActivityOperation.START,),
             constraints_schema={"type": "object", "additionalProperties": True},
         )
@@ -628,7 +642,7 @@ class RuntimeCoordinator:
             else manager.list_activity_definitions()
         )
         if event.event_type == AgentEventType.APP_STARTED:
-            definitions = (*definitions, self._startup_activity_definition())
+            definitions = (self._startup_activity_definition(),)
         planning_context = BehaviorPlanningContext(
             user_text=str(event.payload.get("text") or ""),
             source_event_id=event.event_id,
@@ -744,7 +758,23 @@ class RuntimeCoordinator:
                     ),
                     waiting=revised is not None,
                 )
-        if plan is None:
+        if plan is None and event.event_type == AgentEventType.APP_STARTED:
+            situation_payload = {
+                "event_type": AgentEventType.APP_STARTED.value,
+                "lifecycle_phase": "awakening",
+                "speech_required": False,
+            }
+            plan = ActivityPlan(
+                decision=BehaviorDecision.START_ACTIVITY,
+                activity_type=ActivityType.AWAKENING.value,
+                goal="起動後の状態を整え、発話せずに周囲を認識する",
+                required_capability=None,
+                provider_plugin_id="runtime",
+                operation=ActivityOperation.START,
+                reason="app_started_runtime_activity",
+                planning_reason="app_started",
+            )
+        elif plan is None:
             situation = await planner.evaluate_situation(planning_context)
             plan = await planner.plan(planning_context, situation)
             situation_payload = asdict(situation)
@@ -1760,6 +1790,7 @@ class RuntimeCoordinator:
         result = await self._handle_event(event)
         if event.event_type == AgentEventType.APP_STARTED:
             self._startup_completed = True
+            self._agent_life_service.record_awakening_completed()
             self._trace_logger.info(
                 "runtime_coordinator:startup_completed",
                 source_event_id=event.event_id,
@@ -1980,6 +2011,7 @@ class RuntimeCoordinator:
         self._trace_logger.write(
             "runtime_coordinator:handle_event:actions_execute_start"
         )
+        action_plan_group = await self._action_scheduler.prepare(action_plan_group)
         output_result = await self._action_scheduler.execute(action_plan_group)
         if (
             output_result is not None

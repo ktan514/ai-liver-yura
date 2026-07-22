@@ -271,6 +271,17 @@ class ActivityExecutorThread(threading.Thread):
                     ),
                     reason="speak_completed",
                 )
+                if self._agent_life_service.should_complete_autonomous_activity(
+                    activity_id=planned_activity.activity.activity_id
+                ):
+                    self._activity_manager.request_activity_completion(
+                        planned_activity.activity.activity_id
+                    )
+                    self._trace_logger.info(
+                        "activity_executor_thread:autonomous_completion_requested",
+                        activity_id=planned_activity.activity.activity_id,
+                        reason="topic_continuation_strength_decayed",
+                    )
             else:
                 self._trace_logger.info(
                     "activity_executor_thread:autonomous_memory_not_saved",

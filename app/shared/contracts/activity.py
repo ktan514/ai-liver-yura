@@ -25,6 +25,7 @@ class ActivityOperation(str, Enum):
 
 
 class SpeechAct(str, Enum):
+    GREETING = "greeting"
     STATEMENT = "statement"
     QUESTION = "question"
     REQUEST = "request"
