@@ -145,6 +145,8 @@ RuntimeSupervisor / RuntimeCoordinator
 - APIキー、Authorization、Password、Token、DSNなどはLogger共通の再帰マスク処理を通し、個別Adapterで独自のマスク処理を重複実装しない
 - 正規化済みユーザー入力は `log_user_input` が有効な場合だけDEBUGへ記録し、INFOへ本文を出さない
 - INFO概要とDEBUG詳細には同じローテーション設定を適用する
+- 調査用の`logs/conversation.jsonl`には、LLMからTTSへ渡した原稿、Coreが受理したconsole入力、YouTube comment入力を、生テキストのまま時系列で記録する
+- 会話ログは`timestamp`、`speaker`（`llm` / `console` / `comment`等）、`speaker_name`、`source`、`text`、追跡IDを持ち、Runtimeの詳細ログ設定とは独立して出力する
 
 ## 現在の主要フロー
 

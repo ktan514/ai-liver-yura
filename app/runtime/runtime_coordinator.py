@@ -73,6 +73,7 @@ from app.shared.contracts.plugins.runtime import (
     PluginCapability,
     UserIntentInterpreter,
 )
+from app.utils.conversation_log import ConversationLogger
 from app.utils.trace import TraceLogger
 
 
@@ -104,6 +105,7 @@ class RuntimeCoordinator:
         require_startup_completion: bool = False,
         async_initializers: tuple[Callable[[], Awaitable[None]], ...] = (),
         autonomous_planning_poll_seconds: float = 0.5,
+        conversation_logger: ConversationLogger | None = None,
     ) -> None:
         self._event_queue = event_queue
         self._activity_manager = activity_manager
@@ -132,6 +134,7 @@ class RuntimeCoordinator:
         self._running = False
         self._thread_join_timeout_seconds = 1.0
         self._trace_logger = TraceLogger()
+        self._conversation_logger = conversation_logger or ConversationLogger()
         self._event_subscribers: list[
             tuple[
                 AgentEventType,
@@ -370,6 +373,7 @@ class RuntimeCoordinator:
             filtered_event = self._event_filter.filter(event)
             if filtered_event is None:
                 continue
+            self._record_conversation_input(filtered_event)
             self._agent_life_service.handle_event(filtered_event)
             subscriber = next(
                 (
@@ -501,6 +505,36 @@ class RuntimeCoordinator:
                 queue_empty_before_put=self._event_queue.empty(),
             )
             await self._event_queue.put(buffered_event)
+
+    def _record_conversation_input(self, event: AgentEvent) -> None:
+        """LLM経路が受理した外部会話入力を、加工前の本文で記録する。"""
+
+        if event.event_type == AgentEventType.USER_TEXT:
+            text = event.payload.get("text")
+            source = str(event.payload.get("source") or "console")
+            speaker = "console" if source == "console" else "user"
+            speaker_name = None
+        elif event.event_type == AgentEventType.YOUTUBE_COMMENT:
+            text = event.payload.get("comment") or event.payload.get("text")
+            source = "comment"
+            speaker = "comment"
+            speaker_name = str(
+                event.payload.get("author_name")
+                or event.payload.get("display_name")
+                or "viewer"
+            )
+        else:
+            return
+        if not isinstance(text, str):
+            return
+        self._conversation_logger.record(
+            speaker=speaker,
+            source=source,
+            text=text,
+            speaker_name=speaker_name,
+            occurred_at=event.occurred_at,
+            event_id=event.event_id,
+        )
 
     def _has_plugin_capability(self, capability: str) -> bool:
         manager = self._plugin_manager

@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 
@@ -10,6 +11,7 @@ from app.domain.topic import TopicCategory, TopicHistory
 from app.domain.topic_memory import SimilarTopicMemory, TopicMemoryEntry
 from app.ports.memory_summary_generator import MemorySummaryGenerator
 from app.usecases import ExecuteActionUsecase
+from app.utils.conversation_log import ConversationLogger
 
 
 class FakeEventPublisher:
@@ -47,6 +49,26 @@ class FailingSpeechSynthesizer:
         self, text: str, voice_intent: VoiceIntent | None = None
     ) -> bytes:
         raise RuntimeError("VOICEVOX unavailable")
+
+
+@pytest.mark.asyncio
+async def test_prepare_records_text_handed_to_tts_once(tmp_path) -> None:
+    log_path = tmp_path / "conversation.jsonl"
+    usecase = ExecuteActionUsecase(
+        speech_synthesizer=FakeSpeechSynthesizer(),
+        audio_player=FakeAudioPlayer(),
+        conversation_logger=ConversationLogger(log_path),
+    )
+    action = ActionPlan(action_type=ActionType.SPEAK, text="読み上げる原稿")
+
+    prepared = await usecase.prepare(action)
+    await usecase.execute(prepared)
+
+    records = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert len(records) == 1
+    assert records[0]["speaker"] == "llm"
+    assert records[0]["source"] == "tts"
+    assert records[0]["text"] == "読み上げる原稿"
 
 
 # FakeTopicClassifier for testing topic classification and history recording

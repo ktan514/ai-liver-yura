@@ -19,6 +19,7 @@ from app.ports.event_publisher import EventPublisher
 from app.ports.memory_summary_generator import MemorySummaryGenerator
 from app.ports.speech_synthesizer import SpeechSynthesizer
 from app.ports.topic_memory_store import TopicMemoryStore
+from app.utils.conversation_log import ConversationLogger
 from app.utils.trace import TraceLogger
 
 
@@ -37,6 +38,7 @@ class ExecuteActionUsecase:
         speech_synthesizer: SpeechSynthesizer | None = None,
         audio_player: AudioPlayer | None = None,
         background_topic_memory: bool = False,
+        conversation_logger: ConversationLogger | None = None,
     ) -> None:
         self._event_publisher = event_publisher
         self._short_term_memory = short_term_memory or ShortTermMemory()
@@ -51,6 +53,7 @@ class ExecuteActionUsecase:
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._background_tasks_lock = threading.RLock()
         self._trace_logger = TraceLogger()
+        self._conversation_logger = conversation_logger or ConversationLogger()
 
     async def prepare(self, action_plan: ActionPlan) -> ActionPlan:
         """音声を先に合成する。イベント発行・再生・記憶保存は行わない。"""
@@ -63,6 +66,16 @@ class ExecuteActionUsecase:
         ):
             return action_plan
         voice_intent = action_plan.metadata.get("voice_intent")
+        self._conversation_logger.record(
+            speaker="llm",
+            source="tts",
+            text=action_plan.text,
+            action_id=action_plan.action_id,
+        )
+        action_plan = replace(
+            action_plan,
+            metadata={**action_plan.metadata, "conversation_tts_logged": True},
+        )
         self._trace_logger.write(
             "execute_action_usecase:speak:synthesis_started",
             action_id=action_plan.action_id,
@@ -107,6 +120,17 @@ class ExecuteActionUsecase:
             ],
         )
         if action_plan.action_type == ActionType.SPEAK:
+            if (
+                action_plan.metadata.get("conversation_tts_logged") is not True
+                and self._speech_synthesizer is not None
+                and self._audio_player is not None
+            ):
+                self._conversation_logger.record(
+                    speaker="llm",
+                    source="tts",
+                    text=action_plan.text,
+                    action_id=action_plan.action_id,
+                )
             self._trace_logger.write(
                 "execute_action_usecase:speak:start",
                 action_id=action_plan.action_id,
