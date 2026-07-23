@@ -135,6 +135,46 @@ main {
   75% { transform: translate3d(1px, -2px, 0) rotate(-.2deg); }
 }
 
+/* 広い画面では上部状態カード自体を小型化し、右側へ寄せる。 */
+@media (min-width: 901px) {
+  .command-deck {
+    width: min(860px, calc(100% - clamp(250px, 24vw, 380px)));
+    margin-left: auto;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px 20px;
+    padding: 20px 22px;
+  }
+
+  .command-deck .now {
+    grid-column: 1;
+  }
+
+  .command-deck .mode-badge {
+    grid-column: 2;
+  }
+
+  .command-deck .next-action,
+  .command-deck .notice {
+    grid-column: 1 / -1;
+  }
+
+  .command-deck .next-action {
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+    gap: 14px;
+    padding-top: 14px;
+  }
+
+  .command-deck .prominent-action {
+    min-height: 46px;
+  }
+}
+
+@media (max-width: 1080px) and (min-width: 901px) {
+  .command-deck {
+    width: min(760px, calc(100% - 190px));
+  }
+}
+
 @media (max-width: 620px) {
   :root {
     --sea-level: calc(54vh - var(--sea-rise));
