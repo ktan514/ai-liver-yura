@@ -43,7 +43,7 @@ class EmotionStateUpdater:
             1.0,
         )
         return EmotionState(
-            mood=self._derive_mood(
+            mood=self.derive_mood(
                 reactive,
                 fallback=state.mood,
                 arousal=arousal,
@@ -81,7 +81,7 @@ class EmotionStateUpdater:
             mood=(
                 MoodType.NEUTRAL
                 if settled
-                else self._derive_mood(
+                else self.derive_mood(
                     reactive,
                     fallback=state.mood,
                     arousal=arousal,
@@ -95,13 +95,15 @@ class EmotionStateUpdater:
         )
 
     @staticmethod
-    def _derive_mood(
+    def derive_mood(
         reactive: ReactiveEmotionState,
         *,
-        fallback: MoodType,
-        arousal: float,
-        valence: float,
+        fallback: MoodType = MoodType.NEUTRAL,
+        arousal: float = 0.5,
+        valence: float = 0.0,
     ) -> MoodType:
+        """個別感情から互換用の代表moodを導出する。"""
+
         name, intensity = reactive.dominant()
         if intensity < 0.2:
             if arousal >= 0.8 and valence > 0.15:
