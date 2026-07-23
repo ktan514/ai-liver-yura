@@ -33,11 +33,24 @@ class SemanticMemoryRecord:
 
 @dataclass(frozen=True, slots=True)
 class EmotionHistoryRecord:
+    """感情変化の前後状態と、その変化を生じさせた評価根拠を保持する。"""
+
     source_event_id: str
     before: Mapping[str, object]
     after: Mapping[str, object]
     reason: str
     recorded_at: datetime
+    deltas: Mapping[str, float] = field(default_factory=dict)
+    cause_category: str = "unspecified"
+    cause_summary: str = ""
+    target_id: str | None = None
+    confidence: float = 1.0
+
+    def __post_init__(self) -> None:
+        if not self.source_event_id.strip():
+            raise ValueError("感情履歴のsource_event_idは空にできません。")
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError("感情履歴のconfidenceは0.0以上1.0以下にしてください。")
 
 
 @dataclass(frozen=True, slots=True)
