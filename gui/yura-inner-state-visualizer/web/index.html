@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#050710" />
+    <title>Yura / Inner State</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <canvas id="field" aria-label="ゆらの内面状態を表す粒子ビジュアライザー"></canvas>
+    <div class="veil"></div>
+
+    <header class="topbar">
+      <div class="identity">
+        <span class="eyebrow">YURA / INNER STATE</span>
+        <h1 id="moodLabel">不明な状態</h1>
+      </div>
+      <div class="connection" id="connection">
+        <span class="connection-dot"></span>
+        <span id="connectionText">ゆらを待っています</span>
+      </div>
+      <button class="help-button" id="helpButton" type="button" aria-haspopup="dialog">
+        <span aria-hidden="true">?</span>
+        <span>HELP</span>
+      </button>
+    </header>
+
+    <aside class="readout" aria-label="内面状態の数値">
+      <div class="metric primary">
+        <span>VALENCE</span>
+        <strong id="valence">0.00</strong>
+        <i style="--level: 0%"></i>
+      </div>
+      <div class="metric">
+        <span>AROUSAL</span>
+        <strong id="arousal">0.00</strong>
+        <i style="--level: 0%"></i>
+      </div>
+      <div class="metric">
+        <span>TALK</span>
+        <strong id="talkativeness">0.00</strong>
+        <i style="--level: 0%"></i>
+      </div>
+      <div class="metric">
+        <span>CURIOSITY</span>
+        <strong id="curiosity">0.00</strong>
+        <i style="--level: 0%"></i>
+      </div>
+      <div class="metric">
+        <span>ENERGY</span>
+        <strong id="energy">0.00</strong>
+        <i style="--level: 0%"></i>
+      </div>
+    </aside>
+
+    <footer>
+      <div class="activity">
+        <span>NOW</span>
+        <strong id="activity">UNKNOWN</strong>
+      </div>
+      <time id="observedAt">--:--:--</time>
+    </footer>
+
+    <dialog class="help-dialog" id="helpDialog" aria-labelledby="helpTitle">
+      <div class="help-heading">
+        <div>
+          <span class="eyebrow">HOW TO READ</span>
+          <h2 id="helpTitle">光が映すもの</h2>
+        </div>
+        <button class="help-close" id="helpClose" type="button" aria-label="ヘルプを閉じる">×</button>
+      </div>
+
+      <p class="help-intro">ゆらの内面状態を、色・動き・粒子の形に置き換えて表示しています。</p>
+
+      <section class="help-section" aria-labelledby="helpColorTitle">
+        <h3 id="helpColorTitle">色</h3>
+        <p><strong>気分と快・不快</strong>を表します。暖色ほど快、青色ほど不快寄りです。</p>
+        <div class="mood-colors" aria-label="気分ごとの色">
+          <span class="mood-color neutral">平静</span>
+          <span class="mood-color happy">喜び</span>
+          <span class="mood-color excited">興奮</span>
+          <span class="mood-color angry">怒り</span>
+          <span class="mood-color sad">悲しみ</span>
+          <span class="mood-color tired">疲れ</span>
+        </div>
+      </section>
+
+      <section class="help-section help-grid" aria-label="粒子表現の意味">
+        <p><strong>速さ・脈動・発光</strong><span>覚醒度</span></p>
+        <p><strong>大きさ・明るさ</strong><span>エネルギー</span></p>
+        <p><strong>全体の広がり</strong><span>好奇心</span></p>
+        <p><strong>まとまり</strong><span>集中・関与</span></p>
+        <p><strong>平坦さ・散らばり</strong><span>退屈</span></p>
+        <p><strong>表面の流れ</strong><span>話したさ</span></p>
+        <p><strong>気泡の流れ</strong><span>光の粒子に沿う海中の流れ</span></p>
+      </section>
+    </dialog>
+
+    <script type="module" src="/visualizer.js"></script>
+  </body>
+</html>

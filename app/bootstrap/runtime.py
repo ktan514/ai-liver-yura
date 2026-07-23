@@ -45,6 +45,7 @@ from app.adapters.storage.postgres_topic_memory_store import (
     PostgresTopicMemoryStore,
     PostgresTopicMemoryStoreConfig,
 )
+from app.adapters.telemetry import UdpAgentStatePublisher, UdpAgentStatePublisherConfig
 from app.adapters.topic import (
     LlmTopicClassifier,
     OllamaTopicClassificationConfig,
@@ -1012,6 +1013,14 @@ def create_runtime_coordinator(
         AgentMemoryPlugin.plugin_id,
     ):
         agent_memory_store = None
+    telemetry_enabled = os.getenv("YURA_STATE_TELEMETRY_ENABLED", "1").strip().lower()
+    state_telemetry_publisher = UdpAgentStatePublisher(
+        UdpAgentStatePublisherConfig(
+            host=os.getenv("YURA_STATE_TELEMETRY_HOST", "127.0.0.1"),
+            port=int(os.getenv("YURA_STATE_TELEMETRY_PORT", "8766")),
+            enabled=telemetry_enabled not in {"0", "false", "off"},
+        )
+    )
     agent_life_service = AgentLifeService(
         activity_manager,
         initial_state=AgentState(
@@ -1022,6 +1031,7 @@ def create_runtime_coordinator(
         short_term_memory=short_term_memory,
         relationship_memory_store=relationship_memory_store,
         agent_memory_store=agent_memory_store,
+        state_observer=state_telemetry_publisher.publish,
     )
     response_generator: ResponseGenerator = default_llm_plugin
     situation_generator: ResponseGenerator = situation_llm_plugin

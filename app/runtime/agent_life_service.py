@@ -65,6 +65,7 @@ class AgentLifeService:
         autonomous_activity_policy: AutonomousActivityPolicy | None = None,
         agent_memory_store: AgentMemoryStore | None = None,
         autonomous_plan_retry_backoff_seconds: float = 2.0,
+        state_observer: Callable[[AgentState], None] | None = None,
     ) -> None:
         self._activity_manager = activity_manager
         self._agent_state = initial_state or AgentState()
@@ -105,6 +106,7 @@ class AgentLifeService:
         self._processed_event_ids: deque[str] = deque(maxlen=1024)
         self._processed_event_id_set: set[str] = set()
         self._trace_logger = TraceLogger()
+        self._state_observer = state_observer
 
     @property
     def agent_state(self) -> AgentState:
@@ -898,6 +900,15 @@ class AgentLifeService:
 
         if self._agent_state.memory != before_memory:
             self._persist_agent_memory()
+
+        if self._state_observer is not None:
+            try:
+                self._state_observer(self._agent_state)
+            except Exception as error:
+                self._trace_logger.warning(
+                    "agent_life_service:state_observer:failed",
+                    error_type=type(error).__name__,
+                )
 
         return self._agent_state
 
