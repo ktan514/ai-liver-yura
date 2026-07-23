@@ -1,0 +1,137 @@
+:root {
+  --sea-rise: 0px;
+  --sea-level: calc(48vh - var(--sea-rise));
+}
+
+html {
+  background: #041c2b;
+}
+
+body {
+  position: relative;
+  isolation: isolate;
+  overflow-x: hidden;
+  background: transparent;
+}
+
+.seascape {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: #0b3447;
+}
+
+.seascape::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: var(--sea-level);
+  min-height: 150px;
+  background:
+    radial-gradient(circle at 18% 18%, rgba(255, 232, 185, .5), transparent 18rem),
+    radial-gradient(ellipse at 72% 12%, rgba(223, 247, 255, .2), transparent 24rem),
+    linear-gradient(to bottom, #5a9bb0 0%, #39798f 58%, #28657b 100%);
+  transition: height 80ms linear;
+}
+
+.seascape::after {
+  content: "";
+  position: absolute;
+  inset: var(--sea-level) 0 0;
+  background:
+    linear-gradient(105deg, transparent 12%, rgba(178, 234, 248, .07) 24%, transparent 36%) 0 0 / 430px 100%,
+    radial-gradient(ellipse at 50% 0%, rgba(107, 210, 234, .2), transparent 42%),
+    repeating-linear-gradient(174deg, rgba(169, 226, 240, .055) 0 1px, transparent 1px 27px),
+    linear-gradient(to bottom, #15566b 0%, #0c4055 32%, #082f43 64%, #041d30 100%);
+  box-shadow: inset 0 22px 52px rgba(116, 219, 242, .12);
+  transition: inset 80ms linear;
+}
+
+.sea-surface {
+  position: absolute;
+  top: var(--sea-level);
+  left: -3%;
+  width: 106%;
+  height: 12px;
+  transform: translateY(-5px);
+  border-top: 2px solid rgba(221, 251, 255, .72);
+  background:
+    radial-gradient(ellipse at 12px 0, transparent 9px, rgba(210, 247, 255, .34) 10px 11px, transparent 12px) 0 0 / 54px 9px repeat-x;
+  filter: drop-shadow(0 8px 16px rgba(112, 224, 248, .35));
+  opacity: .88;
+  transition: top 80ms linear;
+}
+
+.lighthouse {
+  position: absolute;
+  left: clamp(24px, 8vw, 150px);
+  top: calc(var(--sea-level) - 188px);
+  width: 142px;
+  height: 198px;
+  opacity: .9;
+  filter: drop-shadow(0 18px 17px rgba(1, 18, 27, .38));
+  background: center bottom / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 142 198'%3E%3Cg fill='none' stroke-linejoin='round'%3E%3Cpath d='M38 188h74l-9-13H48z' fill='%23061f2b' stroke='%23588491' stroke-width='2'/%3E%3Cpath d='M57 176l8-112h25l8 112z' fill='%23d9edf0' stroke='%230b3544' stroke-width='3'/%3E%3Cpath d='M63 98h30l2 20H61z' fill='%23749cab' opacity='.78'/%3E%3Cpath d='M62 64h31l-5-12H67z' fill='%2309212d' stroke='%23699aaa' stroke-width='2'/%3E%3Cpath d='M67 52V32h22v20' fill='%23cce7eb' stroke='%230b3544' stroke-width='3'/%3E%3Cpath d='M62 32h32l-6-9H68z' fill='%23071f2a' stroke='%23699aaa' stroke-width='2'/%3E%3Cpath d='M72 45V35m12 10V35' stroke='%230c4050' stroke-width='3'/%3E%3Cpath d='M58 57h35' stroke='%239fe8ff' stroke-width='2'/%3E%3Cpath d='M89 38l43-12-40 20z' fill='%23dff9ff' opacity='.18' stroke='none'/%3E%3Ccircle cx='78' cy='39' r='3' fill='%23fff1b8' stroke='none'/%3E%3Cpath d='M49 188c-14-3-25-1-35 5h114c-11-7-23-8-32-5z' fill='%23051b26' stroke='none'/%3E%3C/g%3E%3C/svg%3E");
+  transition: top 80ms linear;
+}
+
+.seascape-depth {
+  position: absolute;
+  inset: var(--sea-level) 0 0;
+  opacity: .3;
+  background:
+    radial-gradient(circle at 18% 34%, rgba(201, 242, 250, .32) 0 1px, transparent 2px),
+    radial-gradient(circle at 72% 48%, rgba(201, 242, 250, .22) 0 1px, transparent 2px),
+    radial-gradient(circle at 42% 70%, rgba(201, 242, 250, .16) 0 1px, transparent 2px);
+  background-size: 110px 160px, 150px 210px, 190px 250px;
+  transition: inset 80ms linear;
+}
+
+.topbar,
+main {
+  position: relative;
+  z-index: 1;
+}
+
+.topbar {
+  background: rgba(7, 35, 47, .78);
+}
+
+.command-deck,
+article,
+fieldset,
+.service-card,
+.metric,
+details,
+.tabs {
+  background-color: rgba(6, 35, 48, .82);
+}
+
+@media (max-width: 620px) {
+  :root {
+    --sea-level: calc(43vh - var(--sea-rise));
+  }
+
+  .lighthouse {
+    left: 18px;
+    width: 102px;
+    height: 144px;
+    top: calc(var(--sea-level) - 137px);
+    opacity: .68;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --sea-rise: 0px !important;
+  }
+
+  .seascape::before,
+  .seascape::after,
+  .sea-surface,
+  .lighthouse,
+  .seascape-depth {
+    transition: none;
+  }
+}
