@@ -65,7 +65,15 @@ class VoiceOutputPlugin:
         try:
             await self._player.play(audio_data)
         except Exception as error:
-            self._mark_unavailable("playback_failed", error)
+            # Webブラウザの一時的な切断、再生拒否、タイムアウトは、
+            # 音声合成Capability自体の恒久的な故障を意味しない。
+            # 次の発話で再試行できるよう、利用可能状態は維持する。
+            self._logger.warning(
+                "voice output playback failed; keeping capability available: "
+                "capability=%s error=%s",
+                self.SPEECH_CAPABILITY,
+                type(error).__name__,
+            )
             raise
 
     def _mark_unavailable(self, reason: str, error: Exception) -> None:
