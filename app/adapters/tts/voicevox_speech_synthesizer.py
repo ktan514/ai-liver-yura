@@ -119,7 +119,25 @@ class VoiceVoxSpeechSynthesizer(SpeechSynthesizer):
             if voice_intent is not None
             else self._config.default_profile
         )
-        return profiles.get(profile_name, profiles[self._config.default_profile])
+        base = profiles.get(profile_name, profiles[self._config.default_profile])
+        if voice_intent is None:
+            return base
+        return VoiceVoxSpeechProfile(
+            speed_scale=self._clamp(base.speed_scale * voice_intent.speed, 0.5, 2.0),
+            pitch_scale=self._clamp(base.pitch_scale + voice_intent.pitch * 0.15, -0.15, 0.15),
+            intonation_scale=self._clamp(
+                base.intonation_scale
+                * voice_intent.intonation
+                * (1.0 + voice_intent.emotional_leakage * 0.25),
+                0.0,
+                2.0,
+            ),
+            volume_scale=self._clamp(base.volume_scale * voice_intent.volume, 0.0, 2.0),
+        )
+
+    @staticmethod
+    def _clamp(value: float, minimum: float, maximum: float) -> float:
+        return max(minimum, min(maximum, value))
 
     def _create_audio_query(self, text: str) -> dict[str, Any]:
         query = parse.urlencode({"text": text, "speaker": self._config.speaker_id})
