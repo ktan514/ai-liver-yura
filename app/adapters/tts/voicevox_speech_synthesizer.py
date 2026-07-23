@@ -11,6 +11,7 @@ from app.adapters.tts.audio_query_corrector import (
     NoOpAudioQueryCorrector,
 )
 from app.adapters.tts.pronunciation_corrector import PronunciationCorrector
+from app.adapters.tts.voicevox_voice_intent_mapper import VoiceVoxVoiceIntentMapper
 from app.domain.character_response import VoiceIntent
 from app.ports.speech_synthesizer import SpeechSynthesizer
 from app.utils.async_blocking import run_cancellable_blocking
@@ -42,10 +43,12 @@ class VoiceVoxSpeechSynthesizer(SpeechSynthesizer):
         config: VoiceVoxSpeechSynthesizerConfig,
         pronunciation_corrector: PronunciationCorrector | None = None,
         audio_query_corrector: AudioQueryCorrector | None = None,
+        voice_intent_mapper: VoiceVoxVoiceIntentMapper | None = None,
     ) -> None:
         self._config = config
         self._pronunciation_corrector = pronunciation_corrector
         self._audio_query_corrector = audio_query_corrector or NoOpAudioQueryCorrector()
+        self._voice_intent_mapper = voice_intent_mapper or VoiceVoxVoiceIntentMapper()
         self._trace_logger = TraceLogger()
 
     async def synthesize(
@@ -114,30 +117,30 @@ class VoiceVoxSpeechSynthesizer(SpeechSynthesizer):
         profiles = self._config.voice_intent_profiles or {
             "neutral": VoiceVoxSpeechProfile(1.0, 0.0, 1.0, 1.0)
         }
+        default_profile = profiles.get(self._config.default_profile)
+        if default_profile is None:
+            default_profile = next(iter(profiles.values()))
         profile_name = (
             voice_intent.style
             if voice_intent is not None
             else self._config.default_profile
         )
-        base = profiles.get(profile_name, profiles[self._config.default_profile])
+        base = profiles.get(profile_name, default_profile)
         if voice_intent is None:
             return base
-        return VoiceVoxSpeechProfile(
-            speed_scale=self._clamp(base.speed_scale * voice_intent.speed, 0.5, 2.0),
-            pitch_scale=self._clamp(base.pitch_scale + voice_intent.pitch * 0.15, -0.15, 0.15),
-            intonation_scale=self._clamp(
-                base.intonation_scale
-                * voice_intent.intonation
-                * (1.0 + voice_intent.emotional_leakage * 0.25),
-                0.0,
-                2.0,
-            ),
-            volume_scale=self._clamp(base.volume_scale * voice_intent.volume, 0.0, 2.0),
+        speed, pitch, intonation, volume = self._voice_intent_mapper.map(
+            base_speed=base.speed_scale,
+            base_pitch=base.pitch_scale,
+            base_intonation=base.intonation_scale,
+            base_volume=base.volume_scale,
+            intent=voice_intent,
         )
-
-    @staticmethod
-    def _clamp(value: float, minimum: float, maximum: float) -> float:
-        return max(minimum, min(maximum, value))
+        return VoiceVoxSpeechProfile(
+            speed_scale=speed,
+            pitch_scale=pitch,
+            intonation_scale=intonation,
+            volume_scale=volume,
+        )
 
     def _create_audio_query(self, text: str) -> dict[str, Any]:
         query = parse.urlencode({"text": text, "speaker": self._config.speaker_id})
