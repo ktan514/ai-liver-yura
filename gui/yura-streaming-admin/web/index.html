@@ -15,7 +15,7 @@
       <div class="seascape-depth"></div>
     </div>
 
-    <header class="topbar">
+    <header class="topbar primary-topbar">
       <div class="brand">
         <p class="eyebrow">YURA / MARITIME CONTROL TOWER</p>
         <h1>配信の灯台</h1>
@@ -27,9 +27,25 @@
         <button data-tab="diagnostics">診断・ログ</button>
       </nav>
       <div class="topbar-actions">
-        <div id="connection" class="connection pending"><span></span><b>CORE 接続確認中</b></div>
+        <div class="connection pending"><span></span><b>CORE 接続確認中</b></div>
         <button data-action="emergency-stop" class="danger emergency-button">緊急停止</button>
-        <button id="settingsOpen" class="icon-button" type="button" aria-label="設定を開く" aria-haspopup="dialog">•••</button>
+        <button class="icon-button settings-open" type="button" aria-label="設定を開く" aria-haspopup="dialog">•••</button>
+      </div>
+    </header>
+    <div id="compactHeaderSentinel" class="compact-header-sentinel" aria-hidden="true"></div>
+
+    <header id="compactHeader" class="compact-topbar" aria-hidden="true">
+      <div class="compact-brand">配信の灯台</div>
+      <nav class="header-nav" aria-label="管理画面（固定）">
+        <button class="active" data-tab="overview">概要</button>
+        <button data-tab="comments">コメント</button>
+        <button data-tab="progress">配信進行</button>
+        <button data-tab="diagnostics">診断・ログ</button>
+      </nav>
+      <div class="topbar-actions">
+        <div class="connection pending"><span></span><b>CORE 接続確認中</b></div>
+        <button data-action="emergency-stop" class="danger emergency-button">緊急停止</button>
+        <button class="icon-button settings-open" type="button" aria-label="設定を開く" aria-haspopup="dialog">•••</button>
       </div>
     </header>
 
