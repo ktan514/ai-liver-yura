@@ -5,6 +5,7 @@ New code must import factory functions from ``app.bootstrap`` or
 Adapter or Plugin composition.
 """
 
+from app.bootstrap.emotion_runtime import create_runtime_coordinator
 from app.bootstrap.runtime import (
     StreamPreparationRuntime,
     create_audio_player,
@@ -13,7 +14,6 @@ from app.bootstrap.runtime import (
     create_llm_role_generator,
     create_memory_summary_generator,
     create_response_generator,
-    create_runtime_coordinator,
     create_speech_synthesizer,
     create_stream_preparation_runtime,
     create_streaming_demo_config,
