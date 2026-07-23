@@ -59,9 +59,12 @@ class AgentMemoryState:
             for item in self.emotion_history
         ):
             return self
+        normalized = self._normalize_emotion_history(entry)
         return replace(
             self,
-            emotion_history=(*self.emotion_history, entry)[-self.max_history_entries :],
+            emotion_history=(*self.emotion_history, normalized)[
+                -self.max_history_entries :
+            ],
         )
 
     def with_unfinished_activities(
@@ -124,6 +127,11 @@ class AgentMemoryState:
                     "before": item.before.get("mood"),
                     "after": item.after.get("mood"),
                     "reason": item.reason,
+                    "deltas": dict(item.deltas),
+                    "cause_category": item.cause_category,
+                    "cause_summary": item.cause_summary,
+                    "target_id": item.target_id,
+                    "confidence": item.confidence,
                     "recorded_at": item.recorded_at.isoformat(),
                 }
                 for item in self.emotion_history[-limit:]
@@ -156,3 +164,58 @@ class AgentMemoryState:
             emotion_history=snapshot.emotion_history[-max_history_entries:],
             max_history_entries=max_history_entries,
         )
+
+    @classmethod
+    def _normalize_emotion_history(
+        cls, entry: EmotionHistoryEntry
+    ) -> EmotionHistoryEntry:
+        deltas = dict(entry.deltas) or cls._calculate_emotion_deltas(
+            entry.before, entry.after
+        )
+        cause_category = entry.cause_category
+        cause_summary = entry.cause_summary
+        if cause_category == "unspecified":
+            cause_category = entry.reason
+        if not cause_summary:
+            cause_summary = cls._cause_summary(entry.reason)
+        return replace(
+            entry,
+            deltas=deltas,
+            cause_category=cause_category,
+            cause_summary=cause_summary,
+        )
+
+    @staticmethod
+    def _calculate_emotion_deltas(
+        before: object, after: object
+    ) -> dict[str, float]:
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            return {}
+        before_reactive = before.get("reactive")
+        after_reactive = after.get("reactive")
+        if not isinstance(before_reactive, dict) or not isinstance(after_reactive, dict):
+            return {}
+        result: dict[str, float] = {}
+        for name, after_value in after_reactive.items():
+            before_value = before_reactive.get(name)
+            if (
+                isinstance(after_value, (int, float))
+                and not isinstance(after_value, bool)
+                and isinstance(before_value, (int, float))
+                and not isinstance(before_value, bool)
+            ):
+                delta = float(after_value) - float(before_value)
+                if delta != 0.0:
+                    result[str(name)] = delta
+        return result
+
+    @staticmethod
+    def _cause_summary(reason: str) -> str:
+        return {
+            "user_attention_received": "ユーザーから注意を向けられた",
+            "viewer_attention_received": "視聴者から注意を向けられた",
+            "action_failed": "実行しようとした行動が失敗した",
+            "stream_started": "配信が開始された",
+            "stream_ended": "配信が終了した",
+            "no_change": "感情を変化させる刺激は確認されなかった",
+        }.get(reason, reason.replace("_", " "))
