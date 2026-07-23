@@ -58,10 +58,21 @@ class EmotionAppraisalService:
             recent_context=recent_context,
             situation=dict(situation or {}),
         )
-        appraisal = await self._model.appraise(context)
+        try:
+            appraisal = await self._model.appraise(context)
+        except Exception as error:
+            return replace(
+                event,
+                payload={
+                    **event.payload,
+                    "emotion_appraisal_failed": {
+                        "error_type": type(error).__name__,
+                        "source_event_id": event.event_id,
+                    },
+                },
+            )
         cause = asdict(appraisal.cause) if appraisal.cause is not None else None
         structured = {
-            **appraisal.reactive_deltas(),
             "joy_delta": appraisal.joy_delta,
             "amusement_delta": appraisal.amusement_delta,
             "anger_delta": appraisal.anger_delta,
