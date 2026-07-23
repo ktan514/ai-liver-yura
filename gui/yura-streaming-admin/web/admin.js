@@ -27,6 +27,62 @@ function setOptions(element, items, valueKey, labelKey) {
   if ([...element.options].some((option) => option.value === selected)) element.value = selected;
 }
 
+function getActionState(auth, session, health) {
+  const status = session.status;
+  const demo = health.runtime_mode === "streaming_demo";
+  const modes = session.adapter_modes || health.adapter_modes || {};
+  const realObs = modes.obs === "obs_websocket";
+  return {
+    authenticate: !["authenticated", "authentication_in_progress"].includes(auth.status),
+    prepare: auth.status === "authenticated",
+    start: status === "ready" && (demo || realObs),
+    end: ["live", "running"].includes(status),
+    "emergency-stop": ["live", "running", "starting", "ending"].includes(status),
+    "retry-opening": state.data.opening?.status === "failed" && state.data.opening?.retryable !== false,
+    "retry-main": state.data.main_segment?.status === "failed" && Boolean(state.data.main_segment?.retryable),
+    "retry-comment": Boolean(state.data.comment_response?.activity?.retryable),
+  };
+}
+
+function resolveNextAction(auth, session, health, enabled) {
+  if (enabled.end) return { action: "end", label: "配信を通常終了", description: "配信中です。終了時は通常終了を実行してください。" };
+  if (enabled.start) return { action: "start", label: "配信開始", description: "準備が完了しています。確認後に配信を開始できます。" };
+  if (enabled.prepare) return { action: "prepare", label: "配信準備を開始", description: "配信枠と進行表を確認して準備を開始してください。" };
+  if (enabled.authenticate) return { action: "authenticate", label: "YouTube認証", description: "最初にYouTube認証を完了してください。" };
+  const status = text(session.status || health.status, "待機中");
+  return { action: "prepare", label: "操作待ち", description: `${status}。Coreから次の操作が有効になるのを待っています。`, disabled: true };
+}
+
+function renderServiceCards(services) {
+  const refreshActions = { OBS: "refresh-obs", YouTube: "refresh-youtube" };
+  $("#serviceCards").innerHTML = services.map((item) => {
+    const action = refreshActions[item.name];
+    const button = action ? `<button data-action="${action}" class="compact-button">状態を更新</button>` : "";
+    return `<div class="service-card"><p class="label">${esc(item.name)}</p><div class="status">${esc(item.status)}</div><dl><dt>更新方式</dt><dd>${esc(item.update_mode)}</dd><dt>鮮度</dt><dd>${esc(item.freshness)}</dd><dt>最終更新</dt><dd>${esc(item.last_updated_at)}</dd></dl>${button}</div>`;
+  }).join("");
+  bindActionButtons($("#serviceCards"));
+}
+
+function renderRecoveryCards(enabled) {
+  const items = [
+    { key: "retry-opening", title: "Openingの実行に失敗しました", source: state.data.opening, label: "Openingを再試行" },
+    { key: "retry-main", title: "Mainの実行に失敗しました", source: state.data.main_segment, label: "Mainを再試行" },
+    { key: "retry-comment", title: "コメント応答に失敗しました", source: state.data.comment_response?.activity, label: "コメント応答を再試行" },
+  ].filter((item) => enabled[item.key]);
+  const area = $("#recoveryArea");
+  area.innerHTML = items.map((item) => `<article class="recovery-card"><p class="label">RECOVERY REQUIRED</p><h3>${esc(item.title)}</h3><p>${esc(item.source?.error_message || item.source?.error_code || "再試行可能な失敗を検出しました。")}</p><button data-action="${item.key}">${esc(item.label)}</button></article>`).join("");
+  area.classList.toggle("hidden", items.length === 0);
+  bindActionButtons(area);
+}
+
+function bindActionButtons(root = document) {
+  root.querySelectorAll("[data-action]").forEach((button) => {
+    if (button.dataset.bound === "true") return;
+    button.dataset.bound = "true";
+    button.addEventListener("click", () => runAction(button.dataset.action));
+  });
+}
+
 function render() {
   const data = state.data, health = data.health || {}, consoleData = data.console || {};
   const session = data.session || {}, auth = data.auth || {}, modes = health.adapter_modes || session.adapter_modes || {};
@@ -42,7 +98,7 @@ function render() {
     { name: "YouTube", status: auth.status || "unknown", freshness: "unknown" },
     { name: "配信進行", status: session.status || "idle", freshness: "unknown" },
   ];
-  $("#serviceCards").innerHTML = services.map((item) => `<div class="service-card"><p class="label">${esc(item.name)}</p><div class="status">${esc(item.status)}</div><dl><dt>更新方式</dt><dd>${esc(item.update_mode)}</dd><dt>鮮度</dt><dd>${esc(item.freshness)}</dd><dt>最終更新</dt><dd>${esc(item.last_updated_at)}</dd></dl></div>`).join("");
+  renderServiceCards(services);
 
   const operator = consoleData.operator_action || {};
   $("#operatorTitle").textContent = text(operator.title, "現在、必要な人間操作はありません。");
@@ -80,31 +136,22 @@ function renderTimeline(rows) {
 }
 
 function applyButtonState(auth, session, health) {
-  const status = session.status, demo = health.runtime_mode === "streaming_demo";
-  const modes = session.adapter_modes || health.adapter_modes || {};
-  const realObs = modes.obs === "obs_websocket";
-  const canStart = status === "ready" && (demo || realObs);
-  const enabled = {
-    authenticate: !["authenticated", "authentication_in_progress"].includes(auth.status),
-    prepare: auth.status === "authenticated",
-    start: canStart,
-    end: ["live", "running"].includes(status),
-    "emergency-stop": ["live", "running", "starting", "ending"].includes(status),
-    "retry-opening": state.data.opening?.status === "failed" && state.data.opening?.retryable !== false,
-    "retry-main": state.data.main_segment?.status === "failed" && Boolean(state.data.main_segment?.retryable),
-    "retry-comment": Boolean(state.data.comment_response?.activity?.retryable),
-  };
-  $$("[data-action]").forEach((button) => {
+  const enabled = getActionState(auth, session, health);
+  $$('[data-action]').forEach((button) => {
     if (button.dataset.action in enabled) button.disabled = !enabled[button.dataset.action];
   });
-  $("#demoForm").hidden = !demo;
+  const next = resolveNextAction(auth, session, health, enabled);
+  const nextButton = $("#nextActionButton");
+  nextButton.dataset.action = next.action;
+  nextButton.textContent = next.label;
+  nextButton.disabled = Boolean(next.disabled) || !enabled[next.action];
+  $("#nextActionDescription").textContent = next.description;
+  renderRecoveryCards(enabled);
+  $("#demoForm").hidden = health.runtime_mode !== "streaming_demo";
 }
 
 async function load() {
-  if (state.loading) {
-    state.pending = true;
-    return;
-  }
+  if (state.loading) { state.pending = true; return; }
   state.loading = true;
   try {
     state.data = await request("/api/bootstrap");
@@ -115,18 +162,12 @@ async function load() {
     showNotice(error.message);
   } finally {
     state.loading = false;
-    if (state.pending) {
-      state.pending = false;
-      queueMicrotask(load);
-    }
+    if (state.pending) { state.pending = false; queueMicrotask(load); }
   }
 }
 
 function configureTimers(settings) {
-  const key = JSON.stringify([
-    settings.obs_auto_refresh, settings.obs_refresh_interval,
-    settings.youtube_auto_refresh, settings.youtube_refresh_interval,
-  ]);
+  const key = JSON.stringify([settings.obs_auto_refresh, settings.obs_refresh_interval, settings.youtube_auto_refresh, settings.youtube_refresh_interval]);
   if (key === state.timerKey) return;
   state.timerKey = key;
   state.timers.forEach(clearInterval);
@@ -142,7 +183,7 @@ function setConnection(online) {
 }
 function showNotice(message, success = false) {
   $("#notice").textContent = message;
-  $("#notice").style.color = success ? "#64e0a1" : "";
+  $("#notice").style.color = success ? "#8ef0c2" : "";
 }
 
 async function runAction(name, quiet = false) {
@@ -167,13 +208,13 @@ async function runAction(name, quiet = false) {
   } catch (error) { if (!quiet) showNotice(error.message); }
 }
 
-$$(".tabs button").forEach((button) => button.addEventListener("click", () => {
-  $$(".tabs button").forEach((item) => item.classList.toggle("active", item === button));
-  $$(".panel").forEach((panel) => panel.classList.toggle("active", panel.id === button.dataset.tab));
+$$('.tabs button').forEach((button) => button.addEventListener("click", () => {
+  $$('.tabs button').forEach((item) => item.classList.toggle("active", item === button));
+  $$('.panel').forEach((panel) => panel.classList.toggle("active", panel.id === button.dataset.tab));
   if (button.dataset.tab === "diagnostics") loadDiagnostics();
   if (button.dataset.tab === "settings") loadSettings();
 }));
-$$("[data-action]").forEach((button) => button.addEventListener("click", () => runAction(button.dataset.action)));
+bindActionButtons();
 $("#timelineFilter").addEventListener("change", () => renderTimeline(state.data.console?.timeline || []));
 $("#diagnosticsRefresh").addEventListener("click", loadDiagnostics);
 $("#diagnosticsClear").addEventListener("click", () => { state.diagnostics = []; render(); });
@@ -185,6 +226,7 @@ async function loadDiagnostics() {
     render();
   } catch (error) { showNotice(error.message); }
 }
+
 async function loadSettings() {
   try {
     const values = await request("/api/settings"), form = $("#settingsForm");
@@ -195,6 +237,7 @@ async function loadSettings() {
     });
   } catch (error) { showNotice(error.message); }
 }
+
 $("#settingsForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const payload = {};
@@ -207,6 +250,7 @@ $("#settingsForm").addEventListener("submit", async (event) => {
     showNotice("設定を適用しました。", true);
   } catch (error) { showNotice(error.message); }
 });
+
 $("#demoForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const preset = $("#demoPreset").value, value = $("#demoComment").value.trim();
