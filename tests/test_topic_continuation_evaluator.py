@@ -40,21 +40,24 @@ def test_completed_low_importance_topic_is_not_resumed() -> None:
     assert result.decision == TopicContinuationDecision.START_NEW_TOPIC
 
 
-def test_important_unfinished_topic_is_resumed_with_reintroduction() -> None:
+def test_listener_intervention_suspends_only_important_unfinished_topic() -> None:
     result = TopicContinuationEvaluator().evaluate(
         _topic(
-            importance=0.9, interest=0.85, incompleteness=0.95, interruption_turns=1
+            importance=0.9,
+            interest=0.85,
+            incompleteness=0.95,
+            interruption_turns=1,
         ),
         emotion=EmotionState(mood=MoodType.HAPPY, arousal=0.7, talkativeness=0.8),
         drive=DriveState(curiosity=0.8),
         now=NOW + timedelta(minutes=1),
     )
 
-    assert result.decision == TopicContinuationDecision.RESUME_ORIGINAL
-    assert result.reintroduction_required is True
+    assert result.decision == TopicContinuationDecision.SUSPEND_ORIGINAL
+    assert "listener_intervened" in result.reasons
 
 
-def test_interruption_topic_can_be_selected_when_curiosity_is_high() -> None:
+def test_listener_intervention_does_not_branch_to_latest_user_topic() -> None:
     result = TopicContinuationEvaluator().evaluate(
         _topic(
             original_text="海の生き物",
@@ -69,8 +72,8 @@ def test_interruption_topic_can_be_selected_when_curiosity_is_high() -> None:
         now=NOW + timedelta(minutes=2),
     )
 
-    assert result.decision == TopicContinuationDecision.BRANCH_FROM_INTERRUPTION
-    assert result.selected_topic == "山の生き物"
+    assert result.decision == TopicContinuationDecision.ABANDON_ORIGINAL
+    assert result.selected_topic is None
 
 
 def test_angry_mood_does_not_mechanically_resume_cheerful_topic() -> None:
@@ -87,22 +90,40 @@ def test_angry_mood_does_not_mechanically_resume_cheerful_topic() -> None:
     }
 
 
-def test_suspended_topic_is_reframed_after_emotion_recovers() -> None:
+def test_two_autonomous_turns_yield_to_listener() -> None:
     result = TopicContinuationEvaluator().evaluate(
         _topic(
             status=TopicLifecycleStatus.SUSPENDED,
-            importance=0.85,
-            interest=0.8,
-            incompleteness=0.9,
-            interruption_turns=2,
+            importance=0.95,
+            interest=0.95,
+            incompleteness=0.95,
+            turn_count=2,
+        ),
+        emotion=EmotionState(mood=MoodType.NEUTRAL, talkativeness=0.9),
+        drive=DriveState(curiosity=0.9),
+        now=NOW + timedelta(minutes=1),
+    )
+
+    assert result.decision == TopicContinuationDecision.ABANDON_ORIGINAL
+    assert "autonomous_turn_limit_reached" in result.reasons
+
+
+def test_suspended_topic_without_intervention_can_be_reframed() -> None:
+    result = TopicContinuationEvaluator().evaluate(
+        _topic(
+            status=TopicLifecycleStatus.SUSPENDED,
+            importance=0.95,
+            interest=0.9,
+            incompleteness=0.95,
+            interruption_turns=0,
+            turn_count=1,
         ),
         emotion=EmotionState(mood=MoodType.NEUTRAL, valence=0.1, talkativeness=0.7),
         drive=DriveState(curiosity=0.8),
-        now=NOW + timedelta(minutes=3),
+        now=NOW + timedelta(minutes=1),
     )
 
     assert result.decision == TopicContinuationDecision.RESUME_WITH_REFRAMING
-    assert result.reintroduction_required is True
 
 
 def test_exhausted_topic_is_not_resumed() -> None:
