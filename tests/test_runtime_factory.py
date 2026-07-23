@@ -22,7 +22,7 @@ from app.domain.activities import Activity, ActivityType
 from app.domain.behavior import BehaviorDecision
 from app.plugins.games import GamesPlugin
 from app.ports.response_generator import ResponseGenerator
-from app.runtime import RuntimeCoordinator
+from app.runtime.emotion_runtime_integration import EmotionAwareRuntimeCoordinator
 
 
 class FactoryShiritoriResponseGenerator(ResponseGenerator):
@@ -325,7 +325,7 @@ def test_legacy_runtime_factory_module_reexports_bootstrap_factory() -> None:
     assert compatibility_factory is create_runtime_coordinator
 
 
-def test_create_runtime_coordinator_returns_runtime_coordinator() -> None:
+def test_create_runtime_coordinator_returns_emotion_aware_runtime() -> None:
     config = load_app_config()
     config = replace(
         config,
@@ -336,7 +336,7 @@ def test_create_runtime_coordinator_returns_runtime_coordinator() -> None:
 
     runtime = create_runtime_coordinator(config)
 
-    assert isinstance(runtime, RuntimeCoordinator)
+    assert isinstance(runtime, EmotionAwareRuntimeCoordinator)
     assert runtime.plugin_manager is not None
     assert runtime.plugin_manager.get_plugin("games") is not None
     assert runtime.plugin_manager.get_plugin("voice_output") is not None
