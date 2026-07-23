@@ -27,9 +27,9 @@
         <button data-tab="diagnostics">診断・ログ</button>
       </nav>
       <div class="topbar-actions">
-        <div class="connection pending"><span></span><b>CORE 接続確認中</b></div>
+        <div id="connection" class="connection pending"><span></span><b>CORE 接続確認中</b></div>
         <button data-action="emergency-stop" class="danger emergency-button">緊急停止</button>
-        <button class="icon-button settings-open" type="button" aria-label="設定を開く" aria-haspopup="dialog">•••</button>
+        <button id="settingsOpen" class="icon-button settings-open" type="button" aria-label="設定を開く" aria-haspopup="dialog">•••</button>
       </div>
     </header>
     <div id="compactHeaderSentinel" class="compact-header-sentinel" aria-hidden="true"></div>
@@ -43,9 +43,9 @@
         <button data-tab="diagnostics">診断・ログ</button>
       </nav>
       <div class="topbar-actions">
-        <div class="connection pending"><span></span><b>CORE 接続確認中</b></div>
+        <div class="connection pending compact-connection"><span></span><b>CORE 接続確認中</b></div>
         <button data-action="emergency-stop" class="danger emergency-button">緊急停止</button>
-        <button class="icon-button settings-open" type="button" aria-label="設定を開く" aria-haspopup="dialog">•••</button>
+        <button class="icon-button settings-open compact-settings-open" type="button" aria-label="設定を開く" aria-haspopup="dialog">•••</button>
       </div>
     </header>
 
