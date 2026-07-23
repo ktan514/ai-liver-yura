@@ -1,34 +1,35 @@
 const root = document.documentElement;
-const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-const SEA_RISE_PER_SCROLL_PIXEL = 0.42;
+const topbar = document.querySelector(".topbar");
 let frameRequested = false;
 
-function seaBasePixels() {
-  const value = getComputedStyle(root).getPropertyValue("--sea-base").trim();
-  if (value.endsWith("vh")) return window.innerHeight * Number.parseFloat(value) / 100;
-  if (value.endsWith("px")) return Number.parseFloat(value);
-  return window.innerHeight * 0.4;
-}
-
-function updateSeaLevel() {
+function updateViewportState() {
   frameRequested = false;
-  if (reducedMotion.matches) {
-    root.style.setProperty("--sea-rise", "0px");
-    return;
-  }
 
-  const maximumRise = Math.max(seaBasePixels() - 8, 0);
-  const rise = Math.min(maximumRise, Math.max(window.scrollY, 0) * SEA_RISE_PER_SCROLL_PIXEL);
-  root.style.setProperty("--sea-rise", `${Math.round(rise)}px`);
+  const documentHeight = Math.max(
+    document.documentElement.scrollHeight,
+    document.body.scrollHeight,
+    window.innerHeight
+  );
+  root.style.setProperty("--seascape-height", documentHeight + "px");
+
+  if (topbar) {
+    topbar.classList.toggle("compact", window.scrollY > 72);
+  }
 }
 
-function requestSeaLevelUpdate() {
+function requestViewportUpdate() {
   if (frameRequested) return;
   frameRequested = true;
-  window.requestAnimationFrame(updateSeaLevel);
+  window.requestAnimationFrame(updateViewportState);
 }
 
-window.addEventListener("scroll", requestSeaLevelUpdate, { passive: true });
-window.addEventListener("resize", requestSeaLevelUpdate, { passive: true });
-reducedMotion.addEventListener?.("change", requestSeaLevelUpdate);
-requestSeaLevelUpdate();
+window.addEventListener("scroll", requestViewportUpdate, { passive: true });
+window.addEventListener("resize", requestViewportUpdate, { passive: true });
+window.addEventListener("load", requestViewportUpdate, { once: true });
+
+if (window.ResizeObserver) {
+  const observer = new ResizeObserver(requestViewportUpdate);
+  observer.observe(document.body);
+}
+
+requestViewportUpdate();
