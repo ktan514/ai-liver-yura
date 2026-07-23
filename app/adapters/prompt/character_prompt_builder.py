@@ -40,7 +40,10 @@ class CharacterPromptBuilder:
             "pause_after_secondsへ感情が漏れてよい。ただし自動的に怒鳴らせたり泣かせたりしない。",
             "『怒ってみて』『悲しそうに読んで』などの表現要求は演技であり、"
             "内部感情が実際に変化したという事実を新たに主張しない。",
-            "voice_intentには感情値ではなく、意図する話し方を高レベルなstyleで指定する。",
+            "voice_intentはTTSエンジン固有値ではなく、意図する話し方を高レベルに指定する。"
+            "styleに加え、speed、pitch、intonation、volume、breathiness、emotional_leakageを必要な範囲で使う。",
+            "speedは0.5〜2.0、pitchは-1.0〜1.0、intonationとvolumeは0.0〜2.0、"
+            "breathinessとemotional_leakageは0.0〜1.0で指定する。",
             "emotion、発話内容の明暗、話のテンポ、溜めを総合し、発話後の間を"
             "pause_after_secondsで決める。",
             "speech_act、conversation_phase、initiative_levelは確定済みの対話方針である。"
@@ -50,7 +53,9 @@ class CharacterPromptBuilder:
             "voice_intent/pause_after_secondsを持つ。",
             "JSONのみ返す: "
             '{"speech":"発話","expression":"smile","gesture":null,'
-            '"voice_intent":{"style":"bright"},'
+            '"voice_intent":{"style":"bright","speed":1.0,"pitch":0.0,'
+            '"intonation":1.0,"volume":1.0,"breathiness":0.0,'
+            '"emotional_leakage":0.0},'
             '"pause_after_seconds":0.0,'
             '"reaction_segments":null,'
             '"claims":[{"claim_type":"conversation_only","activity_type":null,'
