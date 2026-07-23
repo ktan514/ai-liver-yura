@@ -3,46 +3,62 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="theme-color" content="#090d18" />
+    <meta name="theme-color" content="#173b4a" />
     <title>配信の灯台 | Yura</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <header class="topbar">
-      <div>
-        <p class="eyebrow">YURA / STREAMING ADMIN</p>
+      <div class="brand">
+        <p class="eyebrow">YURA / MARITIME CONTROL TOWER</p>
         <h1>配信の灯台</h1>
       </div>
-      <div id="connection" class="connection pending"><span></span><b>CORE 接続確認中</b></div>
+      <div class="topbar-actions">
+        <div id="connection" class="connection pending"><span></span><b>CORE 接続確認中</b></div>
+        <button data-action="emergency-stop" class="danger emergency-button">緊急停止</button>
+      </div>
     </header>
 
     <main>
-      <section class="command-deck">
+      <section class="command-deck" aria-labelledby="currentState">
         <div class="now">
           <p class="label">CURRENT STATE</p>
           <h2 id="currentState">状態を取得しています</h2>
           <p id="currentMessage">Coreから配信状態を読み込んでいます。</p>
         </div>
         <div id="modeBadge" class="mode-badge">ADAPTER MODE UNKNOWN</div>
-
-        <div class="selectors">
-          <label>配信枠<select id="broadcastSelect"></select></label>
-          <label>進行表<select id="runOfShowSelect"></select></label>
-        </div>
-        <div class="actions">
-          <button data-action="authenticate">YouTube認証</button>
-          <button data-action="prepare" class="primary">配信準備</button>
-          <button data-action="start" class="primary">配信開始</button>
-          <button data-action="end">通常終了</button>
-          <button data-action="refresh-broadcasts">配信枠を更新</button>
-          <button data-action="refresh-obs">OBS状態を更新</button>
-          <button data-action="refresh-youtube">YouTube状態を更新</button>
-          <button data-action="retry-opening">Openingを再試行</button>
-          <button data-action="retry-main">Mainを再試行</button>
-          <button data-action="retry-comment">コメント応答を再試行</button>
-          <button data-action="emergency-stop" class="danger">緊急停止</button>
+        <div class="next-action">
+          <div>
+            <p class="label">NEXT ACTION</p>
+            <p id="nextActionDescription">利用可能な操作を確認しています。</p>
+          </div>
+          <button id="nextActionButton" class="primary prominent-action" data-action="prepare">配信準備</button>
         </div>
         <p id="notice" class="notice" role="status"></p>
+      </section>
+
+      <section class="overview-grid" aria-label="配信準備と人間操作">
+        <article class="setup-card">
+          <div class="section-heading">
+            <div>
+              <p class="label">STREAM SETUP</p>
+              <h3>配信設定</h3>
+            </div>
+            <button data-action="refresh-broadcasts" class="compact-button">一覧を再取得</button>
+          </div>
+          <div class="selectors">
+            <label>配信枠<select id="broadcastSelect"></select></label>
+            <label>進行表<select id="runOfShowSelect"></select></label>
+          </div>
+          <button data-action="authenticate" class="secondary-action">YouTube認証</button>
+        </article>
+
+        <article class="operator-card">
+          <p class="label">OPERATOR ACTION</p>
+          <h3 id="operatorTitle">現在、必要な人間操作はありません。</h3>
+          <p id="operatorDescription"></p>
+          <a id="studioLink" class="button-link hidden" target="_blank" rel="noreferrer">YouTube Studioを開く</a>
+        </article>
       </section>
 
       <nav class="tabs" aria-label="管理画面">
@@ -55,13 +71,11 @@
 
       <section id="overview" class="panel active">
         <div id="serviceCards" class="card-grid"></div>
-        <article class="operator-card">
-          <p class="label">OPERATOR ACTION</p>
-          <h3 id="operatorTitle">現在、必要な人間操作はありません。</h3>
-          <p id="operatorDescription"></p>
-          <a id="studioLink" class="button-link hidden" target="_blank" rel="noreferrer">YouTube Studioを開く</a>
-        </article>
-        <article><h3>操作分担</h3><div id="responsibilities" class="table-wrap"></div></article>
+        <div id="recoveryArea" class="recovery-grid" aria-live="polite"></div>
+        <details class="responsibility-panel">
+          <summary>操作分担を確認</summary>
+          <div id="responsibilities" class="table-wrap"></div>
+        </details>
       </section>
 
       <section id="comments" class="panel">
