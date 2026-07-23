@@ -83,7 +83,11 @@ def test_agent_life_service_applies_event_appraisal_and_elapsed_decay() -> None:
     assert after_event.arousal == pytest.approx(0.58)
     assert after_event.valence == pytest.approx(-0.08)
     assert after_event.talkativeness == pytest.approx(0.48)
-    assert after_decay == EmotionState()
+    assert after_decay.arousal == pytest.approx(0.5)
+    assert after_decay.valence == pytest.approx(0.0)
+    assert after_decay.talkativeness == pytest.approx(0.5)
+    assert after_decay.reactive.sadness == pytest.approx(0.02)
+    assert after_decay.reactive.emotional_pressure == pytest.approx(0.0133333333)
 
 
 def test_emotion_state_updater_keeps_mixed_emotions_and_derives_angry_mood() -> None:
