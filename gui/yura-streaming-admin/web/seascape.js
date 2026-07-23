@@ -1,6 +1,10 @@
 const root = document.documentElement;
 const compactHeader = document.querySelector("#compactHeader");
 const compactHeaderSentinel = document.querySelector("#compactHeaderSentinel");
+const primaryConnection = document.querySelector("#connection");
+const compactConnection = document.querySelector(".compact-connection");
+const primarySettingsButton = document.querySelector("#settingsOpen");
+const compactSettingsButton = document.querySelector(".compact-settings-open");
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
 
 let frameRequested = false;
@@ -38,6 +42,14 @@ function setCompactHeaderVisible(visible) {
   compactHeader.setAttribute("aria-hidden", String(!visible));
 }
 
+function syncCompactConnection() {
+  if (!primaryConnection || !compactConnection) return;
+  compactConnection.className = primaryConnection.className.replace(/\bcompact-connection\b/g, "").trim() + " compact-connection";
+  const primaryLabel = primaryConnection.querySelector("b")?.textContent || "CORE 接続確認中";
+  const compactLabel = compactConnection.querySelector("b");
+  if (compactLabel && compactLabel.textContent !== primaryLabel) compactLabel.textContent = primaryLabel;
+}
+
 if (compactHeader && compactHeaderSentinel && "IntersectionObserver" in window) {
   const observer = new IntersectionObserver(
     ([entry]) => setCompactHeaderVisible(!entry.isIntersecting),
@@ -53,6 +65,20 @@ if (compactHeader && compactHeaderSentinel && "IntersectionObserver" in window) 
   window.addEventListener("resize", updateCompactFallback, { passive: true });
   updateCompactFallback();
 }
+
+if (primaryConnection && compactConnection && "MutationObserver" in window) {
+  const connectionObserver = new MutationObserver(syncCompactConnection);
+  connectionObserver.observe(primaryConnection, {
+    attributes: true,
+    attributeFilter: ["class"],
+    childList: true,
+    characterData: true,
+    subtree: true,
+  });
+  syncCompactConnection();
+}
+
+compactSettingsButton?.addEventListener("click", () => primarySettingsButton?.click());
 
 window.addEventListener("scroll", requestSeascapeUpdate, { passive: true });
 window.addEventListener("resize", requestSeascapeUpdate, { passive: true });
