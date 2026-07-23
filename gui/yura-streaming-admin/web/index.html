@@ -34,45 +34,45 @@
     </header>
 
     <main>
-      <section class="command-deck" aria-labelledby="currentState">
-        <div class="now">
-          <p class="label">CURRENT STATE</p>
-          <h2 id="currentState">状態を取得しています</h2>
-          <p id="currentMessage">Coreから配信状態を読み込んでいます。</p>
-        </div>
-        <div id="modeBadge" class="mode-badge">ADAPTER MODE UNKNOWN</div>
-        <div class="next-action">
-          <div>
-            <p class="label">NEXT ACTION</p>
-            <p id="nextActionDescription">利用可能な操作を確認しています。</p>
-          </div>
-          <button id="nextActionButton" class="primary prominent-action" data-action="prepare">配信準備</button>
-        </div>
-        <p id="notice" class="notice" role="status"></p>
-      </section>
-
-      <section class="overview-grid" aria-label="配信準備と人間操作">
-        <article class="setup-card">
-          <div class="section-heading">
-            <div><p class="label">STREAM SETUP</p><h3>配信設定</h3></div>
-            <button data-action="refresh-broadcasts" class="compact-button">一覧を再取得</button>
-          </div>
-          <div class="selectors">
-            <label>配信枠<select id="broadcastSelect"></select></label>
-            <label>進行表<select id="runOfShowSelect"></select></label>
-          </div>
-          <button data-action="authenticate" class="secondary-action">YouTube認証</button>
-        </article>
-
-        <article class="operator-card">
-          <p class="label">OPERATOR ACTION</p>
-          <h3 id="operatorTitle">現在、必要な人間操作はありません。</h3>
-          <p id="operatorDescription"></p>
-          <a id="studioLink" class="button-link hidden" target="_blank" rel="noreferrer">YouTube Studioを開く</a>
-        </article>
-      </section>
-
       <section id="overview" class="panel active">
+        <section class="command-deck" aria-labelledby="currentState">
+          <div class="now">
+            <p class="label">CURRENT STATE</p>
+            <h2 id="currentState">状態を取得しています</h2>
+            <p id="currentMessage">Coreから配信状態を読み込んでいます。</p>
+          </div>
+          <div id="modeBadge" class="mode-badge">ADAPTER MODE UNKNOWN</div>
+          <div class="next-action">
+            <div>
+              <p class="label">NEXT ACTION</p>
+              <p id="nextActionDescription">利用可能な操作を確認しています。</p>
+            </div>
+            <button id="nextActionButton" class="primary prominent-action" data-action="prepare">配信準備</button>
+          </div>
+          <p id="notice" class="notice" role="status"></p>
+        </section>
+
+        <section class="overview-grid" aria-label="配信準備と人間操作">
+          <article class="setup-card">
+            <div class="section-heading">
+              <div><p class="label">STREAM SETUP</p><h3>配信設定</h3></div>
+              <button data-action="refresh-broadcasts" class="compact-button">一覧を再取得</button>
+            </div>
+            <div class="selectors">
+              <label>配信枠<select id="broadcastSelect"></select></label>
+              <label>進行表<select id="runOfShowSelect"></select></label>
+            </div>
+            <button data-action="authenticate" class="secondary-action">YouTube認証</button>
+          </article>
+
+          <article class="operator-card">
+            <p class="label">OPERATOR ACTION</p>
+            <h3 id="operatorTitle">現在、必要な人間操作はありません。</h3>
+            <p id="operatorDescription"></p>
+            <a id="studioLink" class="button-link hidden" target="_blank" rel="noreferrer">YouTube Studioを開く</a>
+          </article>
+        </section>
+
         <div id="serviceCards" class="card-grid"></div>
         <div id="recoveryArea" class="recovery-grid hidden" aria-live="polite"></div>
         <details class="responsibility-panel">
