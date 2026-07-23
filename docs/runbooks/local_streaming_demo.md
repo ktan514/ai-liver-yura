@@ -17,10 +17,10 @@ AI_LIVER_MANUAL_CHECK_LOG=1 \
 Terminal 2で管理画面を起動します。
 
 ```bash
-.venv/bin/python -m streaming_admin
+.venv/bin/python gui/yura-streaming-admin/server.py
 ```
 
-管理画面上部に `LOCAL DEMO / FAKE ADAPTERS` が常時表示されることを確認してください。APIは既定で `127.0.0.1:8765` へbindします。localhost以外へbindする場合は既存の `AI_LIVER_ADMIN_API_TOKEN` が必須です。
+管理画面上部のモード表示が `FAKE YOUTUBE / FAKE OBS` になることを確認してください。Core APIは既定で `127.0.0.1:8765`、管理画面は`127.0.0.1:8780`へbindします。localhost以外へCore APIをbindする場合は既存の `AI_LIVER_ADMIN_API_TOKEN` が必須です。
 
 ## 手動確認ログ
 
@@ -45,7 +45,8 @@ for line in path.read_text(encoding='utf-8').splitlines():
 PY
 ```
 
-ログにはコメント本文、Authorization、OAuth token、raw API responseを保存しません。管理画面の「Timeline / 詳細」タブで現在のパスと書込件数を確認できます。
+ログにはコメント本文、Authorization、OAuth token、raw API responseを保存しません。管理画面の
+「配信進行」と「診断・ログ」タブでイベントを確認できます。
 
 ## Happy Path
 

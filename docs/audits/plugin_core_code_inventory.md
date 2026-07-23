@@ -4,6 +4,9 @@
 性質: 設計書ではなく、現状コードの静的棚卸しレポート  
 制約: 本番コード・設定・テスト・設計書は変更していない。Secret値、`.env`、実YouTube/OBSは参照していない。
 
+> 注記（2026-07-23）: この文書は調査時点の履歴である。PyQt6版`streaming_admin`は廃止され、
+> 現在の管理画面は`gui/yura-streaming-admin`のWeb UIへ移行した。
+
 ## 1. Executive Summary
 
 配信の縦経路は、Admin APIがComposition Rootとなる構成では一通り接続されている。ただし「Streaming Plugin」としての実装境界はまだ成立していない。`app/plugins/youtube_streaming`は準備Capabilityの宣言に留まり、実際のSession、Lifecycle、開始・終了、コメント処理は`app/domain/streaming`、`app/usecases`、`app/admin_api/service.py`、`app/runtime`へ分散している。

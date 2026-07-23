@@ -749,7 +749,7 @@ RuntimeCoordinator は、最終的には RuntimeSupervisor に近い Host とし
 
 - `run_once()` はユニットテスト・スモークテスト・手動確認に使う
 - `run()` はAIライバーの常時稼働Runtimeとして使う
-- `stop()` はPyQt6管理画面、終了シグナル、テストから停止するために使う
+- `stop()` はWeb管理画面の管理操作、終了シグナル、テストから停止するために使う
 
 現時点の RuntimeCoordinator は旧構成の名残として Event から Activity 生成、ActionPlan 生成、Action 実行までを直列に近い形で担当している。
 今後はこの責務を段階的に分解し、RuntimeCoordinator は Event 投入、状態同期、各 Loop の起動停止、終了制御、例外監視を行う Host 寄りの責務へ移す。
@@ -787,7 +787,7 @@ RuntimeCoordinator.run の基本動作:
 - Input Receiver は別タスクとして並行動作し、`publish_event()` / `publish_events()` を呼ぶ
 - `run()` は Runtime の判断・実行ループに集中する
 - Action の並列制御は ActionScheduler が担当する
-- 将来的には、PyQt6管理画面から `run()` 開始・`stop()` 停止を操作する
+- 将来的には、Web管理画面から `run()` 開始・`stop()` 停止を操作する
 
 現時点の実装仕様:
 
@@ -1484,7 +1484,7 @@ pytest
 - OBS Adapter の追加
 - YouTube コメント入力 Adapter の追加
 - 音声認識入力 Adapter の追加
-- PyQt6 管理画面から Runtime の start / stop を操作する機能
+- Web管理画面から Runtime の start / stop を操作する機能
 
 ## Games Pluginの入力分類と実行
 

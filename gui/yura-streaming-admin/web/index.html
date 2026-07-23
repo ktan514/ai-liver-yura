@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#090d18" />
+    <title>配信の灯台 | Yura</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">YURA / STREAMING ADMIN</p>
+        <h1>配信の灯台</h1>
+      </div>
+      <div id="connection" class="connection pending"><span></span><b>CORE 接続確認中</b></div>
+    </header>
+
+    <main>
+      <section class="command-deck">
+        <div class="now">
+          <p class="label">CURRENT STATE</p>
+          <h2 id="currentState">状態を取得しています</h2>
+          <p id="currentMessage">Coreから配信状態を読み込んでいます。</p>
+        </div>
+        <div id="modeBadge" class="mode-badge">ADAPTER MODE UNKNOWN</div>
+
+        <div class="selectors">
+          <label>配信枠<select id="broadcastSelect"></select></label>
+          <label>進行表<select id="runOfShowSelect"></select></label>
+        </div>
+        <div class="actions">
+          <button data-action="authenticate">YouTube認証</button>
+          <button data-action="prepare" class="primary">配信準備</button>
+          <button data-action="start" class="primary">配信開始</button>
+          <button data-action="end">通常終了</button>
+          <button data-action="refresh-broadcasts">配信枠を更新</button>
+          <button data-action="refresh-obs">OBS状態を更新</button>
+          <button data-action="refresh-youtube">YouTube状態を更新</button>
+          <button data-action="retry-opening">Openingを再試行</button>
+          <button data-action="retry-main">Mainを再試行</button>
+          <button data-action="retry-comment">コメント応答を再試行</button>
+          <button data-action="emergency-stop" class="danger">緊急停止</button>
+        </div>
+        <p id="notice" class="notice" role="status"></p>
+      </section>
+
+      <nav class="tabs" aria-label="管理画面">
+        <button class="active" data-tab="overview">概要</button>
+        <button data-tab="comments">コメント</button>
+        <button data-tab="progress">配信進行</button>
+        <button data-tab="diagnostics">診断・ログ</button>
+        <button data-tab="settings">設定</button>
+      </nav>
+
+      <section id="overview" class="panel active">
+        <div id="serviceCards" class="card-grid"></div>
+        <article class="operator-card">
+          <p class="label">OPERATOR ACTION</p>
+          <h3 id="operatorTitle">現在、必要な人間操作はありません。</h3>
+          <p id="operatorDescription"></p>
+          <a id="studioLink" class="button-link hidden" target="_blank" rel="noreferrer">YouTube Studioを開く</a>
+        </article>
+        <article><h3>操作分担</h3><div id="responsibilities" class="table-wrap"></div></article>
+      </section>
+
+      <section id="comments" class="panel">
+        <div class="metric-grid" id="commentMetrics"></div>
+        <article><h3>コメントキュー</h3><div id="commentTable" class="table-wrap"></div></article>
+        <form id="demoForm" class="demo-form">
+          <select id="demoPreset"><option>通常</option><option>質問</option><option>Prompt Injection</option><option>個人情報</option><option>Paid</option></select>
+          <input id="demoComment" maxlength="1000" placeholder="Demoコメントを入力" />
+          <button>Fakeコメント投入</button>
+        </form>
+      </section>
+
+      <section id="progress" class="panel">
+        <article><h3>配信工程</h3><div id="steps" class="table-wrap"></div></article>
+        <article>
+          <div class="section-heading"><h3>タイムライン</h3><select id="timelineFilter"><option value="all">すべて</option><option value="lifecycle">配信進行</option><option value="youtube">YouTube</option><option value="obs">OBS</option><option value="speech">発話</option></select></div>
+          <div id="timeline" class="timeline"></div>
+        </article>
+      </section>
+
+      <section id="diagnostics" class="panel">
+        <div class="inline-actions">
+          <button id="diagnosticsRefresh">診断情報を更新</button>
+          <button data-action="diagnostics-save">直近の診断情報を保存</button>
+          <button id="diagnosticsClear">表示をクリア</button>
+        </div>
+        <article><h3>診断イベント</h3><div id="diagnosticTable" class="table-wrap"></div></article>
+      </section>
+
+      <section id="settings" class="panel">
+        <form id="settingsForm" class="settings-grid">
+          <fieldset><legend>ログ設定</legend>
+            <label><span>ファイルログ</span><input name="file_enabled" type="checkbox" /></label>
+            <label><span>ログレベル</span><select name="level"><option>ERROR</option><option>WARNING</option><option>INFO</option><option>DEBUG</option><option>TRACE</option></select></label>
+            <label><span>保存先</span><input name="path" /></label>
+            <label><span>最大保持日数</span><input name="retention_days" type="number" min="0" max="365" /></label>
+          </fieldset>
+          <fieldset><legend>OBS更新設定</legend>
+            <label><span>自動更新</span><input name="obs_auto_refresh" type="checkbox" /></label>
+            <label><span>更新間隔（秒）</span><input name="obs_refresh_interval" type="number" min="1" max="3600" /></label>
+          </fieldset>
+          <fieldset><legend>YouTube更新設定</legend>
+            <label><span>自動更新</span><input name="youtube_auto_refresh" type="checkbox" /></label>
+            <label><span>更新間隔（秒）</span><input name="youtube_refresh_interval" type="number" min="1" max="3600" /></label>
+          </fieldset>
+          <fieldset class="wide"><legend>操作・診断設定</legend>
+            <label><span>リングバッファ件数</span><input name="ring_buffer_size" type="number" min="1" max="10000" /></label>
+            <label><span>stale判定（秒）</span><input name="stale_after_seconds" type="number" min="1" max="3600" /></label>
+            <label><span>操作案内</span><input name="show_operator_dialogs" type="checkbox" /></label>
+          </fieldset>
+          <button class="primary wide">設定を適用</button>
+        </form>
+      </section>
+    </main>
+    <script type="module" src="/admin.js"></script>
+  </body>
+</html>

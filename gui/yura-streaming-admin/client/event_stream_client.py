@@ -6,8 +6,8 @@ from collections.abc import Callable
 
 import httpx
 
-from streaming_admin.client.dto import ApiEvent
-from streaming_admin.config import AdminClientConfig
+from client.dto import ApiEvent
+from config import AdminClientConfig
 
 
 class EventStreamClient:

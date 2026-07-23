@@ -12,13 +12,15 @@ ai-liver-yura/
 ├── tests/
 └── gui/
     ├── yura-web-conversation/           # 会話画面
-    └── yura-inner-state-visualizer/     # 内部状態ビジュアライザー
+    ├── yura-inner-state-visualizer/     # 内部状態ビジュアライザー
+    └── yura-streaming-admin/            # 配信管理画面
 ```
 
 各コンポーネントの詳細は、それぞれのREADMEを参照してください。
 
 - [Web Conversation](gui/yura-web-conversation/README.md)
 - [Inner State Visualizer](gui/yura-inner-state-visualizer/README.md)
+- [Streaming Admin](gui/yura-streaming-admin/README.md)
 
 ## 起動
 
@@ -33,12 +35,15 @@ python3 server.py
 cd gui/yura-inner-state-visualizer
 python3 server.py
 
+# 配信管理画面
+.venv/bin/python gui/yura-streaming-admin/server.py
+
 # AI Liver本体（リポジトリ直下）
 .venv/bin/python -m app
 ```
 
 会話画面は <http://127.0.0.1:8770>、内部状態ビジュアライザーは
-<http://127.0.0.1:8765> で開けます。
+<http://127.0.0.1:8765>、配信管理画面は <http://127.0.0.1:8780> で開けます。
 
 ## PostgreSQL（Docker）
 
