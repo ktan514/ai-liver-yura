@@ -39,6 +39,7 @@ def test_memory_state_keeps_categories_separate_and_bounded() -> None:
                 source_event_id=f"event-{index}",
                 before={"mood": "neutral"},
                 after={"mood": "happy"},
+                deltas={"joy": 0.5},
                 reason="test",
                 recorded_at=now,
             )
@@ -50,7 +51,7 @@ def test_memory_state_keeps_categories_separate_and_bounded() -> None:
     assert state.semantic[0].fact == "blue"
 
 
-def test_agent_life_records_episode_emotion_and_unfinished_activity() -> None:
+def test_agent_life_records_episode_and_activity_but_filters_minor_emotion() -> None:
     manager = ActivityManager()
     service = AgentLifeService(manager)
     event = AgentEvent(AgentEventType.USER_TEXT, {"text": "こんにちは"})
@@ -61,7 +62,7 @@ def test_agent_life_records_episode_emotion_and_unfinished_activity() -> None:
     state = service.handle_event(event)
 
     assert state.memory.episodic[-1].event_id == event.event_id
-    assert state.memory.emotion_history[-1].source_event_id == event.event_id
+    assert state.memory.emotion_history == ()
     assert state.memory.unfinished_activities[0].activity_id == activity.activity_id
 
 
