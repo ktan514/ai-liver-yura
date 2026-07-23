@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.domain.emotions import EmotionAppraisal, EmotionState, MoodType
+from app.domain.emotions import (
+    EmotionAppraisal,
+    EmotionAppraisalAcceptancePolicy,
+    EmotionState,
+    MoodType,
+)
 from app.domain.emotions.emotion_state import ReactiveEmotionState
 
 
@@ -18,9 +23,18 @@ class EmotionStateUpdater:
         "emotional_pressure": 2700.0,
     }
 
+    def __init__(
+        self,
+        acceptance_policy: EmotionAppraisalAcceptancePolicy | None = None,
+    ) -> None:
+        self._acceptance_policy = (
+            acceptance_policy or EmotionAppraisalAcceptancePolicy()
+        )
+
     def apply(self, state: EmotionState, appraisal: EmotionAppraisal) -> EmotionState:
+        accepted = self._acceptance_policy.apply(appraisal)
         reactive_values = state.reactive.as_dict()
-        for name, delta in appraisal.reactive_deltas().items():
+        for name, delta in accepted.reactive_deltas().items():
             reactive_values[name] = self._clamp(
                 reactive_values[name] + delta,
                 0.0,
@@ -28,17 +42,17 @@ class EmotionStateUpdater:
             )
         reactive = ReactiveEmotionState(**reactive_values)
         arousal = self._clamp(
-            state.arousal + appraisal.arousal_delta,
+            state.arousal + accepted.arousal_delta,
             0.0,
             1.0,
         )
         valence = self._clamp(
-            state.valence + appraisal.valence_delta,
+            state.valence + accepted.valence_delta,
             -1.0,
             1.0,
         )
         talkativeness = self._clamp(
-            state.talkativeness + appraisal.talkativeness_delta,
+            state.talkativeness + accepted.talkativeness_delta,
             0.0,
             1.0,
         )
