@@ -1,12 +1,13 @@
 const root = document.documentElement;
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const SEA_RISE_PER_SCROLL_PIXEL = 0.42;
 let frameRequested = false;
 
 function seaBasePixels() {
   const value = getComputedStyle(root).getPropertyValue("--sea-base").trim();
   if (value.endsWith("vh")) return window.innerHeight * Number.parseFloat(value) / 100;
   if (value.endsWith("px")) return Number.parseFloat(value);
-  return window.innerHeight * 0.52;
+  return window.innerHeight * 0.4;
 }
 
 function updateSeaLevel() {
@@ -16,11 +17,9 @@ function updateSeaLevel() {
     return;
   }
 
-  const scrollable = Math.max(document.documentElement.scrollHeight - window.innerHeight, 1);
-  const progress = Math.min(Math.max(window.scrollY / scrollable, 0), 1);
   const maximumRise = Math.max(seaBasePixels() - 8, 0);
-  const eased = 1 - Math.pow(1 - progress, 1.35);
-  root.style.setProperty("--sea-rise", `${Math.round(maximumRise * eased)}px`);
+  const rise = Math.min(maximumRise, Math.max(window.scrollY, 0) * SEA_RISE_PER_SCROLL_PIXEL);
+  root.style.setProperty("--sea-rise", `${Math.round(rise)}px`);
 }
 
 function requestSeaLevelUpdate() {
