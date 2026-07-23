@@ -1,62 +1,64 @@
 :root {
-  --sea-rise: 0px;
   --sea-base: 40vh;
-  --sea-level: calc(var(--sea-base) - var(--sea-rise));
+  --seascape-height: 100vh;
 }
 
 html { background: #020c16; }
 body { position: relative; isolation: isolate; overflow-x: hidden; background: transparent; }
 
+/*
+ * 背景自体をページ全体の高さへ伸ばす。
+ * fixed背景を疑似的に移動するのではなく、本文と同じ速度で実際にスクロールさせる。
+ */
 .seascape {
-  position: fixed;
-  inset: 0;
+  position: absolute;
+  inset: 0 0 auto;
+  width: 100%;
+  height: var(--seascape-height);
+  min-height: 100vh;
   z-index: 0;
   overflow: hidden;
   pointer-events: none;
-  background: #0a3143;
+  background: #010812;
 }
 
 .seascape::before {
   content: "";
   position: absolute;
   inset: 0 0 auto;
-  height: var(--sea-level);
-  min-height: 0;
+  height: var(--sea-base);
   background:
     radial-gradient(circle at 17% 22%, rgba(255, 236, 195, .58), transparent 17rem),
     radial-gradient(ellipse at 68% 8%, rgba(226, 248, 255, .24), transparent 26rem),
     linear-gradient(to bottom, #73b3c5 0%, #4b8da2 58%, #2e6e84 100%);
-  transition: height 80ms linear;
 }
 
 .seascape::after {
   content: "";
   position: absolute;
-  inset: var(--sea-level) 0 0;
+  inset: var(--sea-base) 0 0;
   background:
-    radial-gradient(ellipse at 50% 0%, rgba(126, 218, 240, .24), transparent 36%),
+    radial-gradient(ellipse at 50% 0%, rgba(126, 218, 240, .24), transparent 30%),
     linear-gradient(to bottom,
       #216b80 0%,
-      #15566b 18%,
-      #0d4358 38%,
-      #092f43 58%,
-      #061f33 76%,
-      #031321 90%,
+      #15566b 11%,
+      #0d4358 24%,
+      #092f43 40%,
+      #061f33 58%,
+      #031321 78%,
       #010812 100%);
   box-shadow: inset 0 24px 48px rgba(133, 224, 245, .13);
-  transition: inset 80ms linear;
 }
 
 .sea-surface {
   position: absolute;
-  top: var(--sea-level);
+  top: var(--sea-base);
   left: -4%;
   width: 108%;
   height: 28px;
   transform: translateY(-13px);
   opacity: .94;
   filter: drop-shadow(0 8px 15px rgba(112, 224, 248, .34));
-  transition: top 80ms linear;
 }
 
 .sea-surface::before,
@@ -67,50 +69,49 @@ body { position: relative; isolation: isolate; overflow-x: hidden; background: t
   background-repeat: repeat-x;
 }
 
+/* 丸い連続円ではなく、角を丸めた三角波をSVGで描画する。 */
 .sea-surface::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='28' viewBox='0 0 96 28'%3E%3Cpath d='M0 22 C14 22 22 7 48 3 C74 7 82 22 96 22' fill='none' stroke='%23e3fcff' stroke-opacity='.88' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
-  background-size: 96px 28px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='24' viewBox='0 0 96 24'%3E%3Cpath d='M0 15 C8 15 15 6 24 6 C33 6 40 15 48 15 C56 15 63 6 72 6 C81 6 88 15 96 15' fill='none' stroke='%23e3fcff' stroke-width='1.7' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-size: 96px 24px;
   animation: surface-wave-front 8s linear infinite;
 }
 
 .sea-surface::after {
-  top: 6px;
-  opacity: .5;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='24' viewBox='0 0 128 24'%3E%3Cpath d='M0 19 C18 19 30 6 64 2 C98 6 110 19 128 19' fill='none' stroke='%23b8ecf9' stroke-opacity='.72' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
-  background-size: 128px 24px;
+  top: 5px;
+  opacity: .48;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='132' height='22' viewBox='0 0 132 22'%3E%3Cpath d='M0 14 C11 14 21 5 33 5 C45 5 55 14 66 14 C77 14 87 5 99 5 C111 5 121 14 132 14' fill='none' stroke='%23b8ecf9' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-size: 132px 22px;
   animation: surface-wave-back 12s linear infinite reverse;
 }
 
 .lighthouse {
   position: absolute;
   left: clamp(48px, 12vw, 210px);
-  top: calc(var(--sea-level) - 182px);
+  top: calc(var(--sea-base) - 182px);
   width: 148px;
   height: 200px;
   opacity: .96;
   transform-origin: 50% 94%;
   filter: drop-shadow(0 18px 17px rgba(1, 18, 27, .4));
   background: center bottom / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 148 200'%3E%3Cg fill='none' stroke-linejoin='round'%3E%3Cpath d='M20 187c12-8 25-11 40-10h48c10 0 19 3 27 10l-7 7H26z' fill='%23071925' stroke='%235b94a5' stroke-width='2'/%3E%3Cpath d='M40 184h72l-8-13H48z' fill='%23061f2b' stroke='%23588491' stroke-width='2'/%3E%3Cpath d='M58 173l8-112h25l8 112z' fill='%23d9edf0' stroke='%230b3544' stroke-width='3'/%3E%3Cpath d='M64 96h30l2 20H62z' fill='%23749cab' opacity='.78'/%3E%3Cpath d='M63 61h31l-5-12H68z' fill='%2309212d' stroke='%23699aaa' stroke-width='2'/%3E%3Cpath d='M68 49V29h22v20' fill='%23cce7eb' stroke='%230b3544' stroke-width='3'/%3E%3Cpath d='M63 29h32l-6-9H69z' fill='%23071f2a' stroke='%23699aaa' stroke-width='2'/%3E%3Cpath d='M73 42V32m12 10V32' stroke='%230c4050' stroke-width='3'/%3E%3Cpath d='M59 54h36' stroke='%239fe8ff' stroke-width='2'/%3E%3Cpath d='M90 35l47-13-44 22z' fill='%23fff0b8' opacity='.18' stroke='none'/%3E%3Ccircle cx='79' cy='36' r='3' fill='%23fff1b8' stroke='none'/%3E%3Cpath d='M23 188c12 3 22 4 32 3 12-1 22-1 31 1 14 3 31 2 49-3' stroke='%239fe8ff' stroke-width='2' opacity='.45'/%3E%3C/g%3E%3C/svg%3E");
-  transition: top 80ms linear;
   animation: lighthouse-drift 5.8s ease-in-out infinite;
 }
 
 .seascape-depth {
   position: absolute;
-  inset: var(--sea-level) 0 0;
-  opacity: .18;
+  inset: var(--sea-base) 0 0;
+  opacity: .17;
   background:
-    radial-gradient(circle at 22% 20%, rgba(210, 246, 255, .28) 0 1px, transparent 2px),
-    radial-gradient(circle at 76% 36%, rgba(210, 246, 255, .2) 0 1px, transparent 2px),
-    radial-gradient(circle at 44% 58%, rgba(210, 246, 255, .14) 0 1px, transparent 2px);
-  background-size: 220px 300px, 310px 420px, 390px 520px;
-  transition: inset 80ms linear;
+    radial-gradient(circle at 22% 14%, rgba(210, 246, 255, .28) 0 1px, transparent 2px),
+    radial-gradient(circle at 76% 31%, rgba(210, 246, 255, .18) 0 1px, transparent 2px),
+    radial-gradient(circle at 44% 52%, rgba(210, 246, 255, .12) 0 1px, transparent 2px);
+  background-size: 210px 300px, 290px 410px, 370px 520px;
 }
 
 .topbar, main { position: relative; z-index: 1; }
 
 @keyframes surface-wave-front { from { background-position: 0 0; } to { background-position: 96px 0; } }
-@keyframes surface-wave-back { from { background-position: 0 0; } to { background-position: 128px 0; } }
+@keyframes surface-wave-back { from { background-position: 0 0; } to { background-position: 132px 0; } }
 @keyframes lighthouse-drift {
   0%, 100% { transform: translate3d(0, 0, 0) rotate(-.55deg); }
   25% { transform: translate3d(2px, -3px, 0) rotate(.15deg); }
@@ -121,13 +122,9 @@ body { position: relative; isolation: isolate; overflow-x: hidden; background: t
 @media (max-width: 900px) {
   .lighthouse { left: 28px; opacity: .8; }
 }
-
 @media (max-width: 620px) {
-  .lighthouse { left: 20px; width: 108px; height: 150px; top: calc(var(--sea-level) - 137px); opacity: .72; }
+  .lighthouse { left: 20px; width: 108px; height: 150px; top: calc(var(--sea-base) - 137px); opacity: .72; }
 }
-
 @media (prefers-reduced-motion: reduce) {
-  :root { --sea-rise: 0px !important; }
-  .seascape::before, .seascape::after, .sea-surface, .lighthouse, .seascape-depth { transition: none; }
   .sea-surface::before, .sea-surface::after, .lighthouse { animation: none; }
 }
