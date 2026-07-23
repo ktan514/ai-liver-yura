@@ -18,8 +18,10 @@ def load_emotion_appraisal_settings(
 ) -> EmotionAppraisalSettings:
     """config.yamlのemotion_appraisalを型付き設定へ変換する。"""
 
+    if not str(config_path).strip():
+        return EmotionAppraisalSettings()
     path = Path(config_path)
-    if not path.exists():
+    if not path.is_file():
         return EmotionAppraisalSettings()
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(raw, dict):
