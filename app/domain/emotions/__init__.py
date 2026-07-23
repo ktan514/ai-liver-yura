@@ -1,4 +1,11 @@
 from app.domain.emotions.emotion_appraisal import EmotionAppraisal, EmotionCause
+from app.domain.emotions.emotion_appraisal_policy import (
+    EmotionAppraisalAcceptancePolicy,
+    EmotionAppraisalCircuitBreakerSettings,
+    EmotionAppraisalHistorySettings,
+    EmotionAppraisalMode,
+    EmotionAppraisalSettings,
+)
 from app.domain.emotions.emotion_context import EmotionContext
 from app.domain.emotions.emotion_state import (
     EmotionState,
@@ -8,6 +15,11 @@ from app.domain.emotions.emotion_state import (
 
 __all__ = [
     "EmotionAppraisal",
+    "EmotionAppraisalAcceptancePolicy",
+    "EmotionAppraisalCircuitBreakerSettings",
+    "EmotionAppraisalHistorySettings",
+    "EmotionAppraisalMode",
+    "EmotionAppraisalSettings",
     "EmotionCause",
     "EmotionContext",
     "EmotionState",
