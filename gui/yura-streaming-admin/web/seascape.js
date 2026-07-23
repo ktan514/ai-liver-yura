@@ -20,14 +20,29 @@ function updateSeascape() {
 
   const scrollTop = Math.max(0, window.scrollY || document.documentElement.scrollTop || 0);
   const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
-  const progress = maxScroll > 0 ? Math.min(1, scrollTop / maxScroll) : 0;
 
   // 海面はスクロール量に比例して一定速度で上昇し、画面上端で停止する。
   const seaBasePixels = window.innerHeight * 0.4;
-  const seaRise = Math.min(seaBasePixels, scrollTop * 0.42);
+  const seaRiseRate = 0.42;
+  const seaRise = Math.min(seaBasePixels, scrollTop * seaRiseRate);
+  const seaTopScroll = seaBasePixels / seaRiseRate;
+
+  // 海面が上端へ達するまでは浅い海の明るさをほぼ維持する。
+  // 到達後の残りスクロール距離で、深海の暗さを段階的に強める。
+  let depthProgress = 0;
+  if (seaTopScroll > 0 && scrollTop < seaTopScroll) {
+    const surfaceProgress = Math.min(1, scrollTop / seaTopScroll);
+    depthProgress = surfaceProgress * 0.15;
+  } else if (maxScroll > seaTopScroll) {
+    const deepRange = maxScroll - seaTopScroll;
+    const deepProgress = Math.min(1, Math.max(0, (scrollTop - seaTopScroll) / deepRange));
+    depthProgress = 0.15 + (Math.pow(deepProgress, 1.15) * 0.85);
+  } else if (maxScroll > 0) {
+    depthProgress = Math.min(0.15, (scrollTop / maxScroll) * 0.15);
+  }
 
   root.style.setProperty("--sea-rise", `${seaRise.toFixed(2)}px`);
-  root.style.setProperty("--depth-progress", progress.toFixed(4));
+  root.style.setProperty("--depth-progress", depthProgress.toFixed(4));
 }
 
 function requestSeascapeUpdate() {
