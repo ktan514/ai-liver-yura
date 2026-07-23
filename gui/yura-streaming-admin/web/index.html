@@ -20,9 +20,16 @@
         <p class="eyebrow">YURA / MARITIME CONTROL TOWER</p>
         <h1>配信の灯台</h1>
       </div>
+      <nav class="header-nav" aria-label="管理画面">
+        <button class="active" data-tab="overview">概要</button>
+        <button data-tab="comments">コメント</button>
+        <button data-tab="progress">配信進行</button>
+        <button data-tab="diagnostics">診断・ログ</button>
+      </nav>
       <div class="topbar-actions">
         <div id="connection" class="connection pending"><span></span><b>CORE 接続確認中</b></div>
         <button data-action="emergency-stop" class="danger emergency-button">緊急停止</button>
+        <button id="settingsOpen" class="icon-button" type="button" aria-label="設定を開く" aria-haspopup="dialog">•••</button>
       </div>
     </header>
 
@@ -47,10 +54,7 @@
       <section class="overview-grid" aria-label="配信準備と人間操作">
         <article class="setup-card">
           <div class="section-heading">
-            <div>
-              <p class="label">STREAM SETUP</p>
-              <h3>配信設定</h3>
-            </div>
+            <div><p class="label">STREAM SETUP</p><h3>配信設定</h3></div>
             <button data-action="refresh-broadcasts" class="compact-button">一覧を再取得</button>
           </div>
           <div class="selectors">
@@ -68,17 +72,9 @@
         </article>
       </section>
 
-      <nav class="tabs" aria-label="管理画面">
-        <button class="active" data-tab="overview">概要</button>
-        <button data-tab="comments">コメント</button>
-        <button data-tab="progress">配信進行</button>
-        <button data-tab="diagnostics">診断・ログ</button>
-        <button data-tab="settings">設定</button>
-      </nav>
-
       <section id="overview" class="panel active">
         <div id="serviceCards" class="card-grid"></div>
-        <div id="recoveryArea" class="recovery-grid" aria-live="polite"></div>
+        <div id="recoveryArea" class="recovery-grid hidden" aria-live="polite"></div>
         <details class="responsibility-panel">
           <summary>操作分担を確認</summary>
           <div id="responsibilities" class="table-wrap"></div>
@@ -111,8 +107,14 @@
         </div>
         <article><h3>診断イベント</h3><div id="diagnosticTable" class="table-wrap"></div></article>
       </section>
+    </main>
 
-      <section id="settings" class="panel">
+    <div id="settingsOverlay" class="settings-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="settings-dialog">
+        <div class="settings-dialog-header">
+          <div><p class="label">CONTROL SETTINGS</p><h2 id="settingsTitle">設定</h2></div>
+          <button id="settingsClose" class="icon-button" type="button" aria-label="設定を閉じる">×</button>
+        </div>
         <form id="settingsForm" class="settings-grid">
           <fieldset><legend>ログ設定</legend>
             <label><span>ファイルログ</span><input name="file_enabled" type="checkbox" /></label>
@@ -135,8 +137,9 @@
           </fieldset>
           <button class="primary wide">設定を適用</button>
         </form>
-      </section>
-    </main>
+      </div>
+    </div>
+
     <script src="/seascape.js" defer></script>
     <script type="module" src="/admin.js"></script>
   </body>
