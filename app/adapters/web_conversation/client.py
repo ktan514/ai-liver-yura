@@ -47,8 +47,18 @@ class WebConversationClient(AudioPlayer, ConversationOutputPublisher):
             self._config.playback_timeout_seconds,
         )
         result = json.loads(response.decode("utf-8"))
-        if not isinstance(result, dict) or result.get("status") != "completed":
-            raise RuntimeError("Web画面で音声再生が完了しませんでした。")
+        if not isinstance(result, dict):
+            raise RuntimeError("Web画面から不正な音声再生結果を受信しました。")
+
+        status = result.get("status")
+        if status in {"completed", "skipped"}:
+            return
+
+        reason = result.get("reason")
+        detail = f" status={status!r}"
+        if isinstance(reason, str) and reason:
+            detail += f" reason={reason!r}"
+        raise RuntimeError(f"Web画面で音声再生が完了しませんでした。{detail}")
 
     def _post(
         self,
