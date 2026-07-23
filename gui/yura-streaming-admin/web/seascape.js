@@ -11,7 +11,7 @@ function updateSeaLevel() {
 
   const scrollable = Math.max(document.documentElement.scrollHeight - window.innerHeight, 1);
   const progress = Math.min(Math.max(window.scrollY / scrollable, 0), 1);
-  const rise = Math.round(Math.min(260, progress * 340));
+  const rise = Math.round(Math.min(150, progress * 190));
   root.style.setProperty("--sea-rise", `${rise}px`);
 }
 
