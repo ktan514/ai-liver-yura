@@ -8,10 +8,10 @@ from app.adapters.embedding.openai_embedding_generator import OpenAIEmbeddingGen
 from app.adapters.storage.postgres_topic_memory_store import PostgresTopicMemoryStore
 from app.adapters.topic.llm_topic_classifier import LlmTopicClassifier
 from app.adapters.tts import SystemAudioPlayer, VoiceVoxSpeechSynthesizer
+from app.bootstrap import create_runtime_coordinator
 from app.bootstrap.runtime import (
     create_audio_player,
     create_embedding_generator,
-    create_runtime_coordinator,
     create_speech_synthesizer,
     create_topic_classifier,
     create_topic_memory_store,
