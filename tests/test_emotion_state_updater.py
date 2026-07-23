@@ -2,7 +2,12 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.domain.emotions import EmotionAppraisal, EmotionState, MoodType
+from app.domain.emotions import (
+    EmotionAppraisal,
+    EmotionState,
+    MoodType,
+    ReactiveEmotionState,
+)
 from app.domain.events import AgentEvent, AgentEventType
 from app.runtime import ActivityManager, AgentLifeService
 from app.runtime.emotion_appraiser import EmotionAppraiser
@@ -79,3 +84,59 @@ def test_agent_life_service_applies_event_appraisal_and_elapsed_decay() -> None:
     assert after_event.valence == pytest.approx(-0.08)
     assert after_event.talkativeness == pytest.approx(0.48)
     assert after_decay == EmotionState()
+
+
+def test_emotion_state_updater_keeps_mixed_emotions_and_derives_angry_mood() -> None:
+    updated = EmotionStateUpdater().apply(
+        EmotionState(),
+        EmotionAppraisal(
+            anger_delta=0.65,
+            sadness_delta=0.35,
+            discomfort_delta=0.4,
+            pressure_delta=0.3,
+            arousal_delta=0.25,
+            valence_delta=-0.45,
+            talkativeness_delta=-0.1,
+            reason="trusted_person_hurtful_statement",
+        ),
+    )
+
+    assert updated.mood == MoodType.ANGRY
+    assert updated.reactive.anger == pytest.approx(0.65)
+    assert updated.reactive.sadness == pytest.approx(0.35)
+    assert updated.reactive.discomfort == pytest.approx(0.4)
+    assert updated.reactive.emotional_pressure == pytest.approx(0.3)
+
+
+def test_emotion_state_updater_derives_sad_mood_from_loss_appraisal() -> None:
+    updated = EmotionStateUpdater().apply(
+        EmotionState(),
+        EmotionAppraisal(
+            sadness_delta=0.7,
+            surprise_delta=0.2,
+            arousal_delta=-0.1,
+            valence_delta=-0.5,
+            talkativeness_delta=-0.25,
+            reason="loss_received",
+        ),
+    )
+
+    assert updated.mood == MoodType.SAD
+    assert updated.reactive.sadness == pytest.approx(0.7)
+    assert updated.talkativeness == pytest.approx(0.25)
+
+
+def test_emotion_state_updater_decays_surprise_faster_than_sadness() -> None:
+    state = EmotionState(
+        mood=MoodType.SAD,
+        reactive=ReactiveEmotionState(
+            sadness=0.8,
+            surprise=0.8,
+        ),
+    )
+
+    decayed = EmotionStateUpdater().decay(state, elapsed_seconds=300.0)
+
+    assert decayed.reactive.surprise == 0.0
+    assert decayed.reactive.sadness == pytest.approx(0.8 * (1.0 - (300.0 / 3600.0)))
+    assert decayed.mood == MoodType.SAD
