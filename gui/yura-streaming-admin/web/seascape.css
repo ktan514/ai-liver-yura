@@ -6,10 +6,6 @@
 html { background: #020c16; }
 body { position: relative; isolation: isolate; overflow-x: hidden; background: transparent; }
 
-/*
- * 背景自体をページ全体の高さへ伸ばす。
- * 本文と同じ速度でスクロールし、長い画面ほど深い海として描画する。
- */
 .seascape {
   position: absolute;
   inset: 0 0 auto;
@@ -55,10 +51,10 @@ body { position: relative; isolation: isolate; overflow-x: hidden; background: t
   top: var(--sea-base);
   left: -4%;
   width: 108%;
-  height: 50px;
-  transform: translateY(-38px);
-  opacity: .96;
-  filter: drop-shadow(0 8px 15px rgba(112, 224, 248, .28));
+  height: 30px;
+  transform: translateY(-22px);
+  opacity: 1;
+  filter: drop-shadow(0 5px 10px rgba(112, 224, 248, .26));
 }
 
 .sea-surface::before,
@@ -67,24 +63,26 @@ body { position: relative; isolation: isolate; overflow-x: hidden; background: t
   position: absolute;
   inset: 0;
   background-repeat: repeat-x;
+  opacity: 1;
 }
 
 /*
- * 海面色で中を塗った、片側へ巻く波を描く。
- * 1周期を広く取り、波同士が詰まって見えないようにする。
+ * 波の実寸は従来の約半分にし、周期幅は維持して間隔を確保する。
+ * 前後とも不透明な海面色で塗り、同じ方向へ異なる速度で移動する。
  */
 .sea-surface::before {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='48' viewBox='0 0 220 48'%3E%3Cpath d='M8 38 C28 38 43 11 77 5 C92 3 104 6 117 12 C96 15 87 26 91 38 L220 38 L220 48 L8 48 Z' fill='%23216b80'/%3E%3Cpath d='M8 38 C28 38 43 11 77 5 C92 3 104 6 117 12 C96 15 87 26 91 38' fill='none' stroke='%23e3fcff' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-size: 220px 48px;
+  z-index: 2;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='26' viewBox='0 0 220 26'%3E%3Cpath d='M6 21 C16 21 24 7 41 4 C49 3 55 5 62 8 C51 10 46 15 48 21 L110 21 L110 26 L6 26 Z' fill='%23216b80'/%3E%3Cpath d='M6 21 C16 21 24 7 41 4 C49 3 55 5 62 8 C51 10 46 15 48 21' fill='none' stroke='%23e3fcff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 220px 26px;
   animation: surface-wave-front 11s linear infinite;
 }
 
 .sea-surface::after {
-  top: 7px;
-  opacity: .42;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='44' viewBox='0 0 280 44'%3E%3Cpath d='M12 35 C36 35 55 13 91 8 C107 6 121 9 134 15 C113 17 104 26 108 35 L280 35 L280 44 L12 44 Z' fill='%231b6177'/%3E%3Cpath d='M12 35 C36 35 55 13 91 8 C107 6 121 9 134 15 C113 17 104 26 108 35' fill='none' stroke='%23b8ecf9' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  background-size: 280px 44px;
-  animation: surface-wave-back 17s linear infinite reverse;
+  z-index: 1;
+  top: 4px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='24' viewBox='0 0 280 24'%3E%3Cpath d='M8 19 C20 19 29 7 47 5 C55 4 62 6 69 9 C58 10 53 14 55 19 L128 19 L128 24 L8 24 Z' fill='%231b6177'/%3E%3Cpath d='M8 19 C20 19 29 7 47 5 C55 4 62 6 69 9 C58 10 53 14 55 19' fill='none' stroke='%23b8ecf9' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 280px 24px;
+  animation: surface-wave-back 17s linear infinite;
 }
 
 .lighthouse {
@@ -111,12 +109,25 @@ body { position: relative; isolation: isolate; overflow-x: hidden; background: t
   background-size: 210px 300px, 290px 410px, 370px 520px;
 }
 
-/* topbarのsticky指定を上書きしない。 */
 .topbar { z-index: 30; }
 main { position: relative; z-index: 1; }
 
-@keyframes surface-wave-front { from { background-position: 0 0; } to { background-position: 220px 0; } }
-@keyframes surface-wave-back { from { background-position: 0 0; } to { background-position: 280px 0; } }
+@keyframes surface-wave-front {
+  0% { background-position: 0 0; transform: translateY(0); }
+  25% { transform: translateY(-2px); }
+  50% { transform: translateY(2px); }
+  75% { transform: translateY(-1px); }
+  100% { background-position: 220px 0; transform: translateY(0); }
+}
+
+@keyframes surface-wave-back {
+  0% { background-position: 0 0; transform: translateY(1px); }
+  25% { transform: translateY(3px); }
+  50% { transform: translateY(-1px); }
+  75% { transform: translateY(2px); }
+  100% { background-position: 280px 0; transform: translateY(1px); }
+}
+
 @keyframes lighthouse-drift {
   0%, 100% { transform: translate3d(0, 0, 0) rotate(-.55deg); }
   25% { transform: translate3d(2px, -3px, 0) rotate(.15deg); }
