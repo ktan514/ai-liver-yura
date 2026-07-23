@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 
 from app.shared.contracts.memory import AgentMemorySnapshot
 from app.shared.contracts.memory import EmotionHistoryRecord as EmotionHistoryEntry
@@ -31,10 +32,18 @@ class AgentMemoryState:
     unrecovered_topics: tuple[UnrecoveredTopicMemory, ...] = ()
     emotion_history: tuple[EmotionHistoryEntry, ...] = ()
     max_history_entries: int = 64
+    emotion_history_retention_seconds: float = 7200.0
+    emotion_history_min_effective_delta: float = 0.02
 
     def __post_init__(self) -> None:
         if self.max_history_entries <= 0:
             raise ValueError("max_history_entriesは1以上にしてください。")
+        if self.emotion_history_retention_seconds <= 0.0:
+            raise ValueError("emotion_history_retention_secondsは0より大きくしてください。")
+        if not 0.0 <= self.emotion_history_min_effective_delta <= 1.0:
+            raise ValueError(
+                "emotion_history_min_effective_deltaは0.0以上1.0以下にしてください。"
+            )
 
     def remember_episode(self, episode: EpisodicMemory) -> AgentMemoryState:
         if any(item.event_id == episode.event_id for item in self.episodic):
@@ -60,11 +69,21 @@ class AgentMemoryState:
         ):
             return self
         normalized = self._normalize_emotion_history(entry)
+        retained = self._retained_emotion_history(normalized.recorded_at)
+        if not self._has_effective_emotion_change(normalized):
+            return replace(self, emotion_history=retained)
         return replace(
             self,
-            emotion_history=(*self.emotion_history, normalized)[
-                -self.max_history_entries :
-            ],
+            emotion_history=(*retained, normalized)[-self.max_history_entries :],
+        )
+
+    def compact_emotion_history(
+        self, *, now: datetime | None = None
+    ) -> AgentMemoryState:
+        reference = now or datetime.now(timezone.utc)
+        return replace(
+            self,
+            emotion_history=self._retained_emotion_history(reference),
         )
 
     def with_unfinished_activities(
@@ -153,17 +172,47 @@ class AgentMemoryState:
         snapshot: AgentMemorySnapshot,
         *,
         max_history_entries: int = 64,
+        emotion_history_retention_seconds: float = 7200.0,
+        emotion_history_min_effective_delta: float = 0.02,
     ) -> AgentMemoryState:
         if snapshot.schema_version != "1":
             raise ValueError(f"未対応のMemory schemaです: {snapshot.schema_version}")
-        return cls(
+        state = cls(
             episodic=snapshot.episodic[-max_history_entries:],
             semantic=snapshot.semantic[-max_history_entries:],
             unfinished_activities=snapshot.unfinished_activities,
             unrecovered_topics=snapshot.unrecovered_topics[-max_history_entries:],
             emotion_history=snapshot.emotion_history[-max_history_entries:],
             max_history_entries=max_history_entries,
+            emotion_history_retention_seconds=emotion_history_retention_seconds,
+            emotion_history_min_effective_delta=emotion_history_min_effective_delta,
         )
+        return state.compact_emotion_history()
+
+    def _retained_emotion_history(
+        self, reference_time: datetime
+    ) -> tuple[EmotionHistoryEntry, ...]:
+        cutoff = reference_time - timedelta(
+            seconds=self.emotion_history_retention_seconds
+        )
+        return tuple(
+            item
+            for item in self.emotion_history
+            if self._as_aware(item.recorded_at) >= self._as_aware(cutoff)
+        )[-self.max_history_entries :]
+
+    def _has_effective_emotion_change(self, entry: EmotionHistoryEntry) -> bool:
+        return any(
+            abs(float(value)) >= self.emotion_history_min_effective_delta
+            for value in entry.deltas.values()
+            if isinstance(value, (int, float)) and not isinstance(value, bool)
+        )
+
+    @staticmethod
+    def _as_aware(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     @classmethod
     def _normalize_emotion_history(
