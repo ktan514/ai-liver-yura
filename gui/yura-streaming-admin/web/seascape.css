@@ -1,6 +1,6 @@
 :root {
   --sea-rise: 0px;
-  --sea-base: 52vh;
+  --sea-base: 40vh;
   --sea-level: calc(var(--sea-base) - var(--sea-rise));
 }
 
@@ -58,18 +58,26 @@ body { position: relative; isolation: isolate; overflow-x: hidden; background: t
   filter: drop-shadow(0 8px 15px rgba(112, 224, 248, .34));
   transition: top 80ms linear;
 }
+
 .sea-surface::before,
-.sea-surface::after { content: ""; position: absolute; inset: 0; background-repeat: repeat-x; }
+.sea-surface::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-repeat: repeat-x;
+}
+
 .sea-surface::before {
-  background-image: radial-gradient(ellipse at 18px 12px, transparent 12px, rgba(227, 252, 255, .86) 13px 14px, transparent 15px);
-  background-size: 72px 24px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='28' viewBox='0 0 96 28'%3E%3Cpath d='M0 22 C14 22 22 7 48 3 C74 7 82 22 96 22' fill='none' stroke='%23e3fcff' stroke-opacity='.88' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-size: 96px 28px;
   animation: surface-wave-front 8s linear infinite;
 }
+
 .sea-surface::after {
-  top: 5px;
-  opacity: .48;
-  background-image: radial-gradient(ellipse at 26px 9px, transparent 15px, rgba(184, 236, 249, .7) 16px 17px, transparent 18px);
-  background-size: 96px 22px;
+  top: 6px;
+  opacity: .5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='24' viewBox='0 0 128 24'%3E%3Cpath d='M0 19 C18 19 30 6 64 2 C98 6 110 19 128 19' fill='none' stroke='%23b8ecf9' stroke-opacity='.72' stroke-width='1.6' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-size: 128px 24px;
   animation: surface-wave-back 12s linear infinite reverse;
 }
 
@@ -90,19 +98,19 @@ body { position: relative; isolation: isolate; overflow-x: hidden; background: t
 .seascape-depth {
   position: absolute;
   inset: var(--sea-level) 0 0;
-  opacity: .22;
+  opacity: .18;
   background:
-    radial-gradient(circle at 22% 20%, rgba(210, 246, 255, .34) 0 1px, transparent 2px),
-    radial-gradient(circle at 76% 36%, rgba(210, 246, 255, .24) 0 1px, transparent 2px),
-    radial-gradient(circle at 44% 58%, rgba(210, 246, 255, .18) 0 1px, transparent 2px);
-  background-size: 170px 240px, 230px 310px, 290px 390px;
+    radial-gradient(circle at 22% 20%, rgba(210, 246, 255, .28) 0 1px, transparent 2px),
+    radial-gradient(circle at 76% 36%, rgba(210, 246, 255, .2) 0 1px, transparent 2px),
+    radial-gradient(circle at 44% 58%, rgba(210, 246, 255, .14) 0 1px, transparent 2px);
+  background-size: 220px 300px, 310px 420px, 390px 520px;
   transition: inset 80ms linear;
 }
 
 .topbar, main { position: relative; z-index: 1; }
 
-@keyframes surface-wave-front { from { background-position: 0 0; } to { background-position: 72px 0; } }
-@keyframes surface-wave-back { from { background-position: 0 0; } to { background-position: 96px 0; } }
+@keyframes surface-wave-front { from { background-position: 0 0; } to { background-position: 96px 0; } }
+@keyframes surface-wave-back { from { background-position: 0 0; } to { background-position: 128px 0; } }
 @keyframes lighthouse-drift {
   0%, 100% { transform: translate3d(0, 0, 0) rotate(-.55deg); }
   25% { transform: translate3d(2px, -3px, 0) rotate(.15deg); }
@@ -111,13 +119,13 @@ body { position: relative; isolation: isolate; overflow-x: hidden; background: t
 }
 
 @media (max-width: 900px) {
-  :root { --sea-base: 48vh; }
   .lighthouse { left: 28px; opacity: .8; }
 }
+
 @media (max-width: 620px) {
-  :root { --sea-base: 44vh; }
   .lighthouse { left: 20px; width: 108px; height: 150px; top: calc(var(--sea-level) - 137px); opacity: .72; }
 }
+
 @media (prefers-reduced-motion: reduce) {
   :root { --sea-rise: 0px !important; }
   .seascape::before, .seascape::after, .sea-surface, .lighthouse, .seascape-depth { transition: none; }
