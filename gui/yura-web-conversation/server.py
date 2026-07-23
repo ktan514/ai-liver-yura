@@ -58,6 +58,7 @@ class AudioItem:
     data: bytes
     finished: threading.Event = field(default_factory=threading.Event)
     status: str = "waiting"
+    reason: str = ""
 
 
 class AudioStore:
@@ -77,12 +78,13 @@ class AudioStore:
             item = self._items.get(audio_id)
             return item.data if item is not None else None
 
-    def finish(self, audio_id: str, status: str) -> bool:
+    def finish(self, audio_id: str, status: str, reason: str = "") -> bool:
         with self._lock:
             item = self._items.get(audio_id)
             if item is None:
                 return False
             item.status = status
+            item.reason = reason
             item.finished.set()
             return True
 
@@ -208,8 +210,9 @@ def handler_for(
             )
             completed = item.finished.wait(playback_timeout)
             status = item.status if completed else "timeout"
+            reason = item.reason if completed else "playback_timeout"
             audio_store.remove(audio_id)
-            self._json({"status": status, "audio_id": audio_id})
+            self._json({"status": status, "reason": reason, "audio_id": audio_id})
 
         def _audio(self, audio_id: str) -> None:
             data = audio_store.data(audio_id)
@@ -226,10 +229,14 @@ def handler_for(
         def _complete_audio(self, audio_id: str) -> None:
             payload = self._read_json() or {}
             status = payload.get("status", "completed")
-            if status not in {"completed", "failed"}:
+            reason = payload.get("reason", "")
+            if status not in {"completed", "failed", "skipped"}:
                 self.send_error(HTTPStatus.BAD_REQUEST, "invalid status")
                 return
-            if not audio_store.finish(audio_id, str(status)):
+            if not isinstance(reason, str):
+                self.send_error(HTTPStatus.BAD_REQUEST, "invalid reason")
+                return
+            if not audio_store.finish(audio_id, str(status), reason[:500]):
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             self._json({"status": "accepted"}, HTTPStatus.ACCEPTED)
