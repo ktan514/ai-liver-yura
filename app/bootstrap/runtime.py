@@ -62,6 +62,10 @@ from app.adapters.tts import (
     VoiceVoxSpeechSynthesizer,
     VoiceVoxSpeechSynthesizerConfig,
 )
+from app.adapters.web_conversation import (
+    WebConversationClient,
+    WebConversationClientConfig,
+)
 from app.config.app_config import (
     AppConfig,
     LlmRoleSettings,
@@ -814,7 +818,11 @@ def create_memory_summary_generator(config: AppConfig) -> MemorySummaryGenerator
     return None
 
 
-def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
+def create_runtime_coordinator(
+    config: AppConfig,
+    *,
+    web_conversation_enabled: bool | None = None,
+) -> RuntimeCoordinator:
     trace_logger = TraceLogger()
     trace_logger.write(
         "runtime_factory:create_runtime_coordinator:start",
@@ -878,6 +886,21 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
     else:
         speech_synthesizer = create_speech_synthesizer(config)
         audio_player = create_audio_player(config)
+    if web_conversation_enabled is None:
+        web_conversation_enabled = (
+            os.getenv("YURA_WEB_CONVERSATION_ENABLED", "0").strip().lower()
+            not in {"0", "false", "off"}
+        )
+    web_conversation_client: WebConversationClient | None = None
+    if web_conversation_enabled and config.app.mode != "streaming_demo":
+        web_conversation_client = WebConversationClient(
+            WebConversationClientConfig(
+                base_url=os.getenv(
+                    "YURA_WEB_CONVERSATION_URL", "http://127.0.0.1:8770"
+                )
+            )
+        )
+        audio_player = web_conversation_client
 
     default_llm_available = config.response_generator.type == "dummy" or (
         _is_model_provider_available(config, config.response_generator.model)
@@ -1087,6 +1110,7 @@ def create_runtime_coordinator(config: AppConfig) -> RuntimeCoordinator:
         speech_synthesizer=speech_synthesizer,
         audio_player=audio_player,
         background_topic_memory=True,
+        conversation_output_publisher=web_conversation_client,
     )
 
     planned_activity_queue = PlannedActivityQueue()

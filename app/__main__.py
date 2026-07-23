@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
-from app.adapters.input import ConsoleInputReceiver
+from app.adapters.input import (
+    ConsoleInputReceiver,
+    WebInputReceiver,
+    WebInputReceiverConfig,
+)
 from app.bootstrap.runtime import create_runtime_coordinator
 from app.config.app_config import load_app_config
 from app.domain.events import AgentEvent, AgentEventType, InputAuthority
@@ -19,6 +24,13 @@ def is_demo_exit_command(value: str) -> bool:
     """Compatibility helper for callers that still provide a terminal loop."""
 
     return value.strip().lower() in {"exit", "quit"}
+
+
+def is_web_conversation_enabled() -> bool:
+    return (
+        os.getenv("YURA_WEB_CONVERSATION_ENABLED", "1").strip().lower()
+        not in {"0", "false", "off"}
+    )
 
 
 async def async_main() -> None:
@@ -45,8 +57,21 @@ async def async_main() -> None:
         app_mode=config.app.mode,
         response_generator_type=config.response_generator.type,
     )
-    runtime = create_runtime_coordinator(config)
-    receiver = ConsoleInputReceiver()
+    web_conversation_enabled = is_web_conversation_enabled()
+    runtime = create_runtime_coordinator(
+        config,
+        web_conversation_enabled=web_conversation_enabled,
+    )
+    receiver = (
+        WebInputReceiver(
+            WebInputReceiverConfig(
+                host=os.getenv("YURA_WEB_INPUT_HOST", "127.0.0.1"),
+                port=int(os.getenv("YURA_WEB_INPUT_PORT", "8771")),
+            )
+        )
+        if web_conversation_enabled
+        else ConsoleInputReceiver()
+    )
     runtime_task = asyncio.create_task(runtime.run())
 
     await runtime.publish_event(
@@ -63,13 +88,16 @@ async def async_main() -> None:
         if event.event_type == AgentEventType.USER_TEXT:
             await runtime.submit_user_text(
                 str(event.payload.get("text") or ""),
-                source="console",
+                source=str(event.payload.get("source") or "external"),
                 authority=event.authority,
             )
             return
         await runtime.publish_event(event)
 
-    print("ゆらを起動しました。管理者として自然文で指示できます。終了: exit / quit")
+    if web_conversation_enabled:
+        print("ゆらを起動しました。Web会話画面から話しかけてください。終了: Ctrl-C")
+    else:
+        print("ゆらを起動しました。管理者として自然文で指示できます。終了: exit / quit")
     try:
         await receiver.start(route_console_event)
         await receiver.wait_until_stopped()

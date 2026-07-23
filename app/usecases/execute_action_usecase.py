@@ -14,6 +14,7 @@ from app.domain.topic import TopicCategory, TopicHistory
 from app.domain.topic_classifier import TopicClassifier
 from app.domain.topic_memory import TopicMemoryEntry
 from app.ports.audio_player import AudioPlayer
+from app.ports.conversation_output import ConversationOutputPublisher
 from app.ports.embedding_generator import EmbeddingGenerator
 from app.ports.event_publisher import EventPublisher
 from app.ports.memory_summary_generator import MemorySummaryGenerator
@@ -39,6 +40,7 @@ class ExecuteActionUsecase:
         audio_player: AudioPlayer | None = None,
         background_topic_memory: bool = False,
         conversation_logger: ConversationLogger | None = None,
+        conversation_output_publisher: ConversationOutputPublisher | None = None,
     ) -> None:
         self._event_publisher = event_publisher
         self._short_term_memory = short_term_memory or ShortTermMemory()
@@ -54,6 +56,7 @@ class ExecuteActionUsecase:
         self._background_tasks_lock = threading.RLock()
         self._trace_logger = TraceLogger()
         self._conversation_logger = conversation_logger or ConversationLogger()
+        self._conversation_output_publisher = conversation_output_publisher
 
     async def prepare(self, action_plan: ActionPlan) -> ActionPlan:
         """音声を先に合成する。イベント発行・再生・記憶保存は行わない。"""
@@ -138,6 +141,7 @@ class ExecuteActionUsecase:
                 text_length=len(action_plan.text),
             )
             await self._publish_speech_event(AgentEventType.SPEECH_STARTED, action_plan)
+            await self._publish_conversation_output(action_plan)
             self._trace_logger.write(
                 "execute_action_usecase:speak:speech_started_published",
                 action_id=action_plan.action_id,
@@ -204,6 +208,7 @@ class ExecuteActionUsecase:
             return None
 
         if action_plan.action_type in (ActionType.ASK, ActionType.REACT):
+            await self._publish_conversation_output(action_plan)
             print(f"[{action_plan.action_type.value}] {action_plan.text}")
             self._trace_logger.write(
                 "execute_action_usecase:execute:finished",
@@ -248,6 +253,23 @@ class ExecuteActionUsecase:
             action_type=action_plan.action_type.value,
         )
         return None
+
+    async def _publish_conversation_output(self, action_plan: ActionPlan) -> None:
+        if self._conversation_output_publisher is None:
+            return
+        try:
+            await self._conversation_output_publisher.publish_text(
+                kind=action_plan.action_type.value,
+                text=action_plan.text,
+                action_id=action_plan.action_id,
+            )
+        except Exception as error:
+            self._trace_logger.warning(
+                "execute_action_usecase:conversation_output_failed",
+                action_id=action_plan.action_id,
+                error_type=type(error).__name__,
+                error_message=str(error),
+            )
 
     def _estimate_speech_duration_seconds(self, text: str) -> float:
         """テキスト長から疑似的な読み上げ予定時間を見積もる。"""

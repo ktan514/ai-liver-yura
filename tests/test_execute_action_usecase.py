@@ -44,6 +44,14 @@ class FakeAudioPlayer:
         self.received_audio.append(audio_data)
 
 
+class FakeConversationOutputPublisher:
+    def __init__(self) -> None:
+        self.outputs: list[tuple[str, str, str]] = []
+
+    async def publish_text(self, *, kind: str, text: str, action_id: str) -> None:
+        self.outputs.append((kind, text, action_id))
+
+
 class FailingSpeechSynthesizer:
     async def synthesize(
         self, text: str, voice_intent: VoiceIntent | None = None
@@ -197,6 +205,21 @@ async def test_speak_action_synthesizes_and_plays_audio() -> None:
     assert synthesizer.received_texts == ["こんにちは"]
     assert synthesizer.received_voice_intent == intent
     assert player.received_audio == [b"RIFF-test-wav"]
+
+
+@pytest.mark.asyncio
+async def test_speak_action_publishes_text_to_conversation_output() -> None:
+    output = FakeConversationOutputPublisher()
+    usecase = ExecuteActionUsecase(
+        speech_synthesizer=FakeSpeechSynthesizer(),
+        audio_player=FakeAudioPlayer(),
+        conversation_output_publisher=output,
+    )
+    action_plan = ActionPlan(action_type=ActionType.SPEAK, text="Webへ表示")
+
+    await usecase.execute(action_plan)
+
+    assert output.outputs == [("speak", "Webへ表示", action_plan.action_id)]
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#050710" />
+    <title>ことばの水面 | Yura</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <canvas id="field" aria-hidden="true"></canvas>
+    <div class="veil"></div>
+
+    <header class="topbar">
+      <div>
+        <span class="eyebrow">YURA / CONVERSATION</span>
+        <h1>ことばの水面</h1>
+      </div>
+      <div class="controls">
+        <button id="audioButton" class="audio-button" type="button">
+          <span class="audio-icon" aria-hidden="true">◌</span>
+          <span id="audioLabel">音声を有効にする</span>
+        </button>
+        <div class="connection" id="connection">
+          <span class="connection-dot"></span>
+          <span id="connectionText">接続しています</span>
+        </div>
+      </div>
+    </header>
+
+    <main class="conversation-shell">
+      <ol id="messages" class="messages" aria-live="polite" aria-label="ゆらとの会話"></ol>
+      <div id="emptyState" class="empty-state">
+        <span class="orb"></span>
+        <p>ここから、ゆらに話しかけられます。</p>
+      </div>
+    </main>
+
+    <form id="composer" class="composer">
+      <label for="messageInput">MESSAGE</label>
+      <div class="input-row">
+        <textarea id="messageInput" rows="1" maxlength="4000" placeholder="ゆらに話しかける…" required></textarea>
+        <button id="sendButton" type="submit" aria-label="送信">送る</button>
+      </div>
+      <p id="inputStatus" class="input-status">Ctrl+Enterで送信・Enterで改行</p>
+    </form>
+
+    <template id="messageTemplate">
+      <li class="message">
+        <div class="message-meta"><span class="speaker"></span><time></time></div>
+        <p></p>
+      </li>
+    </template>
+
+    <script type="module" src="/conversation.js"></script>
+  </body>
+</html>
