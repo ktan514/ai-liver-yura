@@ -12,8 +12,11 @@ const audioLabel = document.querySelector("#audioLabel");
 const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 let audioContext = null;
-let audioUnlocked = false;
+let audioPermissionInitialized = false;
+let audioEnabled = false;
 let audioBusy = false;
+let currentAudioSource = null;
+let playbackCancelled = false;
 const audioQueue = [];
 const seenMessages = new Set();
 const seenAudio = new Set();
@@ -34,7 +37,13 @@ function addMessage(message, animate = true) {
   requestAnimationFrame(() => shell.scrollTo({ top: shell.scrollHeight, behavior: animate ? "smooth" : "auto" }));
 }
 
-async function unlockAudio() {
+function updateAudioButton() {
+  audioButton.classList.toggle("enabled", audioEnabled);
+  audioButton.setAttribute("aria-pressed", String(audioEnabled));
+  audioLabel.textContent = audioEnabled ? "音声 ON" : "音声 OFF";
+}
+
+async function enableAudio() {
   try {
     audioContext ||= new AudioContext();
     await audioContext.resume();
@@ -43,54 +52,114 @@ async function unlockAudio() {
     source.buffer = buffer;
     source.connect(audioContext.destination);
     source.start();
-    audioUnlocked = true;
-    audioButton.classList.add("enabled");
-    audioLabel.textContent = "音声 ON";
+    audioPermissionInitialized = true;
+    audioEnabled = true;
+    playbackCancelled = false;
+    updateAudioButton();
     drainAudioQueue();
-  } catch {
+  } catch (error) {
+    console.error("音声を有効にできませんでした。", error);
+    audioPermissionInitialized = true;
+    audioEnabled = false;
     audioLabel.textContent = "音声を有効にできません";
   }
 }
 
-async function acknowledge(audioId, status) {
+async function disableAudio() {
+  audioPermissionInitialized = true;
+  audioEnabled = false;
+  playbackCancelled = true;
+
+  if (currentAudioSource) {
+    try {
+      currentAudioSource.stop();
+    } catch { /* すでに再生終了している場合は何もしない */ }
+  }
+
+  const pending = audioQueue.splice(0);
+  await Promise.all(pending.map((item) => acknowledge(item.audio_id, "skipped", "audio_disabled")));
+
+  if (audioContext?.state === "running") {
+    await audioContext.suspend();
+  }
+  updateAudioButton();
+}
+
+async function toggleAudio() {
+  if (audioEnabled) {
+    await disableAudio();
+  } else {
+    await enableAudio();
+  }
+}
+
+async function acknowledge(audioId, status, reason = "") {
   try {
     await fetch(`/api/audio/${audioId}/complete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, reason }),
     });
-  } catch { /* reconnect後はサーバー側タイムアウトに任せる */ }
+  } catch (error) {
+    console.warn("音声再生結果を通知できませんでした。", { audioId, status, reason, error });
+  }
 }
 
 async function drainAudioQueue() {
-  if (audioBusy || !audioUnlocked || audioQueue.length === 0) return;
+  if (audioBusy || !audioEnabled || audioQueue.length === 0) return;
   audioBusy = true;
+  playbackCancelled = false;
   const item = audioQueue.shift();
   try {
     const response = await fetch(item.url, { cache: "no-store" });
-    if (!response.ok) throw new Error("audio fetch failed");
+    if (!response.ok) throw new Error(`audio fetch failed: ${response.status}`);
     const buffer = await audioContext.decodeAudioData(await response.arrayBuffer());
+    if (!audioEnabled || playbackCancelled) {
+      await acknowledge(item.audio_id, "skipped", "audio_disabled");
+      return;
+    }
+
     const source = audioContext.createBufferSource();
+    currentAudioSource = source;
     source.buffer = buffer;
     source.connect(audioContext.destination);
     await new Promise((resolve) => {
       source.addEventListener("ended", resolve, { once: true });
       source.start();
     });
-    await acknowledge(item.audio_id, "completed");
-  } catch {
-    await acknowledge(item.audio_id, "failed");
+
+    if (!audioEnabled || playbackCancelled) {
+      await acknowledge(item.audio_id, "skipped", "audio_disabled");
+    } else {
+      await acknowledge(item.audio_id, "completed");
+    }
+  } catch (error) {
+    const disabled = !audioEnabled || playbackCancelled;
+    console.error("ブラウザで音声を再生できませんでした。", { audioId: item.audio_id, error });
+    await acknowledge(
+      item.audio_id,
+      disabled ? "skipped" : "failed",
+      disabled ? "audio_disabled" : String(error?.message || error),
+    );
   } finally {
+    currentAudioSource = null;
     audioBusy = false;
+    playbackCancelled = false;
     drainAudioQueue();
   }
 }
 
-function queueAudio(event) {
+async function queueAudio(event) {
   if (!event?.audio_id || seenAudio.has(event.audio_id)) return;
   seenAudio.add(event.audio_id);
+
+  if (audioPermissionInitialized && !audioEnabled) {
+    await acknowledge(event.audio_id, "skipped", "audio_disabled");
+    return;
+  }
+
   audioQueue.push(event);
-  if (!audioUnlocked) audioLabel.textContent = "音声を有効にする（待機中）";
+  if (!audioPermissionInitialized) audioLabel.textContent = "音声を有効にする（待機中）";
   drainAudioQueue();
 }
 
@@ -114,7 +183,7 @@ stream.onerror = () => {
 async function submitMessage() {
   const text = input.value.trim();
   if (!text || sendButton.disabled) return;
-  unlockAudio();
+  if (!audioPermissionInitialized) enableAudio();
   sendButton.disabled = true;
   inputStatus.textContent = "送信しています…";
   try {
@@ -146,7 +215,7 @@ input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = `${Math.min(input.scrollHeight, 130)}px`;
 });
-audioButton.addEventListener("click", unlockAudio);
+audioButton.addEventListener("click", toggleAudio);
 
 let width = 0, height = 0, dpr = 1;
 const motes = Array.from({ length: 120 }, () => ({ x: Math.random(), y: Math.random(), z: Math.random(), phase: Math.random() * 8 }));
@@ -240,9 +309,7 @@ function render(now) {
     const fade = Math.min(1, age * 2) * Math.min(1, (bubble.y + 30) / 90);
     ctx.strokeStyle = `rgba(179, 232, 255, ${bubble.opacity * Math.max(0, fade)})`;
     ctx.lineWidth = .65;
-    ctx.beginPath();
-    ctx.arc(x, bubble.y, bubble.radius, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, bubble.y, bubble.radius, 0, Math.PI * 2); ctx.stroke();
     ctx.fillStyle = `rgba(225, 248, 255, ${bubble.opacity * .55 * Math.max(0, fade)})`;
     ctx.beginPath();
     ctx.arc(x - bubble.radius * .35, bubble.y - bubble.radius * .35, Math.max(.4, bubble.radius * .18), 0, Math.PI * 2);
