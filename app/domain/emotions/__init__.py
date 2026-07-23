@@ -7,6 +7,12 @@ from app.domain.emotions.emotion_appraisal_policy import (
     EmotionAppraisalSettings,
 )
 from app.domain.emotions.emotion_context import EmotionContext
+from app.domain.emotions.emotion_expression import (
+    EmotionExpression,
+    EmotionExpressionDeriver,
+    PerformanceDirective,
+    PerformanceDirectiveType,
+)
 from app.domain.emotions.emotion_state import (
     EmotionState,
     MoodType,
@@ -22,7 +28,11 @@ __all__ = [
     "EmotionAppraisalSettings",
     "EmotionCause",
     "EmotionContext",
+    "EmotionExpression",
+    "EmotionExpressionDeriver",
     "EmotionState",
     "MoodType",
+    "PerformanceDirective",
+    "PerformanceDirectiveType",
     "ReactiveEmotionState",
 ]
