@@ -7,9 +7,17 @@ from app.domain.emotions import EmotionState, MoodType
 
 @dataclass(frozen=True, slots=True)
 class AutonomousActivityPolicy:
-    """感情を表現へ変換せず、自律Activityの開始タイミングだけを判断する。"""
+    """感情を表現へ変換せず、自律Activityの開始タイミングだけを判断する。
+
+    対人会話や直前の自律発話の後には、相手が会話へ戻れる余白を確保する。
+    沈黙は継続要求として扱わず、次の発話までの最小間隔を感情状態から決める。
+    """
 
     low_talkativeness_threshold: float = 0.3
+    default_handoff_seconds: float = 30.0
+    excited_handoff_seconds: float = 20.0
+    quiet_handoff_seconds: float = 45.0
+    tired_handoff_seconds: float = 60.0
 
     def should_defer_talking(self, emotion: EmotionState) -> bool:
         return (
@@ -18,17 +26,19 @@ class AutonomousActivityPolicy:
         )
 
     def minimum_talk_interval_seconds(self, emotion: EmotionState) -> float:
-        if emotion.mood == MoodType.ANGRY:
-            return 5.0
+        """発話後に発話権を相手へ返すための最小待機時間を返す。"""
+
         if emotion.mood == MoodType.TIRED:
-            return 4.0
+            return self.tired_handoff_seconds
+        if emotion.mood in {MoodType.ANGRY, MoodType.SAD}:
+            return self.quiet_handoff_seconds
         if emotion.mood == MoodType.EXCITED:
-            return 0.5
+            return self.excited_handoff_seconds
         if emotion.talkativeness < self.low_talkativeness_threshold:
-            return 3.0
+            return self.tired_handoff_seconds
         if emotion.talkativeness > 0.7:
-            return 0.8
-        return 1.5
+            return self.default_handoff_seconds
+        return self.quiet_handoff_seconds
 
     def awakening_settle_seconds(self, emotion: EmotionState) -> float:
         """覚醒直後に状況を受け取る時間を、現在の感情状態から決める。"""
