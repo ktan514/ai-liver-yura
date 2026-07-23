@@ -28,7 +28,9 @@ let streamConnected = false;
 let signalPresence = 0;
 let nextBubbleAt = 0;
 const bubbles = [];
-const STATE_TIMEOUT_MS = 3000;
+const STATE_TIMEOUT_MS = 45000;
+const PRESENCE_GATHER_RATE = 0.32;
+const PRESENCE_SCATTER_RATE = 0.16;
 
 const particles = Array.from({ length: 820 }, (_, index) => {
   const golden = Math.PI * (3 - Math.sqrt(5));
@@ -245,7 +247,8 @@ function render(now) {
   if (sourceAvailable && now - lastStateAt > STATE_TIMEOUT_MS) {
     markUnavailable(streamConnected ? "ゆらを待っています" : "再接続しています");
   }
-  const presenceRate = 1 - Math.exp(-dt * (sourceAvailable ? 1.8 : .72));
+  const presenceTransitionRate = sourceAvailable ? PRESENCE_GATHER_RATE : PRESENCE_SCATTER_RATE;
+  const presenceRate = 1 - Math.exp(-dt * presenceTransitionRate);
   signalPresence += ((sourceAvailable ? 1 : 0) - signalPresence) * presenceRate;
   smoothState(dt);
   const t = now / 1000;
