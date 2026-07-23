@@ -1,6 +1,6 @@
+from app.bootstrap.emotion_runtime import create_runtime_coordinator
 from app.bootstrap.runtime import (
     StreamPreparationRuntime,
-    create_runtime_coordinator,
     create_stream_preparation_runtime,
     create_streaming_demo_config,
 )
