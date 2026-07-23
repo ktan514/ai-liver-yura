@@ -4,6 +4,7 @@ import argparse
 import json
 import mimetypes
 import threading
+import time
 from collections import deque
 from collections.abc import Callable
 from http import HTTPStatus
@@ -14,11 +15,11 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 from client import CoreApiClient, CoreApiError, EventStreamClient
-
 from config import AdminClientConfig
 
 WEB_ROOT = Path(__file__).parent / "web"
 MAX_JSON_BYTES = 64 * 1024
+EVENT_COALESCE_SECONDS = 0.25
 
 
 class WebEventHub:
@@ -57,24 +58,52 @@ class StreamingAdminService:
             raise
 
     def bootstrap(self) -> dict[str, Any]:
-        return {
-            "health": self.client.health(),
-            "auth": self.client.auth_status(),
-            "broadcasts": self.client.broadcasts(),
-            "run_of_shows": self.client.run_of_shows(),
-            "capabilities": self.client.capabilities(),
-            "session": self._optional(self.client.session),
-            "start": self._optional(self.client.start_status),
-            "opening": self._optional(self.client.opening_status),
-            "main_segment": self._optional(self.client.main_segment_status),
-            "end": self._optional(self.client.end_status),
-            "lifecycle": self._optional(self.client.lifecycle),
-            "comments": self._optional(self.client.comments_status),
-            "moderation": self._optional(self.client.moderation_status),
-            "ranking": self._optional(self.client.ranking_status),
-            "comment_response": self._optional(self.client.comment_response_status),
-            "console": self._optional(self.client.console_snapshot),
+        """Return one consistent snapshot without probing absent session resources."""
+
+        health = self.client.health()
+        auth = self.client.auth_status()
+        broadcasts = self.client.broadcasts()
+        run_of_shows = self.client.run_of_shows()
+        capabilities = self.client.capabilities()
+        session = self._optional(self.client.session)
+        console = self._optional(self.client.console_snapshot)
+
+        result: dict[str, Any] = {
+            "health": health,
+            "auth": auth,
+            "broadcasts": broadcasts,
+            "run_of_shows": run_of_shows,
+            "capabilities": capabilities,
+            "session": session,
+            "start": None,
+            "opening": None,
+            "main_segment": None,
+            "end": None,
+            "lifecycle": None,
+            "comments": None,
+            "moderation": None,
+            "ranking": None,
+            "comment_response": None,
+            "console": console,
         }
+
+        if session is None:
+            return result
+
+        result.update(
+            {
+                "start": self._optional(self.client.start_status),
+                "opening": self._optional(self.client.opening_status),
+                "main_segment": self._optional(self.client.main_segment_status),
+                "end": self._optional(self.client.end_status),
+                "lifecycle": self._optional(self.client.lifecycle),
+                "comments": self._optional(self.client.comments_status),
+                "moderation": self._optional(self.client.moderation_status),
+                "ranking": self._optional(self.client.ranking_status),
+                "comment_response": self._optional(self.client.comment_response_status),
+            }
+        )
+        return result
 
     def action(self, name: str, payload: dict[str, Any]) -> Any:
         command_id = str(uuid4())
@@ -230,8 +259,19 @@ def handler_for(service: StreamingAdminService, hub: WebEventHub) -> type[BaseHT
                     if not events:
                         self.wfile.write(b": heartbeat\n\n")
                     else:
-                        for event in events:
-                            self._send_event("core-event", event)
+                        # Core can emit several related events for one state transition.
+                        # Give them a short window to accumulate and notify the browser once.
+                        time.sleep(EVENT_COALESCE_SECONDS)
+                        sequence, trailing = hub.wait_after(sequence, 0)
+                        if trailing:
+                            events.extend(trailing)
+                        self._send_event(
+                            "core-event",
+                            {
+                                "count": len(events),
+                                "events": events,
+                            },
+                        )
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 return
