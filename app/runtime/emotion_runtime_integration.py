@@ -7,11 +7,12 @@ from typing import Any
 
 from app.core.plugins.user_request import interpret_user_request
 from app.domain.activities import Activity
-from app.domain.character_response import ResponseContext
+from app.domain.character_response import ResponseContext, VoiceIntent
 from app.domain.events import AgentEvent, AgentEventType
+from app.runtime.agent_state import AgentState
+from app.runtime.character_response_pipeline import CharacterLlmService
 from app.runtime.emotion_appraisal_service import EmotionAppraisalService
 from app.runtime.emotion_context_builder import EmotionContextBuilder
-from app.runtime.agent_state import AgentState
 
 
 class EmotionAwareResponseContextBuilder:
@@ -73,6 +74,7 @@ def attach_emotion_runtime(
 
     coordinator.publish_events = MethodType(publish_events_with_emotion, coordinator)
     _attach_emotion_context_builder(coordinator)
+    _attach_voice_intent_parser()
     return coordinator
 
 
@@ -86,6 +88,39 @@ def _attach_emotion_context_builder(coordinator: Any) -> None:
         context_builder,
         lambda: coordinator.agent_state,
     )
+
+
+def _attach_voice_intent_parser() -> None:
+    CharacterLlmService._parse_voice_intent = staticmethod(_parse_voice_intent)
+
+
+def _parse_voice_intent(value: object) -> VoiceIntent | None:
+    if value is None:
+        return VoiceIntent()
+    if not isinstance(value, dict):
+        return None
+    style = value.get("style")
+    if not isinstance(style, str) or not style.strip():
+        return None
+    try:
+        return VoiceIntent(
+            style=style.strip(),
+            speed=_number(value, "speed", 1.0),
+            pitch=_number(value, "pitch", 0.0),
+            intonation=_number(value, "intonation", 1.0),
+            volume=_number(value, "volume", 1.0),
+            breathiness=_number(value, "breathiness", 0.0),
+            emotional_leakage=_number(value, "emotional_leakage", 0.0),
+        )
+    except ValueError:
+        return None
+
+
+def _number(value: dict[str, object], key: str, default: float) -> float:
+    item = value.get(key, default)
+    if isinstance(item, bool) or not isinstance(item, (int, float)):
+        raise ValueError(f"{key}は数値で指定してください。")
+    return float(item)
 
 
 def _recent_context(state: AgentState) -> str:
