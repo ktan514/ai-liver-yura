@@ -13,7 +13,11 @@ from app.domain.topic import (
 
 
 class TopicContinuationEvaluator:
-    """中断話題の価値・感情・経過を組み合わせて次の進路を選ぶ。"""
+    """中断話題の価値・感情・経過を組み合わせて次の進路を選ぶ。
+
+    ユーザーの無反応や別発言を、元話題を続けてよい根拠として扱わない。
+    同一話題の自律発話は短く閉じ、明示的な反応がない限り再開を抑制する。
+    """
 
     def evaluate(
         self,
@@ -33,6 +37,23 @@ class TopicContinuationEvaluator:
         )
         negative_mood = emotion.mood in {MoodType.ANGRY, MoodType.SAD, MoodType.TIRED}
 
+        if topic.turn_count >= 2:
+            return TopicContinuationResult(
+                TopicContinuationDecision.ABANDON_ORIGINAL,
+                ("autonomous_turn_limit_reached", "yield_turn_to_listener"),
+            )
+
+        if topic.interruption_turns > 0:
+            if topic.importance >= 0.75 and topic.incompleteness >= 0.7:
+                return TopicContinuationResult(
+                    TopicContinuationDecision.SUSPEND_ORIGINAL,
+                    ("listener_intervened", "important_unfinished_topic"),
+                )
+            return TopicContinuationResult(
+                TopicContinuationDecision.ABANDON_ORIGINAL,
+                ("listener_intervened", "do_not_self_resume_without_invitation"),
+            )
+
         if negative_mood or emotion.talkativeness < 0.3:
             if topic.importance >= 0.65 and topic.incompleteness >= 0.55:
                 return TopicContinuationResult(
@@ -45,15 +66,9 @@ class TopicContinuationEvaluator:
             )
 
         if topic.exhaustion >= 0.7:
-            if topic.interest >= 0.65 and topic.interruption_topics:
-                return TopicContinuationResult(
-                    TopicContinuationDecision.BRANCH_FROM_INTERRUPTION,
-                    ("original_topic_exhausted", "interruption_candidate_available"),
-                    selected_topic=topic.interruption_topics[-1],
-                )
             return TopicContinuationResult(
                 TopicContinuationDecision.ABANDON_ORIGINAL,
-                ("original_topic_exhausted", "new_points_insufficient"),
+                ("original_topic_exhausted", "yield_turn_to_listener"),
             )
 
         resume_score = (
@@ -63,32 +78,23 @@ class TopicContinuationEvaluator:
             + continuity * 0.15
             - topic.exhaustion * 0.30
         )
-        if resume_score >= 0.64:
+        if resume_score >= 0.72:
             decision = (
                 TopicContinuationDecision.RESUME_WITH_REFRAMING
                 if topic.status == TopicLifecycleStatus.SUSPENDED
-                or topic.interruption_turns >= 2
                 else TopicContinuationDecision.RESUME_ORIGINAL
             )
             return TopicContinuationResult(
                 decision,
                 ("resume_score_high", f"resume_score={resume_score:.3f}"),
-                reintroduction_required=continuity < 0.9
-                or topic.interruption_turns > 0,
+                reintroduction_required=continuity < 0.9,
                 selected_topic=topic.original_text,
             )
 
-        if topic.interruption_topics and drive.curiosity >= 0.65:
-            return TopicContinuationResult(
-                TopicContinuationDecision.BRANCH_FROM_INTERRUPTION,
-                ("interruption_candidate_available", "curiosity_high"),
-                selected_topic=topic.interruption_topics[-1],
-            )
-
-        if topic.interest >= 0.6 and topic.incompleteness >= 0.4:
+        if topic.interest >= 0.7 and topic.incompleteness >= 0.65:
             return TopicContinuationResult(
                 TopicContinuationDecision.BRANCH_FROM_ORIGINAL,
-                ("original_interest_remains", "direct_resume_score_low"),
+                ("original_interest_remains", "substantial_unfinished_point"),
                 selected_topic=topic.original_text,
             )
 
