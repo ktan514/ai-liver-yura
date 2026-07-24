@@ -7,10 +7,11 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.admin_api import create_admin_api
-from app.bootstrap import compose_streaming
+from app.bootstrap import compose_streaming, create_stream_preparation_runtime
 from app.config.app_config import load_app_config
-from app.plugins.youtube_streaming.adapters.manual_check_log import create_manual_check_log
-from app.runtime.runtime_factory import create_stream_preparation_runtime
+from app.plugins.youtube_streaming.adapters.manual_check_log import (
+    create_manual_check_log,
+)
 
 
 def records(logger: object) -> list[dict[str, Any]]:
@@ -48,7 +49,9 @@ def test_events_are_correlated_sanitized_and_summarized(tmp_path: Path) -> None:
         "trace",
     )
     logger.record_broker_event(
-        "stream_end.completed", {"session_id": "session", "status": "completed"}, "trace"
+        "stream_end.completed",
+        {"session_id": "session", "status": "completed"},
+        "trace",
     )
     logger.close()
 
@@ -84,7 +87,8 @@ def test_emergency_and_error_terminal_summaries_are_recorded(tmp_path: Path) -> 
     emergency_values = records(emergency)
     assert any(item["event"] == "emergency_stop_requested" for item in emergency_values)
     assert any(
-        item["event"] == "manual_check_summary" and item["status"] == "emergency_stopped"
+        item["event"] == "manual_check_summary"
+        and item["status"] == "emergency_stopped"
         for item in emergency_values
     )
 
@@ -111,7 +115,9 @@ def test_emergency_and_error_terminal_summaries_are_recorded(tmp_path: Path) -> 
     )
 
 
-def test_health_exposes_log_status_and_ui_endpoint_uses_same_writer(tmp_path: Path) -> None:
+def test_health_exposes_log_status_and_ui_endpoint_uses_same_writer(
+    tmp_path: Path,
+) -> None:
     logger = create_manual_check_log("streaming_demo", True, tmp_path)
     assert logger is not None
     runtime = create_stream_preparation_runtime(load_app_config())
@@ -129,7 +135,9 @@ def test_health_exposes_log_status_and_ui_endpoint_uses_same_writer(tmp_path: Pa
     assert response.status_code == 202
     logger.close()
     values = records(logger)
-    assert any(item["source"] == "ui" and item["event"] == "prepare_clicked" for item in values)
+    assert any(
+        item["source"] == "ui" and item["event"] == "prepare_clicked" for item in values
+    )
     assert "secret" not in json.dumps(values)
 
 
@@ -169,12 +177,20 @@ def test_demo_comment_text_and_processing_are_correlated_only_in_manual_log(
     )
     logger.record_broker_event(
         "stream_comments.target_selected",
-        {"session_id": "session", "candidate_id": "candidate", "selection_id": "selection"},
+        {
+            "session_id": "session",
+            "candidate_id": "candidate",
+            "selection_id": "selection",
+        },
         "trace",
     )
     logger.record_broker_event(
         "stream_comments.response_completed",
-        {"session_id": "session", "candidate_id": "candidate", "selection_id": "selection"},
+        {
+            "session_id": "session",
+            "candidate_id": "candidate",
+            "selection_id": "selection",
+        },
         "trace",
     )
     logger.close()
@@ -195,17 +211,27 @@ def test_demo_comment_text_and_processing_are_correlated_only_in_manual_log(
     }
     received = next(item for item in values if item["event"] == "comment_received")
     assert received["details"]["normalized_text"] == "海と山ならどっちが好き？"
-    response = next(item for item in values if item["event"] == "comment_response_completed")
+    response = next(
+        item for item in values if item["event"] == "comment_response_completed"
+    )
     assert response["details"]["response_text"]
-    notice = next(item for item in values if item["event"] == "manual_check_log_privacy_notice")
+    notice = next(
+        item for item in values if item["event"] == "manual_check_log_privacy_notice"
+    )
     assert notice["details"]["contains_demo_input_text"] is True
     assert notice["details"]["real_user_comments_logged"] is False
-    submitted = next(item for item in values if item["event"] == "demo_comment_submitted")
-    assert submitted["details"] | {
-        "author_role": "viewer",
-        "message_type": "textMessageEvent",
-        "is_paid": False,
-    } == submitted["details"]
+    submitted = next(
+        item for item in values if item["event"] == "demo_comment_submitted"
+    )
+    assert (
+        submitted["details"]
+        | {
+            "author_role": "viewer",
+            "message_type": "textMessageEvent",
+            "is_paid": False,
+        }
+        == submitted["details"]
+    )
     summary = next(item for item in values if item["event"] == "manual_check_summary")
     assert summary["details"]["submitted_test_count"] == 1
     assert summary["details"]["selected_count"] == 1

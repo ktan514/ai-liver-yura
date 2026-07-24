@@ -32,7 +32,9 @@ class EchoLifecycle:
         self.started = False
 
     async def health(self) -> PluginHealth:
-        status = PluginHealthStatus.HEALTHY if self.started else PluginHealthStatus.STOPPED
+        status = (
+            PluginHealthStatus.HEALTHY if self.started else PluginHealthStatus.STOPPED
+        )
         return PluginHealth(status)
 
 
@@ -63,4 +65,3 @@ def registration(*, enabled: bool = True) -> PluginRegistration:
         queries={"sample.status": EchoQuery(lifecycle)},
         enabled=enabled,
     )
-

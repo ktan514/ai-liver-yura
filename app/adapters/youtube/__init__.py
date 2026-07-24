@@ -6,7 +6,9 @@ from app.adapters.youtube.google_youtube_client_factory import (
     GoogleYouTubeClientConfig,
     GoogleYouTubeClientFactory,
 )
-from app.adapters.youtube.google_youtube_live_chat_adapter import GoogleYouTubeLiveChatAdapter
+from app.adapters.youtube.google_youtube_live_chat_adapter import (
+    GoogleYouTubeLiveChatAdapter,
+)
 from app.adapters.youtube.google_youtube_preparation_adapter import (
     GoogleYouTubePreparationAdapter,
     GoogleYouTubePreparationConfig,

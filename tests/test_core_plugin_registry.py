@@ -4,7 +4,11 @@ from dataclasses import dataclass, replace
 
 import pytest
 
-from app.core.application.plugins import CommandDispatcher, PluginRegistry, QueryDispatcher
+from app.core.application.plugins import (
+    CommandDispatcher,
+    PluginRegistry,
+    QueryDispatcher,
+)
 from app.core.contracts.plugins import (
     CapabilityPolicy,
     CapabilityRegistration,
@@ -15,11 +19,20 @@ from app.core.contracts.plugins import (
     PluginHealthStatus,
     PluginRegistration,
 )
-from tests.fixtures.plugins.sample_echo_plugin import EchoDescriptor, EchoLifecycle, registration
+from app.shared.contracts.plugins.registration import (
+    PluginActivityRequest as SharedPluginActivityRequest,
+)
+from tests.fixtures.plugins.sample_echo_plugin import (
+    EchoDescriptor,
+    EchoLifecycle,
+    registration,
+)
 
 
 @pytest.mark.asyncio
-async def test_sample_plugin_registers_dispatches_and_stops_without_core_changes() -> None:
+async def test_sample_plugin_registers_dispatches_and_stops_without_core_changes() -> (
+    None
+):
     registry = PluginRegistry()
     item = registration()
     registry.register(item)
@@ -28,7 +41,9 @@ async def test_sample_plugin_registers_dispatches_and_stops_without_core_changes
     assert await CommandDispatcher(registry).dispatch("sample.echo", "hello") == {
         "echo": "hello"
     }
-    assert await QueryDispatcher(registry).dispatch("sample.status") == {"started": True}
+    assert await QueryDispatcher(registry).dispatch("sample.status") == {
+        "started": True
+    }
     assert (await registry.health())["sample_echo"].status == PluginHealthStatus.HEALTHY
     await registry.stop_all()
     await registry.stop_all()
@@ -152,3 +167,11 @@ async def test_activity_provider_dispatch() -> None:
 class HealthyLifecycle(EchoLifecycle):
     async def health(self) -> PluginHealth:
         return PluginHealth(PluginHealthStatus.HEALTHY)
+
+
+def test_legacy_plugin_contract_import_reexports_shared_contract() -> None:
+    from app.core.contracts.plugins import (
+        PluginActivityRequest as LegacyPluginActivityRequest,
+    )
+
+    assert LegacyPluginActivityRequest is SharedPluginActivityRequest

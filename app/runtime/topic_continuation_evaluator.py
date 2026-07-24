@@ -27,7 +27,9 @@ class TopicContinuationEvaluator:
         elapsed_minutes = self._elapsed_minutes(topic, current_time)
         continuity = max(
             0.0,
-            1.0 - min(1.0, elapsed_minutes / 10.0) - min(0.6, topic.interruption_turns * 0.12),
+            1.0
+            - min(1.0, elapsed_minutes / 10.0)
+            - min(0.6, topic.interruption_turns * 0.12),
         )
         negative_mood = emotion.mood in {MoodType.ANGRY, MoodType.SAD, MoodType.TIRED}
 
@@ -64,13 +66,15 @@ class TopicContinuationEvaluator:
         if resume_score >= 0.64:
             decision = (
                 TopicContinuationDecision.RESUME_WITH_REFRAMING
-                if topic.status == TopicLifecycleStatus.SUSPENDED or topic.interruption_turns >= 2
+                if topic.status == TopicLifecycleStatus.SUSPENDED
+                or topic.interruption_turns >= 2
                 else TopicContinuationDecision.RESUME_ORIGINAL
             )
             return TopicContinuationResult(
                 decision,
                 ("resume_score_high", f"resume_score={resume_score:.3f}"),
-                reintroduction_required=continuity < 0.9 or topic.interruption_turns > 0,
+                reintroduction_required=continuity < 0.9
+                or topic.interruption_turns > 0,
                 selected_topic=topic.original_text,
             )
 

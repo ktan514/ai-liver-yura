@@ -1,8 +1,15 @@
-from app.core.application.plugins.dispatchers import (
+"""Deprecated compatibility import. Use app.shared.plugin_host."""
+
+from app.shared.plugin_host import (
     ActivityDispatcher,
     CommandDispatcher,
+    PluginRegistry,
     QueryDispatcher,
 )
-from app.core.application.plugins.registry import PluginRegistry
 
-__all__ = ["ActivityDispatcher", "CommandDispatcher", "PluginRegistry", "QueryDispatcher"]
+__all__ = [
+    "ActivityDispatcher",
+    "CommandDispatcher",
+    "PluginRegistry",
+    "QueryDispatcher",
+]

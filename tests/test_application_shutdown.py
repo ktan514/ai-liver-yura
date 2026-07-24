@@ -8,7 +8,9 @@ from tests.fixtures.plugins.sample_echo_plugin import EchoLifecycle, registratio
 
 
 @pytest.mark.asyncio
-async def test_shutdown_coordinator_stops_plugins_before_runtime_framework_and_logging() -> None:
+async def test_shutdown_coordinator_stops_plugins_before_runtime_framework_and_logging() -> (
+    None
+):
     registry = PluginRegistry()
     item = registration()
     registry.register(item)

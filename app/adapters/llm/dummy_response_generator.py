@@ -24,7 +24,10 @@ class DummyResponseGenerator(ResponseGenerator):
             character_profile=self._character_profile,
         )
 
-        if activity.activity_type == ActivityType.CONVERSATION_WITH_USER:
+        if activity.activity_type in {
+            ActivityType.CONVERSATION_WITH_USER,
+            ActivityType.DIRECTED_TALK,
+        }:
             text = self._extract_user_text(activity)
             return f"ダミー応答: {text}"
 

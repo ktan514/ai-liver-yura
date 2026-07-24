@@ -31,7 +31,9 @@ class FakeObsStreamingControlAdapter:
 @dataclass(slots=True)
 class FakeYouTubeStreamingControlAdapter:
     stream_statuses: list[str] = field(default_factory=lambda: ["active", "active"])
-    broadcast_statuses: list[str] = field(default_factory=lambda: ["ready", "live", "live"])
+    broadcast_statuses: list[str] = field(
+        default_factory=lambda: ["ready", "live", "live"]
+    )
     adapter_type: str = "fake"
     transition_calls: int = 0
     complete_calls: int = 0

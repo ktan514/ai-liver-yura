@@ -13,8 +13,8 @@ from app.admin_api.console import (
     save_snapshot,
     timeline_entry,
 )
-from app.core.application.events import ApplicationEventBroker
-from app.core.application.plugins import CommandDispatcher, PluginRegistry, QueryDispatcher
+from app.shared.observability import ApplicationEventBroker
+from app.shared.plugin_host import CommandDispatcher, PluginRegistry, QueryDispatcher
 
 
 class AdminApiService:
@@ -35,7 +35,9 @@ class AdminApiService:
         )
         runtime = dict(self._runtime_status())
         self.log_settings = RuntimeLogSettings(runtime.get("log_settings"))
-        self.diagnostics = DiagnosticRingBuffer(int(self.log_settings.values["ring_buffer_size"]))
+        self.diagnostics = DiagnosticRingBuffer(
+            int(self.log_settings.values["ring_buffer_size"])
+        )
         self.broker.add_observer(self._record_event)
 
     @property
@@ -51,10 +53,14 @@ class AdminApiService:
     def runtime_status(self) -> Mapping[str, Any]:
         return self._runtime_status()
 
-    def _record_event(self, event_type: str, data: dict[str, Any], trace_id: str) -> None:
+    def _record_event(
+        self, event_type: str, data: dict[str, Any], trace_id: str
+    ) -> None:
         self.diagnostics.append(timeline_entry(event_type, data, trace_id))
 
-    def record_admin_operation(self, event: str, details: Mapping[str, Any] | None = None) -> None:
+    def record_admin_operation(
+        self, event: str, details: Mapping[str, Any] | None = None
+    ) -> None:
         self.broker.publish(
             "admin.operation.performed",
             {"operation": event, "details": dict(details or {})},
@@ -64,12 +70,17 @@ class AdminApiService:
         runtime = dict(self.runtime_status())
         modes = runtime.get("adapter_modes", {})
         youtube_type = (
-            str(modes.get("youtube", "unknown")) if isinstance(modes, Mapping) else "unknown"
+            str(modes.get("youtube", "unknown"))
+            if isinstance(modes, Mapping)
+            else "unknown"
         )
         overrides = runtime.get("streaming_capabilities")
-        youtube_override = overrides.get("youtube") if isinstance(overrides, Mapping) else None
+        youtube_override = (
+            overrides.get("youtube") if isinstance(overrides, Mapping) else None
+        )
         youtube = AdapterCapabilities.for_adapter(
-            youtube_type, youtube_override if isinstance(youtube_override, Mapping) else None
+            youtube_type,
+            youtube_override if isinstance(youtube_override, Mapping) else None,
         )
         return {
             "youtube": {
@@ -103,16 +114,20 @@ class AdminApiService:
             str(capabilities["youtube"]["adapter_type"]), capabilities["youtube"]
         )
         status = (
-            str(session.get("status", "created")) if isinstance(session, Mapping) else "created"
+            str(session.get("status", "created"))
+            if isinstance(session, Mapping)
+            else "created"
         )
         phase = (
             "ending"
             if status in {"ending", "closing"}
-            else "starting"
-            if status in {"ready", "starting"}
-            else "idle"
+            else "starting" if status in {"ready", "starting"} else "idle"
         )
-        auth_status = str(auth.get("status", "unknown")) if isinstance(auth, Mapping) else "unknown"
+        auth_status = (
+            str(auth.get("status", "unknown"))
+            if isinstance(auth, Mapping)
+            else "unknown"
+        )
         observed = (
             session.get("observed_at") if isinstance(session, Mapping) else None
         ) or datetime.now(timezone.utc).isoformat()
@@ -135,15 +150,23 @@ class AdminApiService:
             },
             {
                 "name": "OBS",
-                "status": "healthy" if modes.get("obs") != "disabled" else "unavailable",
+                "status": (
+                    "healthy" if modes.get("obs") != "disabled" else "unavailable"
+                ),
                 "adapter_type": str(modes.get("obs", "unknown")),
-                "update_mode": "automatic"
-                if self.log_settings.values["obs_auto_refresh"]
-                else "manual",
-                "update_interval_seconds": int(self.log_settings.values["obs_refresh_interval"]),
-                "next_update_in_seconds": int(self.log_settings.values["obs_refresh_interval"])
-                if self.log_settings.values["obs_auto_refresh"]
-                else None,
+                "update_mode": (
+                    "automatic"
+                    if self.log_settings.values["obs_auto_refresh"]
+                    else "manual"
+                ),
+                "update_interval_seconds": int(
+                    self.log_settings.values["obs_refresh_interval"]
+                ),
+                "next_update_in_seconds": (
+                    int(self.log_settings.values["obs_refresh_interval"])
+                    if self.log_settings.values["obs_auto_refresh"]
+                    else None
+                ),
                 "last_updated_at": observed,
                 "freshness": freshness(observed, stale_after),
                 "error_code": None,
@@ -153,18 +176,24 @@ class AdminApiService:
                 "name": "YouTube",
                 "status": auth_status,
                 "adapter_type": str(modes.get("youtube", "unknown")),
-                "update_mode": "automatic"
-                if self.log_settings.values["youtube_auto_refresh"]
-                else "event_driven",
+                "update_mode": (
+                    "automatic"
+                    if self.log_settings.values["youtube_auto_refresh"]
+                    else "event_driven"
+                ),
                 "update_interval_seconds": int(
                     self.log_settings.values["youtube_refresh_interval"]
                 ),
-                "next_update_in_seconds": int(self.log_settings.values["youtube_refresh_interval"])
-                if self.log_settings.values["youtube_auto_refresh"]
-                else None,
+                "next_update_in_seconds": (
+                    int(self.log_settings.values["youtube_refresh_interval"])
+                    if self.log_settings.values["youtube_auto_refresh"]
+                    else None
+                ),
                 "last_updated_at": observed,
                 "freshness": freshness(observed, stale_after),
-                "error_code": auth.get("failure_code") if isinstance(auth, Mapping) else None,
+                "error_code": (
+                    auth.get("failure_code") if isinstance(auth, Mapping) else None
+                ),
                 "error_message": None,
             },
         ]
@@ -175,7 +204,9 @@ class AdminApiService:
             and action["action_type"] == "authentication_required"
             and str(modes.get("youtube")) == "fake"
         ):
-            action = operator_action_for(youtube_caps, phase="idle", auth_status="authenticated")
+            action = operator_action_for(
+                youtube_caps, phase="idle", auth_status="authenticated"
+            )
         return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "current_state": status,
@@ -205,7 +236,9 @@ class AdminApiService:
         }.get(status, "状態を確認しています。")
 
     @staticmethod
-    def _lifecycle_steps(session: Any, opening: Any, main: Any, end: Any) -> list[dict[str, Any]]:
+    def _lifecycle_steps(
+        session: Any, opening: Any, main: Any, end: Any
+    ) -> list[dict[str, Any]]:
         session_value = session if isinstance(session, Mapping) else {}
         status = str(session_value.get("status", "created"))
         definitions = [
@@ -233,22 +266,24 @@ class AdminApiService:
             source = (
                 opening
                 if step == "opening"
-                else main
-                if step == "main"
-                else end
-                if step in {"closing", "end"}
-                else {}
+                else (
+                    main
+                    if step == "main"
+                    else end if step in {"closing", "end"} else {}
+                )
             )
             source = source if isinstance(source, Mapping) else {}
-            source_status = str(source.get("status") or source.get("closing_status") or "")
+            source_status = str(
+                source.get("status") or source.get("closing_status") or ""
+            )
             step_status = (
                 "failed"
                 if source_status == "failed"
-                else "completed"
-                if index <= rank
-                else "in_progress"
-                if index == rank + 1
-                else "not_started"
+                else (
+                    "completed"
+                    if index <= rank
+                    else "in_progress" if index == rank + 1 else "not_started"
+                )
             )
             values.append(
                 {
@@ -258,11 +293,14 @@ class AdminApiService:
                     "started_at": source.get("started_at"),
                     "completed_at": source.get("completed_at"),
                     "owner": owner,
-                    "error_code": source.get("error_code") or source.get("failure_code"),
-                    "error_message": source.get("error_message") or source.get("failure_message"),
+                    "error_code": source.get("error_code")
+                    or source.get("failure_code"),
+                    "error_message": source.get("error_message")
+                    or source.get("failure_message"),
                     "retryable": bool(
                         source.get(
-                            "retryable", step in {"opening", "main"} and step_status == "failed"
+                            "retryable",
+                            step in {"opening", "main"} and step_status == "failed",
                         )
                     ),
                     "skippable": bool(source.get("skippable", False)),
@@ -276,15 +314,25 @@ class AdminApiService:
         steps: list[dict[str, Any]], capabilities: Mapping[str, Any]
     ) -> list[dict[str, Any]]:
         youtube = capabilities.get("youtube", {})
-        manual_start = isinstance(youtube, Mapping) and not youtube.get("can_start_broadcast")
-        manual_stop = isinstance(youtube, Mapping) and not youtube.get("can_stop_broadcast")
-        fake_youtube = isinstance(youtube, Mapping) and youtube.get("adapter_type") == "fake"
+        manual_start = isinstance(youtube, Mapping) and not youtube.get(
+            "can_start_broadcast"
+        )
+        manual_stop = isinstance(youtube, Mapping) and not youtube.get(
+            "can_stop_broadcast"
+        )
+        fake_youtube = (
+            isinstance(youtube, Mapping) and youtube.get("adapter_type") == "fake"
+        )
         by_step = {item["step"]: item["status"] for item in steps}
         return [
             {
                 "operation": "YouTube認証",
                 "owner": "not_applicable" if fake_youtube else "operator",
-                "status": "completed" if fake_youtube else by_step.get("youtube", "not_started"),
+                "status": (
+                    "completed"
+                    if fake_youtube
+                    else by_step.get("youtube", "not_started")
+                ),
             },
             {
                 "operation": "配信枠取得",
@@ -335,10 +383,13 @@ class AdminApiService:
             "recent_actions": [
                 item
                 for item in events
-                if item.get("action_id") or item.get("event_name") == "admin.operation.performed"
+                if item.get("action_id")
+                or item.get("event_name") == "admin.operation.performed"
             ],
             "recent_errors": [
-                item for item in events if item.get("error_code") or item.get("result") == "failed"
+                item
+                for item in events
+                if item.get("error_code") or item.get("result") == "failed"
             ],
             "configuration_summary": dict(self.log_settings.values),
         }

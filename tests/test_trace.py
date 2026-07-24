@@ -115,7 +115,9 @@ def test_llm_details_are_one_line_and_separated_from_info(tmp_path) -> None:
     assert response_record["adopted_text"] == "しりとりを開始する"
 
 
-def test_sensitive_values_are_masked_in_nested_llm_details(tmp_path, monkeypatch) -> None:
+def test_sensitive_values_are_masked_in_nested_llm_details(
+    tmp_path, monkeypatch
+) -> None:
     debug_file = tmp_path / "runtime_debug.log"
     secret = "very-private-value-123"
     monkeypatch.setenv("OPENAI_API_KEY", secret)
@@ -139,8 +141,7 @@ def test_sensitive_values_are_masked_in_nested_llm_details(tmp_path, monkeypatch
             "headers": {"Authorization": f"Bearer {secret}"},
             "api_key": secret,
             "input": (
-                f"秘密を含む入力 {secret} "
-                "postgresql://dbuser:dbpass@db.example/app"
+                f"秘密を含む入力 {secret} " "postgresql://dbuser:dbpass@db.example/app"
             ),
         },
     )

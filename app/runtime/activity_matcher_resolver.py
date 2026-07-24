@@ -5,7 +5,7 @@ from threading import RLock
 from typing import ClassVar
 
 from app.domain.activity_constraints import ActivityConstraintValidator
-from app.domain.behavior import (
+from app.shared.contracts.activity import (
     ActivityDefinition,
     ActivityMatcher,
     ActivityMatcherContext,
@@ -34,10 +34,14 @@ class LegacyActivityMatcherAdapter:
     _warning_lock: ClassVar[RLock] = RLock()
 
     @classmethod
-    def from_definition(cls, definition: ActivityDefinition) -> LegacyActivityMatcherAdapter | None:
+    def from_definition(
+        cls, definition: ActivityDefinition
+    ) -> LegacyActivityMatcherAdapter | None:
         if not definition.start_markers and not definition.stop_markers:
             return None
-        matcher_id = f"legacy:{definition.provider_plugin_id}:{definition.activity_type}"
+        matcher_id = (
+            f"legacy:{definition.provider_plugin_id}:{definition.activity_type}"
+        )
         with cls._warning_lock:
             first_warning = matcher_id not in cls._warned_definitions
             cls._warned_definitions.add(matcher_id)
@@ -65,7 +69,9 @@ class LegacyActivityMatcherAdapter:
             matcher_id=matcher_id,
         )
 
-    def match(self, context: ActivityMatcherContext) -> DeterministicActivityMatch | None:
+    def match(
+        self, context: ActivityMatcherContext
+    ) -> DeterministicActivityMatch | None:
         if context.normalized_input in self.start_markers:
             operation = ActivityOperation.START
         elif context.normalized_input in self.stop_markers:
@@ -100,8 +106,12 @@ class LegacyActivityMatcherAdapter:
 class ActivityMatcherResolver:
     """全Matcherを共通契約で評価し、優先順位と競合を安全に解決する。"""
 
-    def __init__(self, constraint_validator: ActivityConstraintValidator | None = None) -> None:
-        self._constraint_validator = constraint_validator or ActivityConstraintValidator()
+    def __init__(
+        self, constraint_validator: ActivityConstraintValidator | None = None
+    ) -> None:
+        self._constraint_validator = (
+            constraint_validator or ActivityConstraintValidator()
+        )
         self._trace_logger = TraceLogger()
 
     def resolve(
@@ -207,11 +217,15 @@ class ActivityMatcherResolver:
         if not candidates:
             return None
         highest_priority = max(match.priority for _, match in candidates)
-        prioritized = [item for item in candidates if item[1].priority == highest_priority]
+        prioritized = [
+            item for item in candidates if item[1].priority == highest_priority
+        ]
         if len(prioritized) == 1:
             return prioritized[0]
         highest_confidence = max(match.confidence for _, match in prioritized)
-        confident = [item for item in prioritized if item[1].confidence == highest_confidence]
+        confident = [
+            item for item in prioritized if item[1].confidence == highest_confidence
+        ]
         if len(confident) != 1:
             return None
         return confident[0]

@@ -1,5 +1,3 @@
-
-
 from datetime import datetime, timezone
 
 from app.domain.drives import DriveState
@@ -10,7 +8,9 @@ from app.runtime.drive_state_updater import DriveStateUpdater
 def test_update_by_user_text_increases_engagement_and_curiosity() -> None:
     updater = DriveStateUpdater()
     drive = DriveState(curiosity=0.4, engagement=0.4, boredom=0.5, energy=0.8)
-    event = AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"})
+    event = AgentEvent(
+        event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"}
+    )
 
     updated_drive = updater.update_by_event(drive, event)
 
@@ -37,17 +37,14 @@ def test_update_by_youtube_comment_increases_engagement_and_curiosity() -> None:
 
 
 # New tests for app and stream started events
-def test_update_by_app_started_increases_startup_drive() -> None:
+def test_update_by_app_started_preserves_drive() -> None:
     updater = DriveStateUpdater()
     drive = DriveState(curiosity=0.4, engagement=0.4, boredom=0.2, energy=0.7)
     event = AgentEvent(event_type=AgentEventType.APP_STARTED)
 
     updated_drive = updater.update_by_event(drive, event)
 
-    assert updated_drive.curiosity > drive.curiosity
-    assert updated_drive.engagement > drive.engagement
-    assert updated_drive.boredom > drive.boredom
-    assert updated_drive.energy > drive.energy
+    assert updated_drive == drive
 
 
 def test_update_by_stream_started_increases_engagement_more_than_app_started() -> None:

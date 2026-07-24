@@ -69,11 +69,15 @@ class OpenAIMemorySummaryModel(MemorySummaryModel):
         try:
             response_json = json.loads(response_body)
         except json.JSONDecodeError as error:
-            raise RuntimeError("openai memory summary response is not valid json") from error
+            raise RuntimeError(
+                "openai memory summary response is not valid json"
+            ) from error
 
         summary = self._extract_text(response_json)
         if not summary:
-            raise RuntimeError("openai memory summary response does not contain response text")
+            raise RuntimeError(
+                "openai memory summary response does not contain response text"
+            )
 
         return summary
 

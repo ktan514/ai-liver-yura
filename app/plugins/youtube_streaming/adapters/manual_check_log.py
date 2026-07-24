@@ -8,10 +8,7 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from app.domain.activities import ActivityType
-from app.plugins.youtube_streaming.adapters.streaming_demo_response_generator import (
-    STREAMING_DEMO_RESPONSES,
-)
+from app.shared.testing import STREAMING_DEMO_SPEECH
 
 
 def create_manual_check_log(
@@ -54,10 +51,22 @@ class StreamingDemoManualCheckLog:
         "stream_comments.candidate_created": ("stream.comment", "candidate_created"),
         "stream_comments.ranking_completed": ("stream.comment", "ranking_completed"),
         "stream_comments.target_selected": ("stream.comment", "selection_reserved"),
-        "stream_comments.reservation_consumed": ("stream.comment", "selection_consumed"),
-        "stream_comments.reservation_released": ("stream.comment", "selection_released"),
-        "stream_comments.response_started": ("stream.activity", "comment_response_started"),
-        "stream_comments.response_completed": ("stream.activity", "comment_response_completed"),
+        "stream_comments.reservation_consumed": (
+            "stream.comment",
+            "selection_consumed",
+        ),
+        "stream_comments.reservation_released": (
+            "stream.comment",
+            "selection_released",
+        ),
+        "stream_comments.response_started": (
+            "stream.activity",
+            "comment_response_started",
+        ),
+        "stream_comments.response_completed": (
+            "stream.activity",
+            "comment_response_completed",
+        ),
         "stream_comments.response_failed": ("error", "comment_response_failed"),
         "stream_closing.started": ("stream.activity", "closing_started"),
         "stream_closing.completed": ("stream.activity", "closing_completed"),
@@ -67,7 +76,10 @@ class StreamingDemoManualCheckLog:
         "stream_end.obs_idle": ("stream.external", "obs_stop_completed"),
         "stream_end.completed": ("stream.session", "session_completed"),
         "stream_emergency_stop.requested": ("stream.end", "emergency_stop_requested"),
-        "stream_emergency_stop.completed": ("stream.session", "session_emergency_stopped"),
+        "stream_emergency_stop.completed": (
+            "stream.session",
+            "session_emergency_stopped",
+        ),
         "stream_emergency_stop.broadcast_complete": (
             "stream.external",
             "youtube_stop_completed",
@@ -170,7 +182,9 @@ class StreamingDemoManualCheckLog:
     def count(self) -> int:
         return sum(self._counts.values())
 
-    def record_broker_event(self, event_type: str, data: dict[str, Any], trace_id: str) -> None:
+    def record_broker_event(
+        self, event_type: str, data: dict[str, Any], trace_id: str
+    ) -> None:
         mapped = self.EVENT_MAP.get(event_type)
         if mapped is None:
             return
@@ -200,7 +214,9 @@ class StreamingDemoManualCheckLog:
             enriched["moderation_status"] = moderation_status
             reasons = data.get("reason_codes")
             if isinstance(reasons, (list, tuple)):
-                enriched["moderation_reason"] = ",".join(str(reason) for reason in reasons)
+                enriched["moderation_reason"] = ",".join(
+                    str(reason) for reason in reasons
+                )
                 case["moderation_reason"] = enriched["moderation_reason"]
         if case is not None and event == "ranking_completed":
             for item in data.get("top", []):
@@ -218,26 +234,24 @@ class StreamingDemoManualCheckLog:
             case["ranking_score"] = enriched["ranking_score"]
         if case is not None and event == "comment_response_completed":
             case["responded"] = True
-            enriched["response_text"] = STREAMING_DEMO_RESPONSES[
-                ActivityType.STREAM_COMMENT_RESPONSE
-            ]
+            enriched["response_text"] = STREAMING_DEMO_SPEECH["stream_comment_response"]
             case["response_text"] = enriched["response_text"]
         activity_types = {
-            "opening_completed": ActivityType.STREAM_OPENING_GREETING,
-            "main_completed": ActivityType.STREAM_MAIN_SEGMENT,
-            "closing_completed": ActivityType.STREAM_CLOSING_GREETING,
+            "opening_completed": "stream_opening_greeting",
+            "main_completed": "stream_main_segment",
+            "closing_completed": "stream_closing_greeting",
         }
         activity_type = activity_types.get(event)
         if activity_type is not None:
             enriched.update(
                 {
-                    "spoken_text": STREAMING_DEMO_RESPONSES[activity_type],
+                    "spoken_text": STREAMING_DEMO_SPEECH[activity_type],
                     "expression": (
                         "soft_smile"
-                        if activity_type == ActivityType.STREAM_CLOSING_GREETING
+                        if activity_type == "stream_closing_greeting"
                         else "smile"
                     ),
-                    "activity_type": activity_type.value,
+                    "activity_type": activity_type,
                 }
             )
         self.record(
@@ -272,7 +286,11 @@ class StreamingDemoManualCheckLog:
                     activity_id=str(activity_id) if activity_id else None,
                     trace_id=trace_id,
                 )
-        if event in {"session_completed", "session_emergency_stopped", "session_failed"}:
+        if event in {
+            "session_completed",
+            "session_emergency_stopped",
+            "session_failed",
+        }:
             self._last_session_status = event.removeprefix("session_")
             self.write_summary()
 
@@ -371,7 +389,9 @@ class StreamingDemoManualCheckLog:
             and isinstance(value, (str, int, float, bool, list, type(None)))
         }
         payload = {
-            "timestamp": datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(timespec="milliseconds"),
+            "timestamp": datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(
+                timespec="milliseconds"
+            ),
             "source": source,
             "category": category,
             "event": event,
@@ -384,7 +404,9 @@ class StreamingDemoManualCheckLog:
             "reason": reason or safe.pop("reason_code", None),
             "details": safe,
         }
-        self._file.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+        self._file.write(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+        )
         self._file.flush()
         self.last_write_at = str(payload["timestamp"])
         self._counts[event] += 1

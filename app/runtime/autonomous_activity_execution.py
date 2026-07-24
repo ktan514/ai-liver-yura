@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from app.domain.activities import Activity, ActivityType
-from app.domain.character_response import ActivityExecutionResult, ActivityExecutionStatus
+from app.domain.character_response import (
+    ActivityExecutionResult,
+    ActivityExecutionStatus,
+)
 from app.utils.llm_trace import build_llm_trace_context
 
 
@@ -17,7 +20,9 @@ def prepare_autonomous_execution(activity: Activity) -> ActivityExecutionResult 
     plan = plan_value if isinstance(plan_value, dict) else {}
     event_payload_value = activity.context.get("event_payload")
     event_payload = event_payload_value if isinstance(event_payload_value, dict) else {}
-    topic = str(plan.get("topic") or event_payload.get("selected_topic") or activity.goal)
+    topic = str(
+        plan.get("topic") or event_payload.get("selected_topic") or activity.goal
+    )
     planning_reason = str(
         plan.get("planning_reason") or event_payload.get("reason") or "internal_drive"
     )
@@ -31,11 +36,15 @@ def prepare_autonomous_execution(activity: Activity) -> ActivityExecutionResult 
             "selected_topic": topic,
             "goal": activity.goal,
             "planning_reason": planning_reason,
-            "source_state_snapshot": activity.context.get("autonomous_situation_context", {}),
+            "source_state_snapshot": activity.context.get(
+                "autonomous_situation_context", {}
+            ),
         },
-        constraints=dict(plan.get("constraints", {}))
-        if isinstance(plan.get("constraints"), dict)
-        else {},
+        constraints=(
+            dict(plan.get("constraints", {}))
+            if isinstance(plan.get("constraints"), dict)
+            else {}
+        ),
         source_event_id=activity.source_event_id,
         activity_turn_id=trace.activity_turn_id,
         trace_id=trace.trace_id,

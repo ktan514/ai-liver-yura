@@ -6,8 +6,11 @@ from app.adapters.streaming import (
     InMemoryStreamMainSegmentRepository,
     InMemoryStreamOpeningRepository,
 )
-from app.adapters.streaming.in_memory_session_repository import InMemoryStreamSessionRepository
-from app.domain.streaming import (
+from app.adapters.streaming.in_memory_session_repository import (
+    InMemoryStreamSessionRepository,
+)
+from app.plugins.youtube_streaming.application import StreamLifecycleGate
+from app.plugins.youtube_streaming.domain import (
     LifecycleOperation,
     StreamLifecycleClass,
     StreamOpeningActivity,
@@ -16,7 +19,6 @@ from app.domain.streaming import (
     StreamSessionStatus,
     classify_lifecycle,
 )
-from app.usecases import StreamLifecycleGate
 
 ACTIVE = {
     "obs_output": "active",
@@ -36,7 +38,9 @@ def gate(
     list[str],
 ]:
     sessions = InMemoryStreamSessionRepository()
-    session = sessions.create(StreamSession("trace", "broadcast", "title", status=status))
+    session = sessions.create(
+        StreamSession("trace", "broadcast", "title", status=status)
+    )
     openings = InMemoryStreamOpeningRepository()
     events: list[str] = []
     lifecycle = StreamLifecycleGate(
@@ -67,8 +71,12 @@ def test_lifecycle_classification(
 
 def test_live_external_policy_and_opening_dependency() -> None:
     lifecycle, session, _sessions, openings, _events = gate()
-    unknown = lifecycle.evaluate(LifecycleOperation.START_MAIN_SEGMENT, session.session_id)
-    assert not unknown.allowed and unknown.reason_code == "lifecycle.opening_not_completed"
+    unknown = lifecycle.evaluate(
+        LifecycleOperation.START_MAIN_SEGMENT, session.session_id
+    )
+    assert (
+        not unknown.allowed and unknown.reason_code == "lifecycle.opening_not_completed"
+    )
     openings.create(
         StreamOpeningActivity(
             session.session_id,
@@ -77,12 +85,20 @@ def test_live_external_policy_and_opening_dependency() -> None:
             status=StreamOpeningStatus.COMPLETED,
         )
     )
-    still_unknown = lifecycle.evaluate(LifecycleOperation.START_MAIN_SEGMENT, session.session_id)
+    still_unknown = lifecycle.evaluate(
+        LifecycleOperation.START_MAIN_SEGMENT, session.session_id
+    )
     assert still_unknown.reason_code == "lifecycle.external_state_unknown"
     lifecycle.update_external_state(session.session_id, ACTIVE)
-    assert lifecycle.evaluate(LifecycleOperation.START_MAIN_SEGMENT, session.session_id).allowed
-    lifecycle.update_external_state(session.session_id, {**ACTIVE, "obs_output": "idle"})
-    mismatch = lifecycle.evaluate(LifecycleOperation.CONTINUE_COMMENT_POLLING, session.session_id)
+    assert lifecycle.evaluate(
+        LifecycleOperation.START_MAIN_SEGMENT, session.session_id
+    ).allowed
+    lifecycle.update_external_state(
+        session.session_id, {**ACTIVE, "obs_output": "idle"}
+    )
+    mismatch = lifecycle.evaluate(
+        LifecycleOperation.CONTINUE_COMMENT_POLLING, session.session_id
+    )
     assert mismatch.reason_code == "lifecycle.external_state_mismatch"
 
 
@@ -98,7 +114,9 @@ def test_live_external_policy_and_opening_dependency() -> None:
 )
 def test_emergency_is_allowed_across_end_states(status: StreamSessionStatus) -> None:
     lifecycle, session, _sessions, _openings, _events = gate(status)
-    assert lifecycle.evaluate(LifecycleOperation.START_EMERGENCY_STOP, session.session_id).allowed
+    assert lifecycle.evaluate(
+        LifecycleOperation.START_EMERGENCY_STOP, session.session_id
+    ).allowed
 
 
 def test_closing_allows_only_closing_output_and_terminal_blocks_actions() -> None:
@@ -117,7 +135,9 @@ def test_closing_allows_only_closing_output_and_terminal_blocks_actions() -> Non
     terminal = sessions.save(session.transition(StreamSessionStatus.STOPPING))
     terminal = sessions.save(terminal.transition(StreamSessionStatus.COMPLETED))
     assert (
-        lifecycle.evaluate(LifecycleOperation.ENQUEUE_ACTION, terminal.session_id).reason_code
+        lifecycle.evaluate(
+            LifecycleOperation.ENQUEUE_ACTION, terminal.session_id
+        ).reason_code
         == "lifecycle.terminal"
     )
 

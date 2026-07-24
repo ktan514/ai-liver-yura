@@ -14,7 +14,10 @@ from app.domain.activity_turn_result import (
     CharacterGenerationResult,
     CharacterGenerationStatus,
 )
-from app.domain.character_response import ActivityExecutionResult, ActivityExecutionStatus
+from app.domain.character_response import (
+    ActivityExecutionResult,
+    ActivityExecutionStatus,
+)
 from app.runtime.action_planner import ActionPlanner
 from app.runtime.action_scheduler import ActionScheduler
 from app.runtime.activity_manager import ActivityManager
@@ -30,7 +33,9 @@ def _execution(status: ActivityExecutionStatus) -> ActivityExecutionResult:
     )
 
 
-def _character(turn_id: str, status: CharacterGenerationStatus) -> CharacterGenerationResult:
+def _character(
+    turn_id: str, status: CharacterGenerationStatus
+) -> CharacterGenerationResult:
     now = datetime.now(timezone.utc)
     return CharacterGenerationResult(
         status=status,
@@ -88,7 +93,9 @@ async def test_all_stages_succeed_and_correlations_are_preserved() -> None:
             return None
 
     group = ActionPlanGroup(
-        action_plans=[ActionPlan(action_type=ActionType.UPDATE_SUBTITLE, text="result")],
+        action_plans=[
+            ActionPlan(action_type=ActionType.UPDATE_SUBTITLE, text="result")
+        ],
         source_activity_id="activity-1",
         activity_turn_result=aggregate,
     )
@@ -109,7 +116,9 @@ async def test_plugin_rejection_and_successful_explanation_remain_distinct() -> 
         activity_turn_id="turn-rejected",
         activity_type="stream_control",
         execution_result=_execution(ActivityExecutionStatus.REJECTED),
-        character_result=_character("turn-rejected", CharacterGenerationStatus.VALIDATED),
+        character_result=_character(
+            "turn-rejected", CharacterGenerationStatus.VALIDATED
+        ),
     )
 
     class Executor:
@@ -117,7 +126,9 @@ async def test_plugin_rejection_and_successful_explanation_remain_distinct() -> 
             return None
 
     group = ActionPlanGroup(
-        action_plans=[ActionPlan(action_type=ActionType.SPEAK, text="今は操作できません")],
+        action_plans=[
+            ActionPlan(action_type=ActionType.SPEAK, text="今は操作できません")
+        ],
         activity_turn_result=aggregate,
     )
     output = await ActionScheduler(Executor()).execute(group)
@@ -131,12 +142,16 @@ async def test_plugin_rejection_and_successful_explanation_remain_distinct() -> 
 
 
 @pytest.mark.asyncio
-async def test_tts_failure_produces_partial_output_without_rewriting_execution() -> None:
+async def test_tts_failure_produces_partial_output_without_rewriting_execution() -> (
+    None
+):
     aggregate = ActivityTurnResult(
         activity_turn_id="turn-partial",
         activity_type="shiritori",
         execution_result=_execution(ActivityExecutionStatus.SUCCEEDED),
-        character_result=_character("turn-partial", CharacterGenerationStatus.FALLBACK_USED),
+        character_result=_character(
+            "turn-partial", CharacterGenerationStatus.FALLBACK_USED
+        ),
     )
 
     class Executor:
@@ -159,7 +174,9 @@ async def test_tts_failure_produces_partial_output_without_rewriting_execution()
     assert [item.status for item in output.action_results].count(
         ActionExecutionStatus.COMPLETED
     ) == 2
-    assert [item.status for item in output.action_results].count(ActionExecutionStatus.FAILED) == 1
+    assert [item.status for item in output.action_results].count(
+        ActionExecutionStatus.FAILED
+    ) == 1
     assert result.execution_result is not None
     assert result.execution_result.status == ActivityExecutionStatus.SUCCEEDED
     assert result.failure_stage == "action_execution"
@@ -274,7 +291,9 @@ async def test_ongoing_activity_keeps_session_when_output_is_partial() -> None:
     )
 
 
-@pytest.mark.parametrize("activity_type", ["shiritori", "external_search", "stream_control"])
+@pytest.mark.parametrize(
+    "activity_type", ["shiritori", "external_search", "stream_control"]
+)
 def test_result_model_is_activity_type_agnostic(activity_type: str) -> None:
     result = ActivityTurnResult(
         activity_turn_id=f"turn-{activity_type}",

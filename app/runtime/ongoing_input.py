@@ -27,7 +27,9 @@ class OngoingInputInterpreter:
     ) -> OngoingInputInterpretation | None:
         ongoing = context.ongoing_activity
         current_type = (
-            ongoing.activity_type if ongoing is not None else context.ongoing_activity_type
+            ongoing.activity_type
+            if ongoing is not None
+            else context.ongoing_activity_type
         )
         if current_type is None and context.active_activity_definition is not None:
             current_type = context.active_activity_definition.activity_type
@@ -52,13 +54,19 @@ class OngoingInputInterpreter:
         elif analysis.activity_candidate == current_type:
             if analysis.operation == ActivityOperation.STOP:
                 decision = OngoingInputDecision.STOP_CURRENT
-            elif analysis.operation in {ActivityOperation.EXPLAIN, ActivityOperation.DISCUSS}:
+            elif analysis.operation in {
+                ActivityOperation.EXPLAIN,
+                ActivityOperation.DISCUSS,
+            }:
                 decision = OngoingInputDecision.CONVERSATION_ABOUT_CURRENT
             else:
                 decision = OngoingInputDecision.CONTINUE_CURRENT
         elif analysis.activity_candidate is not None:
             decision = OngoingInputDecision.START_OTHER_ACTIVITY
-        elif analysis.operation in {ActivityOperation.EXPLAIN, ActivityOperation.DISCUSS}:
+        elif analysis.operation in {
+            ActivityOperation.EXPLAIN,
+            ActivityOperation.DISCUSS,
+        }:
             decision = OngoingInputDecision.CONVERSATION_UNRELATED
         else:
             decision = OngoingInputDecision.ASK_CONFIRMATION
@@ -76,7 +84,9 @@ class OngoingInputInterpreter:
         )
         self._trace_logger.info(
             "ongoing_input_interpreter:decision",
-            ongoing_activity_id=(ongoing.ongoing_activity_id if ongoing is not None else None),
+            ongoing_activity_id=(
+                ongoing.ongoing_activity_id if ongoing is not None else None
+            ),
             current_activity_type=current_type,
             decision=decision.value,
             requested_activity_type=interpretation.requested_activity_type,
@@ -138,6 +148,8 @@ class OngoingActivityTransitionPolicy:
                 operation=ActivityOperation.START,
                 constraints=analysis.constraints,
                 speech_act=analysis.speech_act,
+                conversation_phase=analysis.conversation_phase,
+                initiative_level=analysis.initiative_level,
                 confidence=analysis.confidence,
                 reason=analysis.reason,
                 planner_type=analysis.evaluator_type,
@@ -154,14 +166,22 @@ class OngoingActivityTransitionPolicy:
         elif decision == OngoingInputDecision.START_OTHER_ACTIVITY:
             plan = ActivityPlan(
                 decision=BehaviorDecision.ASK_CONFIRMATION,
-                activity_type=(target.activity_type if target is not None else "conversation"),
+                activity_type=(
+                    target.activity_type if target is not None else "conversation"
+                ),
                 goal=analysis.goal,
-                required_capability=(target.required_capability if target is not None else None),
-                provider_plugin_id=(target.provider_plugin_id if target is not None else None),
+                required_capability=(
+                    target.required_capability if target is not None else None
+                ),
+                provider_plugin_id=(
+                    target.provider_plugin_id if target is not None else None
+                ),
                 operation=ActivityOperation.START,
                 constraints=analysis.constraints,
                 planner_constraints=("確認前に現在Activityを変更しない",),
                 speech_act=analysis.speech_act,
+                conversation_phase=analysis.conversation_phase,
+                initiative_level=analysis.initiative_level,
                 confidence=analysis.confidence,
                 reason=analysis.reason,
                 planner_type=analysis.evaluator_type,
@@ -179,14 +199,22 @@ class OngoingActivityTransitionPolicy:
         elif decision == OngoingInputDecision.ASK_CONFIRMATION:
             plan = ActivityPlan(
                 decision=BehaviorDecision.ASK_CONFIRMATION,
-                activity_type=(current.activity_type if current is not None else "conversation"),
+                activity_type=(
+                    current.activity_type if current is not None else "conversation"
+                ),
                 goal=analysis.goal or "進行中Activityをどう扱うか短く確認する",
-                required_capability=(current.required_capability if current is not None else None),
-                provider_plugin_id=(current.provider_plugin_id if current is not None else None),
+                required_capability=(
+                    current.required_capability if current is not None else None
+                ),
+                provider_plugin_id=(
+                    current.provider_plugin_id if current is not None else None
+                ),
                 operation=analysis.operation,
                 constraints=self._constraints(context, analysis),
                 planner_constraints=("確認前に進行中Activityを変更しない",),
                 speech_act=analysis.speech_act,
+                conversation_phase=analysis.conversation_phase,
+                initiative_level=analysis.initiative_level,
                 confidence=analysis.confidence,
                 reason=analysis.reason,
                 planner_type=analysis.evaluator_type,
@@ -239,7 +267,11 @@ class OngoingActivityTransitionPolicy:
         ):
             return context.active_activity_definition
         return next(
-            (item for item in context.activity_definitions if item.activity_type == activity_type),
+            (
+                item
+                for item in context.activity_definitions
+                if item.activity_type == activity_type
+            ),
             None,
         )
 
@@ -252,25 +284,35 @@ class OngoingActivityTransitionPolicy:
         operation: ActivityOperation,
         ongoing_decision: OngoingInputDecision,
     ) -> ActivityPlan:
-        activity_type = definition.activity_type if definition is not None else "unknown"
+        activity_type = (
+            definition.activity_type if definition is not None else "unknown"
+        )
         return ActivityPlan(
             decision=BehaviorDecision.CONTINUE_ACTIVITY,
             activity_type=activity_type,
             goal=analysis.goal,
-            required_capability=(definition.required_capability if definition else None),
+            required_capability=(
+                definition.required_capability if definition else None
+            ),
             provider_plugin_id=(definition.provider_plugin_id if definition else None),
             operation=operation,
             constraints=constraints,
             planner_constraints=("Capability検証後にのみ実行する",),
             speech_act=analysis.speech_act,
+            conversation_phase=analysis.conversation_phase,
+            initiative_level=analysis.initiative_level,
             confidence=analysis.confidence,
             reason=analysis.reason,
             planner_type=analysis.evaluator_type,
             ongoing_input_decision=ongoing_decision,
             current_activity_type=activity_type,
             current_activity_preserved=operation != ActivityOperation.STOP,
-            current_activity_paused=(ongoing_decision == OngoingInputDecision.PAUSE_CURRENT),
-            current_activity_capability=(definition.required_capability if definition else None),
+            current_activity_paused=(
+                ongoing_decision == OngoingInputDecision.PAUSE_CURRENT
+            ),
+            current_activity_capability=(
+                definition.required_capability if definition else None
+            ),
             current_activity_provider_plugin_id=(
                 definition.provider_plugin_id if definition else None
             ),
@@ -303,6 +345,8 @@ class OngoingActivityTransitionPolicy:
             constraints=analysis.constraints,
             planner_constraints=("進行中Activityの状態を暗黙に変更しない",),
             speech_act=analysis.speech_act,
+            conversation_phase=analysis.conversation_phase,
+            initiative_level=analysis.initiative_level,
             negated=analysis.negated,
             hypothetical=analysis.hypothetical,
             past_reference=analysis.past_reference,

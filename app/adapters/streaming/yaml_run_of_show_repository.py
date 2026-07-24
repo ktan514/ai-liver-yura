@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from app.domain.streaming import RunOfShowSegment, RunOfShowSummary
+from app.plugins.youtube_streaming.domain import RunOfShowSegment, RunOfShowSummary
 
 
 class YamlRunOfShowRepository:
@@ -138,7 +138,10 @@ class YamlRunOfShowRepository:
         run_of_show_id = raw.get("run_of_show_id")
         title = raw.get("title")
         version = raw.get("version")
-        if not all(isinstance(value, str) and value for value in (run_of_show_id, title, version)):
+        if not all(
+            isinstance(value, str) and value
+            for value in (run_of_show_id, title, version)
+        ):
             raise RuntimeError("run_of_show_id, title, versionは必須です。")
         if not isinstance(run_of_show_id, str):
             raise RuntimeError("run_of_show_idは文字列です。")

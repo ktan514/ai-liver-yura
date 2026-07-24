@@ -14,9 +14,9 @@ from app.adapters.tts.voicevox_speech_synthesizer import (
     VoiceVoxSpeechSynthesizer,
     VoiceVoxSpeechSynthesizerConfig,
 )
+from app.bootstrap.runtime import create_speech_synthesizer
 from app.config.app_config import load_app_config
-from app.domain.emotions import EmotionState, MoodType
-from app.runtime.runtime_factory import create_speech_synthesizer
+from app.domain.character_response import VoiceIntent
 
 
 class FakeHttpResponse:
@@ -64,9 +64,9 @@ async def test_synthesize_calls_audio_query_and_synthesis(monkeypatch) -> None:
             base_url="http://127.0.0.1:50021/",
             speaker_id=3,
             timeout_seconds=12.0,
-            emotion_profiles={
+            voice_intent_profiles={
                 "neutral": VoiceVoxSpeechProfile(0.9, 0.03, 0.9, 1.0),
-                "excited": VoiceVoxSpeechProfile(1.2, 0.1, 1.1, 0.9),
+                "energetic": VoiceVoxSpeechProfile(1.2, 0.1, 1.1, 0.9),
             },
         ),
         pronunciation_corrector=PronunciationCorrector(
@@ -85,7 +85,7 @@ async def test_synthesize_calls_audio_query_and_synthesis(monkeypatch) -> None:
     )
 
     audio_data = await synthesizer.synthesize(
-        "どんな風に話そう", emotion=EmotionState(mood=MoodType.EXCITED)
+        "どんな風に話そう", voice_intent=VoiceIntent(style="energetic")
     )
 
     assert audio_data == b"RIFF-test-wav"
@@ -106,7 +106,9 @@ async def test_synthesize_calls_audio_query_and_synthesis(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_audio_query_correction_failure_uses_original_audio_query(monkeypatch) -> None:
+async def test_audio_query_correction_failure_uses_original_audio_query(
+    monkeypatch,
+) -> None:
     fake_urlopen = FakeUrlOpen()
     monkeypatch.setattr(
         "app.adapters.tts.voicevox_speech_synthesizer.request.urlopen",
@@ -146,32 +148,32 @@ def test_resolve_profile_falls_back_to_default() -> None:
         VoiceVoxSpeechSynthesizerConfig(
             base_url="http://127.0.0.1:50021",
             speaker_id=89,
-            emotion_profiles={"neutral": neutral},
+            voice_intent_profiles={"neutral": neutral},
         )
     )
 
-    profile = synthesizer._resolve_profile(EmotionState(mood=MoodType.HAPPY))
+    profile = synthesizer._resolve_profile(VoiceIntent(style="unknown-style"))
 
     assert profile == neutral
 
 
 @pytest.mark.parametrize(
-    ("mood", "expected_profile"),
+    ("style", "expected_profile"),
     [
-        (MoodType.NEUTRAL, VoiceVoxSpeechProfile(0.90, 0.03, 0.90, 1.00)),
-        (MoodType.HAPPY, VoiceVoxSpeechProfile(1.02, 0.05, 1.08, 1.03)),
-        (MoodType.EXCITED, VoiceVoxSpeechProfile(1.15, 0.07, 1.20, 1.08)),
-        (MoodType.ANGRY, VoiceVoxSpeechProfile(1.08, 0.01, 1.15, 1.10)),
-        (MoodType.SAD, VoiceVoxSpeechProfile(0.78, -0.02, 0.72, 0.88)),
-        (MoodType.TIRED, VoiceVoxSpeechProfile(0.72, -0.03, 0.68, 0.82)),
+        ("neutral", VoiceVoxSpeechProfile(0.90, 0.03, 0.90, 1.00)),
+        ("bright", VoiceVoxSpeechProfile(1.02, 0.05, 1.08, 1.03)),
+        ("energetic", VoiceVoxSpeechProfile(1.15, 0.07, 1.20, 1.08)),
+        ("restrained_anger", VoiceVoxSpeechProfile(1.08, 0.01, 1.15, 1.10)),
+        ("subdued", VoiceVoxSpeechProfile(0.78, -0.02, 0.72, 0.88)),
+        ("weary", VoiceVoxSpeechProfile(0.72, -0.03, 0.68, 0.82)),
     ],
 )
-def test_resolve_profile_uses_profile_for_each_emotion(
-    mood: MoodType, expected_profile: VoiceVoxSpeechProfile
+def test_resolve_profile_uses_profile_for_each_voice_intent(
+    style: str, expected_profile: VoiceVoxSpeechProfile
 ) -> None:
     synthesizer = create_speech_synthesizer(load_app_config())
     assert isinstance(synthesizer, VoiceVoxSpeechSynthesizer)
 
-    profile = synthesizer._resolve_profile(EmotionState(mood=mood))
+    profile = synthesizer._resolve_profile(VoiceIntent(style=style))
 
     assert profile == expected_profile

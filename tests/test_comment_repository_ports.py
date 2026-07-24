@@ -10,7 +10,7 @@ from app.adapters.streaming import (
     InMemoryCommentResponseHistoryRepository,
     InMemoryCommentSelectionRepository,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.domain import (
     CommentCandidate,
     CommentRankingFeature,
     CommentResponseTarget,
@@ -67,20 +67,31 @@ def test_candidate_repository_session_ttl_bound_duplicate_and_state() -> None:
     first = candidate("session-a", "first")
     repository.add(first)
     repository.add(first)
-    assert repository.valid("session-a", datetime.now(timezone.utc) - timedelta(seconds=1)) == (
-        first,
-    )
+    assert repository.valid(
+        "session-a", datetime.now(timezone.utc) - timedelta(seconds=1)
+    ) == (first,)
     repository.add(candidate("session-b", "second"))
     assert (
-        len(repository.valid("session-b", datetime.now(timezone.utc) - timedelta(seconds=1))) == 1
+        len(
+            repository.valid(
+                "session-b", datetime.now(timezone.utc) - timedelta(seconds=1)
+            )
+        )
+        == 1
     )
     repository.add(candidate("session-a", "third"))
     assert repository.dropped_count == 1
     repository.mark("session-a", "third", "selected")
-    assert repository.valid("session-a", datetime.now(timezone.utc) - timedelta(seconds=1)) == ()
+    assert (
+        repository.valid("session-a", datetime.now(timezone.utc) - timedelta(seconds=1))
+        == ()
+    )
     expired = candidate("session-a", "expired")
     repository.add(expired)
-    assert repository.valid("session-a", datetime.now(timezone.utc) + timedelta(seconds=1)) == ()
+    assert (
+        repository.valid("session-a", datetime.now(timezone.utc) + timedelta(seconds=1))
+        == ()
+    )
     assert repository.expired_count == 1
 
 
@@ -94,7 +105,9 @@ def test_ranking_repository_preserves_order_features_and_sessions() -> None:
     assert repository.latest("session-b")[0].candidate_id == "other"
 
 
-def test_selection_repository_reserve_transitions_expiry_and_session_invalidation() -> None:
+def test_selection_repository_reserve_transitions_expiry_and_session_invalidation() -> (
+    None
+):
     repository: CommentSelectionRepository = InMemoryCommentSelectionRepository()
     item = target("session-a")
     assert repository.reserve(item)
@@ -138,7 +151,9 @@ def test_selection_repository_reserve_transitions_expiry_and_session_invalidatio
 
 
 def test_history_repository_is_bounded_and_session_separated() -> None:
-    repository: CommentResponseHistoryRepository = InMemoryCommentResponseHistoryRepository(2)
+    repository: CommentResponseHistoryRepository = (
+        InMemoryCommentResponseHistoryRepository(2)
+    )
     repository.record("session-a", "author-1", "topic-1", "text")
     repository.record("session-a", "author-2", "topic-2", "paid")
     repository.record("session-a", "author-3", "topic-3", "text")
@@ -153,7 +168,7 @@ def test_history_repository_is_bounded_and_session_separated() -> None:
 def test_usecase_and_port_modules_do_not_import_adapters() -> None:
     root = Path(__file__).parents[1]
     paths = (
-        root / "app/usecases/comment_ranking_usecase.py",
+        root / "app/plugins/youtube_streaming/application/comment_ranking.py",
         root / "app/ports/comment_ranking.py",
         root / "app/ports/comment_response.py",
     )

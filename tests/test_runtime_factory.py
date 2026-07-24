@@ -1,5 +1,6 @@
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -7,20 +8,21 @@ from app.adapters.embedding.openai_embedding_generator import OpenAIEmbeddingGen
 from app.adapters.storage.postgres_topic_memory_store import PostgresTopicMemoryStore
 from app.adapters.topic.llm_topic_classifier import LlmTopicClassifier
 from app.adapters.tts import SystemAudioPlayer, VoiceVoxSpeechSynthesizer
-from app.config.app_config import AppConfig, load_app_config
-from app.core.plugins import PluginCapability
-from app.domain.activities import Activity, ActivityType
-from app.domain.behavior import BehaviorDecision
-from app.plugins.games import GamesPlugin
-from app.ports.response_generator import ResponseGenerator
-from app.runtime import RuntimeCoordinator, create_runtime_coordinator
-from app.runtime.runtime_factory import (
+from app.bootstrap import create_runtime_coordinator
+from app.bootstrap.runtime import (
     create_audio_player,
     create_embedding_generator,
     create_speech_synthesizer,
     create_topic_classifier,
     create_topic_memory_store,
 )
+from app.config.app_config import AppConfig, load_app_config
+from app.core.plugins import PluginCapability
+from app.domain.activities import Activity, ActivityType
+from app.domain.behavior import BehaviorDecision
+from app.plugins.games import GamesPlugin
+from app.ports.response_generator import ResponseGenerator
+from app.runtime.emotion_runtime_integration import EmotionAwareRuntimeCoordinator
 
 
 class FactoryShiritoriResponseGenerator(ResponseGenerator):
@@ -44,9 +46,16 @@ class FactoryShiritoriResponseGenerator(ResponseGenerator):
             text = str(activity.context.get("user_input") or "")
             planner_state = activity.context.get("planner_state")
             ongoing = (
-                planner_state.get("ongoing_activity") if isinstance(planner_state, dict) else None
+                planner_state.get("ongoing_activity")
+                if isinstance(planner_state, dict)
+                else None
             )
-            if isinstance(ongoing, dict) and text in {"みみず", "うさぎ", "うし", "みかん"}:
+            if isinstance(ongoing, dict) and text in {
+                "みみず",
+                "うさぎ",
+                "うし",
+                "みかん",
+            }:
                 return json.dumps(
                     {
                         "decision": "continue_activity",
@@ -135,10 +144,18 @@ class FactoryShiritoriResponseGenerator(ResponseGenerator):
                         ensure_ascii=False,
                     )
             start_requested = any(
-                marker in text for marker in ("しりとり", "語尾をつないで", "最後の文字から")
+                marker in text
+                for marker in ("しりとり", "語尾をつないで", "最後の文字から")
             ) and not any(
                 marker in text
-                for marker in ("って何", "ルール", "難しい", "昨日", "したくない", "としたら")
+                for marker in (
+                    "って何",
+                    "ルール",
+                    "難しい",
+                    "昨日",
+                    "したくない",
+                    "としたら",
+                )
             )
             theme = next(
                 (
@@ -157,9 +174,11 @@ class FactoryShiritoriResponseGenerator(ResponseGenerator):
                     "decision": "start_activity" if start_requested else "conversation",
                     "activity_type": "shiritori" if start_requested else "conversation",
                     "operation": "start" if start_requested else "discuss",
-                    "goal": "条件に沿ってしりとりを行う"
-                    if start_requested
-                    else "通常会話で応答する",
+                    "goal": (
+                        "条件に沿ってしりとりを行う"
+                        if start_requested
+                        else "通常会話で応答する"
+                    ),
                     "constraints": {"theme": theme} if theme else {},
                     "speech_act": "proposal" if start_requested else "request",
                     "negated": False,
@@ -171,7 +190,7 @@ class FactoryShiritoriResponseGenerator(ResponseGenerator):
                 },
                 ensure_ascii=False,
             )
-        if activity.activity_type == ActivityType.GAME_WITH_USER:
+        if activity.activity_type == ActivityType.PLUGIN_ACTIVITY:
             self.game_call_count += 1
             self.last_game_context = dict(activity.context)
             return next(self._responses)
@@ -258,7 +277,9 @@ def _games_test_config() -> AppConfig:
         config,
         response_generator=replace(config.response_generator, type="dummy"),
         speech=replace(config.speech, enabled=False),
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=True)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=True)
+        ),
         memory=replace(
             config.memory,
             topic_memory=replace(config.memory.topic_memory, enabled=False),
@@ -296,32 +317,99 @@ def test_create_speech_components_returns_none_when_disabled() -> None:
     assert create_audio_player(config) is None
 
 
-def test_create_runtime_coordinator_returns_runtime_coordinator() -> None:
+def test_legacy_runtime_factory_module_reexports_bootstrap_factory() -> None:
+    from app.runtime.runtime_factory import (
+        create_runtime_coordinator as compatibility_factory,
+    )
+
+    assert compatibility_factory is create_runtime_coordinator
+
+
+def test_create_runtime_coordinator_returns_emotion_aware_runtime() -> None:
     config = load_app_config()
     config = replace(
         config,
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=True)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=True)
+        ),
     )
 
     runtime = create_runtime_coordinator(config)
 
-    assert isinstance(runtime, RuntimeCoordinator)
+    assert isinstance(runtime, EmotionAwareRuntimeCoordinator)
     assert runtime.plugin_manager is not None
     assert runtime.plugin_manager.get_plugin("games") is not None
+    assert runtime.plugin_manager.get_plugin("voice_output") is not None
+    assert runtime.plugin_manager.is_capability_available(
+        "output.speech", "voice_output"
+    )
+    diagnostic = runtime.diagnostic_snapshot()
+    plugins = diagnostic["plugins"]
+    assert isinstance(plugins, dict)
+    assert plugins["statuses"] == {
+        "llm_provider.default": "initialized",
+        "llm_provider.situation_evaluator": "initialized",
+        "llm_provider.character": "initialized",
+        "llm_provider.response_validator": "initialized",
+        "games": "initialized",
+        "agent_memory": "disabled",
+        "relationship_memory": "disabled",
+        "voice_output": "initialized",
+    }
+    assert "output.speech" in plugins["available_capabilities"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_factory_persists_and_restores_relationship_memory(
+    tmp_path: Path,
+) -> None:
+    config = load_app_config()
+    config = replace(
+        config,
+        response_generator=replace(config.response_generator, type="dummy"),
+        speech=replace(config.speech, enabled=False),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=False)
+        ),
+        memory=replace(
+            config.memory,
+            topic_memory=replace(config.memory.topic_memory, enabled=False),
+            relationship_memory=replace(
+                config.memory.relationship_memory,
+                enabled=True,
+                path=str(tmp_path / "relationships.json"),
+            ),
+        ),
+    )
+    runtime = create_runtime_coordinator(config)
+
+    await runtime.submit_user_text("こんにちは", source="console")
+
+    restored = create_runtime_coordinator(config)
+    current = restored.agent_state.relationship_memory.current
+    assert current is not None
+    assert current.counterpart_id == "local:user"
+    assert current.interaction_count == 1
+    assert restored.plugin_manager is not None
+    assert restored.plugin_manager.is_capability_available(
+        "memory.relationship", "relationship_memory"
+    )
 
 
 @pytest.mark.asyncio
 async def test_production_factory_public_input_keeps_same_shiritori_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     config = load_app_config()
     config = replace(
         config,
         response_generator=replace(config.response_generator, type="dummy"),
         speech=replace(config.speech, enabled=False),
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=True)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=True)
+        ),
         memory=replace(
             config.memory,
             topic_memory=replace(config.memory.topic_memory, enabled=False),
@@ -343,13 +431,18 @@ async def test_production_factory_public_input_keeps_same_shiritori_session(
     assert runtime.last_behavior_evaluation is not None
     assert runtime.last_behavior_evaluation.accepted is True
     assert runtime.last_behavior_evaluation.plan.activity_type == "shiritori"
-    assert runtime.last_behavior_evaluation.plan.decision == BehaviorDecision.START_ACTIVITY
+    assert (
+        runtime.last_behavior_evaluation.plan.decision
+        == BehaviorDecision.START_ACTIVITY
+    )
     session_id = first["session_id"]
     ongoing = runtime.activity_manager.ongoing_activity
     assert ongoing is not None
     assert ongoing.activity_type == "shiritori"
     ongoing_activity_id = ongoing.ongoing_activity_id
-    assert ongoing.context["game_session_id"] == session_id
+    assert ongoing.context["plugin_session_id"] == session_id
+    assert runtime.agent_state.relationship_memory.current is not None
+    assert runtime.agent_state.relationship_memory.current.interaction_count == 1
     assert first["ongoing_activity_id"] == ongoing_activity_id
     assert len(ongoing.turns) == 1
     assert ongoing.status.value == "waiting"
@@ -369,7 +462,9 @@ async def test_production_factory_public_input_keeps_same_shiritori_session(
     final_ongoing = runtime.activity_manager.ongoing_activity
     assert final_ongoing is not None
     assert final_ongoing.ongoing_activity_id == ongoing_activity_id
-    assert final_ongoing.context["game_session_id"] == session_id
+    assert final_ongoing.context["plugin_session_id"] == session_id
+    assert runtime.agent_state.relationship_memory.current is not None
+    assert runtime.agent_state.relationship_memory.current.interaction_count == 4
     assert len(final_ongoing.turns) == 4
     assert all(turn.execution_result is not None for turn in final_ongoing.turns)
     assert final_ongoing.status.value == "waiting"
@@ -392,24 +487,30 @@ async def test_production_factory_public_input_keeps_same_shiritori_session(
 async def test_semantic_activity_constraints_reach_enabled_games_plugin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     config = load_app_config()
     config = replace(
         config,
         response_generator=replace(config.response_generator, type="dummy"),
         speech=replace(config.speech, enabled=False),
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=True)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=True)
+        ),
         memory=replace(
             config.memory,
             topic_memory=replace(config.memory.topic_memory, enabled=False),
         ),
     )
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(config)
 
-    await runtime.submit_user_text("深海生物縛りでしりとりしませんか？", source="console")
+    await runtime.submit_user_text(
+        "深海生物縛りでしりとりしませんか？", source="console"
+    )
 
     evaluation = runtime.last_behavior_evaluation
     assert evaluation is not None
@@ -439,24 +540,30 @@ async def test_semantic_activity_constraints_reach_enabled_games_plugin(
 async def test_semantic_start_is_rejected_without_games_plugin_and_no_first_word(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     config = load_app_config()
     config = replace(
         config,
         response_generator=replace(config.response_generator, type="dummy"),
         speech=replace(config.speech, enabled=False),
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=False)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=False)
+        ),
         memory=replace(
             config.memory,
             topic_memory=replace(config.memory.topic_memory, enabled=False),
         ),
     )
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(config)
 
-    await runtime.submit_user_text("深海生物縛りでしりとりしませんか？", source="console")
+    await runtime.submit_user_text(
+        "深海生物縛りでしりとりしませんか？", source="console"
+    )
     group = await runtime.run_once()
 
     evaluation = runtime.last_behavior_evaluation
@@ -468,7 +575,11 @@ async def test_semantic_start_is_rejected_without_games_plugin_and_no_first_word
     assert runtime.activity_manager.ongoing_activity is None
     assert generator.game_call_count == 0
     assert group is not None
-    spoken = [action.text for action in group.action_plans if action.action_type.value == "speak"]
+    spoken = [
+        action.text
+        for action in group.action_plans
+        if action.action_type.value == "speak"
+    ]
     assert spoken == ["今はそれを一緒にできないんだ。別のお話をしよう。"]
     assert all("りんご" not in text for text in spoken)
 
@@ -477,7 +588,7 @@ async def test_semantic_start_is_rejected_without_games_plugin_and_no_first_word
 async def test_games_plugin_disabled_keeps_core_conversation_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     config = load_app_config()
     config = replace(
@@ -490,7 +601,9 @@ async def test_games_plugin_disabled_keeps_core_conversation_available(
         ),
     )
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(config)
 
     await runtime.submit_user_text("しりとりしよう", source="console")
@@ -513,10 +626,12 @@ async def test_games_plugin_disabled_keeps_core_conversation_available(
 async def test_explicit_game_stop_cancels_session_and_ongoing_activity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     assert runtime.plugin_manager is not None
     games = runtime.plugin_manager.get_plugin("games")
@@ -541,10 +656,12 @@ async def test_explicit_game_stop_cancels_session_and_ongoing_activity(
 async def test_paraphrased_stop_is_semantically_evaluated_and_stops_current(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
 
     await runtime.submit_user_text("しりとりしよう", source="console")
@@ -552,7 +669,10 @@ async def test_paraphrased_stop_is_semantically_evaluated_and_stops_current(
 
     assert runtime.last_behavior_evaluation is not None
     assert runtime.last_behavior_evaluation.plan.ongoing_input_decision is not None
-    assert runtime.last_behavior_evaluation.plan.ongoing_input_decision.value == "stop_current"
+    assert (
+        runtime.last_behavior_evaluation.plan.ongoing_input_decision.value
+        == "stop_current"
+    )
     assert runtime.activity_manager.ongoing_activity is None
 
 
@@ -571,10 +691,12 @@ async def test_conversation_during_game_preserves_current_without_plugin_continu
     text: str,
     expected_decision: str,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     assert runtime.plugin_manager is not None
     games = runtime.plugin_manager.get_plugin("games")
@@ -608,10 +730,12 @@ async def test_conversation_during_game_preserves_current_without_plugin_continu
 async def test_negated_stop_does_not_stop_current_game(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
 
     await runtime.submit_user_text("しりとりしよう", source="console")
@@ -632,10 +756,12 @@ async def test_negated_stop_does_not_stop_current_game(
 async def test_ambiguous_ongoing_input_asks_confirmation_without_plugin_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
 
     await runtime.submit_user_text("しりとりしよう", source="console")
@@ -665,10 +791,12 @@ async def test_ambiguous_ongoing_input_asks_confirmation_without_plugin_handler(
 async def test_affirmative_confirmation_revalidates_and_executes_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = LowConfidenceStartResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
 
     await runtime.submit_user_text("言葉をつなぐ遊びをやらない？", source="console")
@@ -693,14 +821,18 @@ async def test_affirmative_confirmation_revalidates_and_executes_candidate(
 async def test_affirmative_confirmation_is_rejected_when_capability_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = LowConfidenceStartResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     config = _games_test_config()
     config = replace(
         config,
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=False)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=False)
+        ),
     )
     runtime = runtime_factory.create_runtime_coordinator(config)
     await runtime.submit_user_text("言葉をつなぐ遊びをやらない？", source="console")
@@ -718,10 +850,12 @@ async def test_affirmative_confirmation_is_rejected_when_capability_is_unavailab
 async def test_invalid_constraints_create_confirmation_without_calling_plugin_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = InvalidConstraintResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
 
     await runtime.submit_user_text("不正なテーマで言葉遊び", source="console")
@@ -738,10 +872,12 @@ async def test_invalid_constraints_create_confirmation_without_calling_plugin_ha
 async def test_negative_confirmation_keeps_ongoing_activity_without_plugin_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     await runtime.submit_user_text("しりとりしよう", source="console")
     ongoing = runtime.activity_manager.ongoing_activity
@@ -762,10 +898,12 @@ async def test_negative_confirmation_keeps_ongoing_activity_without_plugin_call(
 async def test_pause_and_resume_synchronize_game_and_ongoing_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     assert runtime.plugin_manager is not None
     games = runtime.plugin_manager.get_plugin("games")
@@ -792,6 +930,7 @@ async def test_pause_and_resume_synchronize_game_and_ongoing_status(
 async def test_switch_does_not_start_target_when_current_stop_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.bootstrap import runtime as runtime_factory
     from app.domain.behavior import (
         ActivityOperation,
         ActivityPlan,
@@ -799,10 +938,11 @@ async def test_switch_does_not_start_target_when_current_stop_fails(
         OngoingInputDecision,
     )
     from app.domain.events import AgentEvent, AgentEventType
-    from app.runtime import runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     await runtime.submit_user_text("しりとりしよう", source="console")
     assert runtime.plugin_manager is not None
@@ -820,7 +960,9 @@ async def test_switch_does_not_start_target_when_current_stop_fails(
         activity_plan: ActivityPlan | None = None,
     ) -> AgentEvent:
         calls.append(
-            activity_plan.operation.value if activity_plan and activity_plan.operation else None
+            activity_plan.operation.value
+            if activity_plan and activity_plan.operation
+            else None
         )
         return event
 
@@ -863,6 +1005,7 @@ async def test_switch_does_not_start_target_when_current_stop_fails(
 async def test_switch_starts_target_only_after_current_stop_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.bootstrap import runtime as runtime_factory
     from app.domain.behavior import (
         ActivityOperation,
         ActivityPlan,
@@ -870,10 +1013,11 @@ async def test_switch_starts_target_only_after_current_stop_succeeds(
         OngoingInputDecision,
     )
     from app.domain.events import AgentEvent, AgentEventType
-    from app.runtime import runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     await runtime.submit_user_text("しりとりしよう", source="console")
     assert runtime.plugin_manager is not None
@@ -889,7 +1033,9 @@ async def test_switch_starts_target_only_after_current_stop_succeeds(
         activity_plan: ActivityPlan | None = None,
     ) -> AgentEvent | None:
         operation = (
-            activity_plan.operation.value if activity_plan and activity_plan.operation else None
+            activity_plan.operation.value
+            if activity_plan and activity_plan.operation
+            else None
         )
         calls.append(operation)
         if operation == "stop":
@@ -945,10 +1091,12 @@ async def test_switch_starts_target_only_after_current_stop_succeeds(
 async def test_natural_game_completion_completes_ongoing_activity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     assert runtime.plugin_manager is not None
     games = runtime.plugin_manager.get_plugin("games")
@@ -968,7 +1116,9 @@ async def test_natural_game_completion_completes_ongoing_activity(
 
     assert group is not None
     assert runtime.last_behavior_evaluation is not None
-    assert runtime.last_behavior_evaluation.plan.decision == BehaviorDecision.CONVERSATION
+    assert (
+        runtime.last_behavior_evaluation.plan.decision == BehaviorDecision.CONVERSATION
+    )
     assert runtime.activity_manager.ongoing_activity is None
 
 
@@ -976,10 +1126,12 @@ async def test_natural_game_completion_completes_ongoing_activity(
 async def test_ongoing_creation_failure_rolls_back_game_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     assert runtime.plugin_manager is not None
     games = runtime.plugin_manager.get_plugin("games")
@@ -996,13 +1148,15 @@ async def test_ongoing_creation_failure_rolls_back_game_session(
 
 
 @pytest.mark.asyncio
-async def test_stale_game_session_id_cancels_both_states(
+async def test_stale_plugin_session_id_cancels_both_states(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     assert runtime.plugin_manager is not None
     games = runtime.plugin_manager.get_plugin("games")
@@ -1010,7 +1164,7 @@ async def test_stale_game_session_id_cancels_both_states(
 
     await runtime.submit_user_text("しりとりしよう", source="console")
     runtime.activity_manager.update_ongoing_activity(
-        context_updates={"game_session_id": "stale-session-id"}
+        context_updates={"plugin_session_id": "stale-session-id"}
     )
     await runtime.submit_user_text("みみず", source="console")
 
@@ -1022,10 +1176,12 @@ async def test_stale_game_session_id_cancels_both_states(
 async def test_runtime_stop_cancels_game_session_and_ongoing_activity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(_games_test_config())
     assert runtime.plugin_manager is not None
     games = runtime.plugin_manager.get_plugin("games")
@@ -1040,24 +1196,30 @@ async def test_runtime_stop_cancels_game_session_and_ongoing_activity(
     assert session is not None
     assert session.status.value == "canceled"
     assert runtime.activity_manager.ongoing_activity is None
-    assert runtime.activity_manager.ongoing_activity_history[-1].status.value == "canceled"
+    assert (
+        runtime.activity_manager.ongoing_activity_history[-1].status.value == "canceled"
+    )
 
 
 @pytest.mark.asyncio
 async def test_unavailable_game_llm_rejects_before_session_start(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     config = load_app_config()
     config = replace(
         config,
         speech=replace(config.speech, enabled=False),
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=True)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=True)
+        ),
     )
     monkeypatch.delenv(_openai_api_key_env(config), raising=False)
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(config)
     assert runtime.plugin_manager is not None
     games = runtime.plugin_manager.get_plugin("games")
@@ -1077,17 +1239,21 @@ async def test_unavailable_game_llm_rejects_before_session_start(
 async def test_capability_revoked_immediately_before_execution_is_not_run(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     config = load_app_config()
     config = replace(
         config,
         response_generator=replace(config.response_generator, type="dummy"),
         speech=replace(config.speech, enabled=False),
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=True)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=True)
+        ),
     )
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(config)
     assert runtime.plugin_manager is not None
     games = runtime.plugin_manager.get_plugin("games")
@@ -1110,14 +1276,16 @@ async def test_capability_revoked_immediately_before_execution_is_not_run(
 async def test_provider_failure_revokes_execution_and_uses_safe_conversation_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     config = load_app_config()
     config = replace(
         config,
         response_generator=replace(config.response_generator, type="dummy"),
         speech=replace(config.speech, enabled=False),
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=True)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=True)
+        ),
     )
     monkeypatch.setattr(
         runtime_factory,
@@ -1141,7 +1309,9 @@ async def test_provider_failure_revokes_execution_and_uses_safe_conversation_fal
         PluginCapability.ACTIVITY_PROVIDER.value, "games"
     )
     assert group is not None
-    assert group.action_plans[0].text == "今はそれを一緒にできないんだ。別のお話をしよう。"
+    assert (
+        group.action_plans[0].text == "今はそれを一緒にできないんだ。別のお話をしよう。"
+    )
 
 
 @pytest.mark.asyncio
@@ -1159,17 +1329,21 @@ async def test_unmatched_and_knowledge_requests_use_normal_conversation(
     text: str,
     expected_conversation_calls: int,
 ) -> None:
-    from app.runtime import runtime_factory
+    from app.bootstrap import runtime as runtime_factory
 
     config = load_app_config()
     config = replace(
         config,
         response_generator=replace(config.response_generator, type="dummy"),
         speech=replace(config.speech, enabled=False),
-        plugins=replace(config.plugins, games=replace(config.plugins.games, enabled=False)),
+        plugins=replace(
+            config.plugins, games=replace(config.plugins.games, enabled=False)
+        ),
     )
     generator = FactoryShiritoriResponseGenerator()
-    monkeypatch.setattr(runtime_factory, "create_response_generator", lambda **_: generator)
+    monkeypatch.setattr(
+        runtime_factory, "create_response_generator", lambda **_: generator
+    )
     runtime = runtime_factory.create_runtime_coordinator(config)
 
     await runtime.submit_user_text(text, source="console")
@@ -1177,15 +1351,20 @@ async def test_unmatched_and_knowledge_requests_use_normal_conversation(
 
     assert group is not None
     assert runtime.last_behavior_evaluation is not None
-    assert runtime.last_behavior_evaluation.plan.decision == BehaviorDecision.CONVERSATION
+    assert (
+        runtime.last_behavior_evaluation.plan.decision == BehaviorDecision.CONVERSATION
+    )
     assert generator.game_call_count == 0
     assert generator.conversation_call_count == expected_conversation_calls
     assert all(
-        "Plugin" not in plan.text and "Capability" not in plan.text for plan in group.action_plans
+        "Plugin" not in plan.text and "Capability" not in plan.text
+        for plan in group.action_plans
     )
 
 
-def test_create_topic_classifier_returns_none_when_response_generator_is_dummy() -> None:
+def test_create_topic_classifier_returns_none_when_response_generator_is_dummy() -> (
+    None
+):
     config = load_app_config()
     config = replace(
         config,
@@ -1250,15 +1429,22 @@ def _replace_topic_memory_enabled(config: AppConfig, enabled: bool) -> AppConfig
     )
 
 
-def _replace_topic_memory_embedding_service(config: AppConfig, service: str) -> AppConfig:
+def _replace_topic_memory_embedding_service(
+    config: AppConfig, service: str
+) -> AppConfig:
     model_key = config.memory.topic_memory.embedding_model
     return replace(
         config,
-        models={**config.models, model_key: replace(config.models[model_key], service=service)},
+        models={
+            **config.models,
+            model_key: replace(config.models[model_key], service=service),
+        },
     )
 
 
-def _replace_topic_memory_database_type(config: AppConfig, database_type: str) -> AppConfig:
+def _replace_topic_memory_database_type(
+    config: AppConfig, database_type: str
+) -> AppConfig:
     service_key = config.memory.topic_memory.database_service
     return replace(
         config,
@@ -1269,7 +1455,9 @@ def _replace_topic_memory_database_type(config: AppConfig, database_type: str) -
     )
 
 
-def test_create_embedding_generator_returns_none_when_topic_memory_is_disabled() -> None:
+def test_create_embedding_generator_returns_none_when_topic_memory_is_disabled() -> (
+    None
+):
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=False)
 
@@ -1278,10 +1466,14 @@ def test_create_embedding_generator_returns_none_when_topic_memory_is_disabled()
     assert embedding_generator is None
 
 
-def test_create_embedding_generator_returns_none_when_embedding_type_is_unsupported() -> None:
+def test_create_embedding_generator_returns_none_when_embedding_type_is_unsupported() -> (
+    None
+):
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=True)
-    config = _replace_topic_memory_embedding_service(config, service="topic_memory_database")
+    config = _replace_topic_memory_embedding_service(
+        config, service="topic_memory_database"
+    )
 
     embedding_generator = create_embedding_generator(config)
 
@@ -1321,7 +1513,9 @@ def test_create_topic_memory_store_returns_none_when_topic_memory_is_disabled() 
     assert topic_memory_store is None
 
 
-def test_create_topic_memory_store_returns_none_when_database_type_is_unsupported() -> None:
+def test_create_topic_memory_store_returns_none_when_database_type_is_unsupported() -> (
+    None
+):
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=True)
     config = _replace_topic_memory_database_type(config, database_type="unsupported")
@@ -1358,7 +1552,9 @@ def test_create_topic_memory_store_returns_postgres_topic_memory_store_when_enab
     assert isinstance(topic_memory_store, PostgresTopicMemoryStore)
 
 
-def _replace_topic_memory_summary_type(config: AppConfig, summary_type: str) -> AppConfig:
+def _replace_topic_memory_summary_type(
+    config: AppConfig, summary_type: str
+) -> AppConfig:
     return replace(
         config,
         memory=replace(
@@ -1377,7 +1573,7 @@ def _replace_topic_memory_summary_type(config: AppConfig, summary_type: str) -> 
 def test_create_memory_summary_generator_returns_none_when_openai_api_key_is_not_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.runtime.runtime_factory import create_memory_summary_generator
+    from app.bootstrap.runtime import create_memory_summary_generator
 
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=True)
@@ -1392,8 +1588,10 @@ def test_create_memory_summary_generator_returns_none_when_openai_api_key_is_not
 def test_create_memory_summary_generator_returns_llm_generator_when_response_generator_is_openai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.adapters.memory.llm_memory_summary_generator import LlmMemorySummaryGenerator
-    from app.runtime.runtime_factory import create_memory_summary_generator
+    from app.adapters.memory.llm_memory_summary_generator import (
+        LlmMemorySummaryGenerator,
+    )
+    from app.bootstrap.runtime import create_memory_summary_generator
 
     config = load_app_config()
     config = _replace_topic_memory_enabled(config, enabled=True)

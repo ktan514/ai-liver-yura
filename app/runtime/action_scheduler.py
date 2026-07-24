@@ -25,6 +25,9 @@ class ActionExecutor(Protocol):
     async def execute(self, action_plan: ActionPlan) -> ActionExecutionResult | None:
         """ActionPlan を実行する。"""
 
+    async def prepare(self, action_plan: ActionPlan) -> ActionPlan:
+        """外部出力を開始せず、実行に必要なデータだけを準備する。"""
+
 
 class ActionScheduler:
     """ActionPlanGroup をリソース単位で安全に実行する。"""
@@ -39,6 +42,8 @@ class ActionScheduler:
         self._prevent_new_actions = False
         self._running_tasks: set[asyncio.Task[object]] = set()
         self._lifecycle_gate: ActivityPolicy | None = None
+        self._segment_cancel_lock = threading.Lock()
+        self._cancel_pending_segment_activity_ids: set[str] = set()
 
     def set_activity_policy(self, gate: ActivityPolicy) -> None:
         self._lifecycle_gate = gate
@@ -55,6 +60,39 @@ class ActionScheduler:
                 task.cancel()
                 canceled = True
         return canceled
+
+    def cancel_pending_segments(self, source_activity_id: str) -> None:
+        """再生中のsegmentは維持し、同じActivityの未開始segmentを破棄する。"""
+
+        with self._segment_cancel_lock:
+            self._cancel_pending_segment_activity_ids.add(source_activity_id)
+        self._trace_logger.info(
+            "action_scheduler:pending_segments:cancel_requested",
+            source_activity_id=source_activity_id,
+        )
+
+    def _pending_segments_canceled(self, source_activity_id: str | None) -> bool:
+        if source_activity_id is None:
+            return False
+        with self._segment_cancel_lock:
+            return source_activity_id in self._cancel_pending_segment_activity_ids
+
+    def _clear_pending_segment_cancel(self, source_activity_id: str | None) -> None:
+        if source_activity_id is None:
+            return
+        with self._segment_cancel_lock:
+            self._cancel_pending_segment_activity_ids.discard(source_activity_id)
+
+    async def prepare(self, action_plan_group: ActionPlanGroup) -> ActionPlanGroup:
+        """TTSなどの副作用を伴わない準備を、FIFO出力より前に済ませる。"""
+
+        prepare_action = getattr(self._action_executor, "prepare", None)
+        if not callable(prepare_action):
+            return action_plan_group
+        prepared_actions: list[ActionPlan] = []
+        for action in action_plan_group.action_plans:
+            prepared_actions.append(await prepare_action(action))
+        return replace(action_plan_group, action_plans=prepared_actions)
 
     async def execute(self, action_plan_group: ActionPlanGroup) -> ActivityOutputResult:
         if self._prevent_new_actions:
@@ -96,12 +134,17 @@ class ActionScheduler:
         finally:
             if task is not None:
                 self._running_tasks.discard(task)
+            self._clear_pending_segment_cancel(action_plan_group.source_activity_id)
 
-    async def _execute_allowed(self, action_plan_group: ActionPlanGroup) -> ActivityOutputResult:
+    async def _execute_allowed(
+        self, action_plan_group: ActionPlanGroup
+    ) -> ActivityOutputResult:
         started_at = datetime.now(timezone.utc)
         turn_result = action_plan_group.activity_turn_result
         activity_turn_id = (
-            turn_result.activity_turn_id if turn_result is not None else action_plan_group.group_id
+            turn_result.activity_turn_id
+            if turn_result is not None
+            else action_plan_group.group_id
         )
         self._trace_logger.write(
             "action_scheduler:execute:start",
@@ -109,7 +152,8 @@ class ActionScheduler:
             action_count=len(action_plan_group.action_plans),
             source_activity_id=action_plan_group.source_activity_id,
             action_types=[
-                action_plan.action_type.value for action_plan in action_plan_group.action_plans
+                action_plan.action_type.value
+                for action_plan in action_plan_group.action_plans
             ],
         )
         if action_plan_group.is_empty():
@@ -118,7 +162,9 @@ class ActionScheduler:
                 status=ActivityOutputStatus.COMPLETED,
                 output_unit_id=action_plan_group.group_id,
                 activity_turn_id=activity_turn_id,
-                ongoing_activity_id=turn_result.ongoing_activity_id if turn_result else None,
+                ongoing_activity_id=(
+                    turn_result.ongoing_activity_id if turn_result else None
+                ),
                 source_event_id=turn_result.source_event_id if turn_result else None,
                 started_at=started_at,
                 finished_at=datetime.now(timezone.utc),
@@ -291,7 +337,40 @@ class ActionScheduler:
                 source_activity_id=action_plan_group.source_activity_id,
             )
             results: list[ActionExecutionResult] = []
-            for action_plan in self._synchronized_action_order(action_plan_group):
+            ordered_actions = self._synchronized_action_order(action_plan_group)
+            completed_speech_segment = -1
+            for action_index, action_plan in enumerate(ordered_actions):
+                segment_index = self._segment_index(action_plan)
+                if (
+                    self._pending_segments_canceled(
+                        action_plan_group.source_activity_id
+                    )
+                    and segment_index > completed_speech_segment
+                ):
+                    now = datetime.now(timezone.utc)
+                    canceled_actions = ordered_actions[action_index:]
+                    results.extend(
+                        ActionExecutionResult(
+                            action_id=pending.action_id,
+                            action_type=pending.action_type.value,
+                            status=ActionExecutionStatus.CANCELED,
+                            output_unit_id=output_unit_id,
+                            activity_turn_id=activity_turn_id,
+                            error="pending_segment_canceled_by_user_input",
+                            started_at=now,
+                            finished_at=now,
+                        )
+                        for pending in canceled_actions
+                    )
+                    self._trace_logger.info(
+                        "action_scheduler:pending_segments:canceled",
+                        output_unit_id=output_unit_id,
+                        source_activity_id=action_plan_group.source_activity_id,
+                        canceled_action_ids=[
+                            pending.action_id for pending in canceled_actions
+                        ],
+                    )
+                    break
                 self._trace_logger.debug(
                     "action_scheduler:output_unit:action_started",
                     output_unit_id=output_unit_id,
@@ -311,6 +390,8 @@ class ActionScheduler:
                     action_id=action_plan.action_id,
                     action_type=action_plan.action_type.value,
                 )
+                if action_plan.action_type == ActionType.SPEAK:
+                    completed_speech_segment = segment_index
             self._trace_logger.info(
                 "action_scheduler:output_unit:finished",
                 output_unit_id=output_unit_id,
@@ -319,13 +400,29 @@ class ActionScheduler:
             return results
 
     @staticmethod
+    def _segment_index(action_plan: ActionPlan) -> int:
+        segment = action_plan.metadata.get("reaction_segment_index", 0)
+        return segment if isinstance(segment, int) and segment >= 0 else 0
+
+    @staticmethod
     def _synchronized_action_order(
         action_plan_group: ActionPlanGroup,
     ) -> list[ActionPlan]:
-        visual_types = {ActionType.UPDATE_SUBTITLE, ActionType.CHANGE_EXPRESSION}
+        action_order = {
+            ActionType.UPDATE_SUBTITLE: 0,
+            ActionType.CHANGE_EXPRESSION: 1,
+            ActionType.MOVE: 2,
+            ActionType.SPEAK: 3,
+        }
+
+        def key(action_plan: ActionPlan) -> tuple[int, int]:
+            return ActionScheduler._segment_index(
+                action_plan
+            ), action_order.get(action_plan.action_type, 4)
+
         return sorted(
             action_plan_group.action_plans,
-            key=lambda action_plan: action_plan.action_type not in visual_types,
+            key=key,
         )
 
     async def _execute_with_resource_locks(
@@ -340,9 +437,13 @@ class ActionScheduler:
             action_id=action_plan.action_id,
             action_type=action_plan.action_type.value,
             source_activity_id=action_plan.source_activity_id,
-            required_resources=[resource.value for resource in action_plan.required_resources],
+            required_resources=[
+                resource.value for resource in action_plan.required_resources
+            ],
         )
-        resources = sorted(action_plan.required_resources, key=lambda resource: resource.value)
+        resources = sorted(
+            action_plan.required_resources, key=lambda resource: resource.value
+        )
 
         if not resources:
             self._trace_logger.write(
@@ -460,10 +561,15 @@ class ActionScheduler:
         error: str | None = None,
     ) -> ActivityOutputResult:
         completed = sum(
-            result.status == ActionExecutionStatus.COMPLETED for result in action_results
+            result.status == ActionExecutionStatus.COMPLETED
+            for result in action_results
         )
-        failed = sum(result.status == ActionExecutionStatus.FAILED for result in action_results)
-        canceled = sum(result.status == ActionExecutionStatus.CANCELED for result in action_results)
+        failed = sum(
+            result.status == ActionExecutionStatus.FAILED for result in action_results
+        )
+        canceled = sum(
+            result.status == ActionExecutionStatus.CANCELED for result in action_results
+        )
         if forced_status is not None:
             status = forced_status
         elif completed == len(action_results):
@@ -480,7 +586,9 @@ class ActionScheduler:
             replace(
                 result,
                 trace_id=turn_result.trace_id if turn_result is not None else None,
-                parent_trace_id=(turn_result.parent_trace_id if turn_result is not None else None),
+                parent_trace_id=(
+                    turn_result.parent_trace_id if turn_result is not None else None
+                ),
             )
             for result in action_results
         )
@@ -488,24 +596,34 @@ class ActionScheduler:
             status=status,
             output_unit_id=group.group_id,
             activity_turn_id=(
-                turn_result.activity_turn_id if turn_result is not None else group.group_id
+                turn_result.activity_turn_id
+                if turn_result is not None
+                else group.group_id
             ),
-            ongoing_activity_id=turn_result.ongoing_activity_id if turn_result else None,
+            ongoing_activity_id=(
+                turn_result.ongoing_activity_id if turn_result else None
+            ),
             source_event_id=turn_result.source_event_id if turn_result else None,
             action_results=correlated_actions,
-            failure_stage="action_execution"
-            if status
-            in {
-                ActivityOutputStatus.PARTIALLY_COMPLETED,
-                ActivityOutputStatus.FAILED,
-                ActivityOutputStatus.CANCELED,
-            }
-            else None,
+            failure_stage=(
+                "action_execution"
+                if status
+                in {
+                    ActivityOutputStatus.PARTIALLY_COMPLETED,
+                    ActivityOutputStatus.FAILED,
+                    ActivityOutputStatus.CANCELED,
+                }
+                else None
+            ),
             error=error,
-            activity_result_id=planned_output.activity_result_id
-            if planned_output is not None
-            else str(uuid4()),
-            started_at=planned_output.started_at if planned_output is not None else started_at,
+            activity_result_id=(
+                planned_output.activity_result_id
+                if planned_output is not None
+                else str(uuid4())
+            ),
+            started_at=(
+                planned_output.started_at if planned_output is not None else started_at
+            ),
             finished_at=datetime.now(timezone.utc),
             trace_id=turn_result.trace_id if turn_result else None,
             parent_trace_id=turn_result.parent_trace_id if turn_result else None,

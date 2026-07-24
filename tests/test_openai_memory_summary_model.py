@@ -41,7 +41,9 @@ class FakeUrlOpen:
 @pytest.mark.asyncio
 async def test_generate_memory_summary_posts_prompt_to_openai(monkeypatch) -> None:
     fake_urlopen = FakeUrlOpen(
-        response_body=json.dumps({"output_text": "イルカのジャンプの軽やかさに興味を示した"})
+        response_body=json.dumps(
+            {"output_text": "イルカのジャンプの軽やかさに興味を示した"}
+        )
     )
     monkeypatch.setattr(
         "app.adapters.memory.openai_memory_summary_model.request.urlopen",
@@ -116,7 +118,9 @@ def test_parse_response_raises_error_when_response_text_is_missing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_memory_summary_raises_runtime_error_when_request_fails(monkeypatch) -> None:
+async def test_generate_memory_summary_raises_runtime_error_when_request_fails(
+    monkeypatch,
+) -> None:
     def fake_urlopen(http_request, timeout: float):
         raise URLError("connection refused")
 

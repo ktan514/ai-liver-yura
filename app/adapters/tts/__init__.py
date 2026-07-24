@@ -1,4 +1,7 @@
-from app.adapters.tts.audio_query_corrector import AudioQueryCorrector, NoOpAudioQueryCorrector
+from app.adapters.tts.audio_query_corrector import (
+    AudioQueryCorrector,
+    NoOpAudioQueryCorrector,
+)
 from app.adapters.tts.pronunciation_corrector import (
     AppliedPronunciationRule,
     PronunciationCorrectionResult,
@@ -14,9 +17,12 @@ from app.adapters.tts.voicevox_speech_synthesizer import (
     VoiceVoxSpeechSynthesizer,
     VoiceVoxSpeechSynthesizerConfig,
 )
+from app.adapters.tts.voicevox_voice_intent_mapper import (
+    VoiceVoxParameterLimits,
+    VoiceVoxVoiceIntentMapper,
+)
 
 __all__ = [
-    "SystemAudioPlayer",
     "AppliedPronunciationRule",
     "AudioQueryCorrector",
     "NoOpAudioQueryCorrector",
@@ -24,11 +30,10 @@ __all__ = [
     "PronunciationCorrector",
     "PronunciationDictionary",
     "PronunciationRule",
+    "SystemAudioPlayer",
+    "VoiceVoxParameterLimits",
+    "VoiceVoxSpeechProfile",
     "VoiceVoxSpeechSynthesizer",
     "VoiceVoxSpeechSynthesizerConfig",
-    "VoiceVoxSpeechProfile",
-    "NoOpAudioQueryCorrector",
-    "PronunciationCorrector",
-    "PronunciationDictionary",
-    "VoiceVoxSpeechProfile",
+    "VoiceVoxVoiceIntentMapper",
 ]

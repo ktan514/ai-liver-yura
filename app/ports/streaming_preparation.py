@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.domain import (
     HealthCheckItem,
     ObsPreparationSnapshot,
     RunOfShowSegment,
@@ -31,7 +31,9 @@ class YouTubePreparationPort(Protocol):
 
     async def resolve_broadcast(self, broadcast_id: str) -> YouTubeBroadcastSummary: ...
 
-    async def resolve_bound_stream(self, broadcast_id: str) -> YouTubeStreamSnapshot: ...
+    async def resolve_bound_stream(
+        self, broadcast_id: str
+    ) -> YouTubeStreamSnapshot: ...
 
     async def get_stream_status(self, stream_id: str) -> str: ...
 
@@ -39,7 +41,9 @@ class YouTubePreparationPort(Protocol):
 
     async def get_live_chat_id(self, broadcast_id: str) -> str | None: ...
 
-    async def get_live_chat_availability(self, broadcast_id: str) -> YouTubeLiveChatSnapshot: ...
+    async def get_live_chat_availability(
+        self, broadcast_id: str
+    ) -> YouTubeLiveChatSnapshot: ...
 
     async def health_check(self) -> bool: ...
 
@@ -88,7 +92,9 @@ class RunOfShowRepository(Protocol):
 
     def get_opening_segment(self, run_of_show_id: str) -> RunOfShowSegment | None: ...
 
-    def get_first_main_segment(self, run_of_show_id: str) -> RunOfShowSegment | None: ...
+    def get_first_main_segment(
+        self, run_of_show_id: str
+    ) -> RunOfShowSegment | None: ...
 
     def get_closing_segment(self, run_of_show_id: str) -> RunOfShowSegment | None: ...
 

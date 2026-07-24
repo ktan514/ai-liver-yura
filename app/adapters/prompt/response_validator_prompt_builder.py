@@ -18,8 +18,10 @@ class ResponseValidatorPromptBuilder:
     ) -> str:
         return "\n".join(
             [
-                "あなたはResponse Validatorです。表現の事実整合性だけを評価する。",
-                "Response Context: " + json.dumps(asdict(context), ensure_ascii=False, default=str),
+                "あなたはResponse Validatorです。表現の事実整合性と確定済み対話方針への"
+                "整合性を評価する。",
+                "Response Context: "
+                + json.dumps(asdict(context), ensure_ascii=False, default=str),
                 "Character Response: "
                 + json.dumps(asdict(response), ensure_ascii=False, default=str),
                 "Speechから独立抽出済みのClaims: "
@@ -31,6 +33,8 @@ class ResponseValidatorPromptBuilder:
                 "決定論的検証済みの事実を変更せず、曖昧・婉曲・比喩表現から"
                 "追加の事実Claimを独立抽出する。",
                 "ActivityDefinitionにないActivityや、実行Resultにない成功事実を追加しない。",
+                "speech_act、conversation_phase、initiative_levelに対して、発話の長さ、"
+                "話題展開、相手へ求める応答の強さが一致しているか評価する。",
                 "JSONのみ返す: "
                 '{"accepted":true,"reason":"facts_consistent","extracted_claims":['
                 '{"claim_type":"conversation_only","activity_type":null,'

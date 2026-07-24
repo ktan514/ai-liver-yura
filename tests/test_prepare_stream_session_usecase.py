@@ -16,14 +16,17 @@ from app.adapters.streaming import (
     InMemoryStreamSessionRepository,
     YamlRunOfShowRepository,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.application import (
+    PrepareStreamSessionUsecase,
+    StreamPreparationRequirements,
+)
+from app.plugins.youtube_streaming.domain import (
     HealthCheckItem,
     HealthStatus,
     StreamPreparationCommand,
     StreamPreparationResult,
     YouTubeBroadcastSummary,
 )
-from app.usecases import PrepareStreamSessionUsecase, StreamPreparationRequirements
 
 
 @dataclass
@@ -42,7 +45,9 @@ class FakeTtsHealth:
             self.status,
             required,
             "tts",
-            failure_reason=None if self.status == HealthStatus.HEALTHY else "tts unavailable",
+            failure_reason=(
+                None if self.status == HealthStatus.HEALTHY else "tts unavailable"
+            ),
         )
 
 
@@ -107,13 +112,15 @@ async def test_all_required_healthy_becomes_ready_and_publishes(tmp_path: Path) 
     assert published == [result]
     assert any(item.status == HealthStatus.DEGRADED for item in result.checks)
     assert (
-        next(item for item in result.checks if item.check_id == "obs.configuration").status
+        next(
+            item for item in result.checks if item.check_id == "obs.configuration"
+        ).status
         == HealthStatus.HEALTHY
     )
     assert (
-        next(item for item in result.checks if item.check_id == "obs.websocket.version").metadata[
-            "websocket_version"
-        ]
+        next(
+            item for item in result.checks if item.check_id == "obs.websocket.version"
+        ).metadata["websocket_version"]
         == "5.x-fake"
     )
 
@@ -142,7 +149,9 @@ async def test_optional_hidden_obs_avatar_is_degraded_but_ready(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_required_failure_becomes_failed_and_preserves_reason(tmp_path: Path) -> None:
+async def test_required_failure_becomes_failed_and_preserves_reason(
+    tmp_path: Path,
+) -> None:
     config = FakeYouTubePreparationConfig(
         broadcasts=(YouTubeBroadcastSummary("broadcast", "title"),),
         authenticated=False,
@@ -155,7 +164,9 @@ async def test_required_failure_becomes_failed_and_preserves_reason(tmp_path: Pa
 
 
 @pytest.mark.asyncio
-async def test_command_is_idempotent_and_version_mismatch_is_rejected(tmp_path: Path) -> None:
+async def test_command_is_idempotent_and_version_mismatch_is_rejected(
+    tmp_path: Path,
+) -> None:
     usecase, sessions, _, command = build_usecase(tmp_path)
     first = await usecase.execute(command)
     duplicate = await usecase.execute(command)
@@ -177,7 +188,9 @@ async def test_command_is_idempotent_and_version_mismatch_is_rejected(tmp_path: 
 @pytest.mark.asyncio
 async def test_unknown_session_is_rejected(tmp_path: Path) -> None:
     usecase, _, _, command = build_usecase(tmp_path)
-    unknown = StreamPreparationCommand("unknown", "trace", "missing", command.selected_broadcast_id)
+    unknown = StreamPreparationCommand(
+        "unknown", "trace", "missing", command.selected_broadcast_id
+    )
     result = await usecase.execute(unknown)
     assert result.status == "rejected"
 
@@ -186,7 +199,9 @@ async def test_unknown_session_is_rejected(tmp_path: Path) -> None:
 async def test_timeout_and_exception_are_converted_without_aborting_other_checks(
     tmp_path: Path,
 ) -> None:
-    usecase, _, _, command = build_usecase(tmp_path, tts=FakeTtsHealth(delay=0.1), timeout=0.01)
+    usecase, _, _, command = build_usecase(
+        tmp_path, tts=FakeTtsHealth(delay=0.1), timeout=0.01
+    )
     result = await usecase.execute(command)
     tts = next(item for item in result.checks if item.check_id == "tts.available")
     assert tts.status == HealthStatus.UNAVAILABLE
@@ -211,7 +226,9 @@ async def test_checks_run_in_parallel(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_cancel_returns_canceled_failed_result(tmp_path: Path) -> None:
-    usecase, _, _, command = build_usecase(tmp_path, tts=FakeTtsHealth(delay=1), timeout=2)
+    usecase, _, _, command = build_usecase(
+        tmp_path, tts=FakeTtsHealth(delay=1), timeout=2
+    )
     task = asyncio.create_task(usecase.execute(command))
     await asyncio.sleep(0.01)
     task.cancel()

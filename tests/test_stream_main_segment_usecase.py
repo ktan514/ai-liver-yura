@@ -3,7 +3,9 @@ from __future__ import annotations
 import pytest
 
 from app.adapters.streaming import InMemoryStreamMainSegmentRepository
-from app.adapters.streaming.in_memory_session_repository import InMemoryStreamSessionRepository
+from app.adapters.streaming.in_memory_session_repository import (
+    InMemoryStreamSessionRepository,
+)
 from app.domain.actions import ActionType
 from app.domain.activity_turn_result import (
     ActionExecutionResult,
@@ -12,7 +14,8 @@ from app.domain.activity_turn_result import (
     ActivityOutputStatus,
     ActivityTurnResult,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.application import StreamMainSegmentUsecase
+from app.plugins.youtube_streaming.domain import (
     RetryMainSegmentCommand,
     RunOfShowSegment,
     StreamMainSegmentRejected,
@@ -22,7 +25,6 @@ from app.domain.streaming import (
     StreamSession,
     StreamSessionStatus,
 )
-from app.usecases import StreamMainSegmentUsecase
 
 STATE = {
     "obs_output": "active",
@@ -44,11 +46,17 @@ class Ros:
         return items[0] if items else None
 
 
-def setup() -> tuple[InMemoryStreamSessionRepository, StreamSession, StreamOpeningActivity]:
+def setup() -> (
+    tuple[InMemoryStreamSessionRepository, StreamSession, StreamOpeningActivity]
+):
     sessions = InMemoryStreamSessionRepository()
     session = sessions.create(
         StreamSession(
-            "trace", "broadcast", "配信", status=StreamSessionStatus.LIVE, run_of_show_id="show"
+            "trace",
+            "broadcast",
+            "配信",
+            status=StreamSessionStatus.LIVE,
+            run_of_show_id="show",
         )
     )
     opening = StreamOpeningActivity(
@@ -63,19 +71,34 @@ def setup() -> tuple[InMemoryStreamSessionRepository, StreamSession, StreamOpeni
 
 def main(order: int = 10, topic: str | None = "今日の話題") -> RunOfShowSegment:
     return RunOfShowSegment(
-        f"main-{order}", "main", "本編", 600, True, "llm", "main-v1", order, "紹介", topic
+        f"main-{order}",
+        "main",
+        "本編",
+        600,
+        True,
+        "llm",
+        "main-v1",
+        order,
+        "紹介",
+        topic,
     )
 
 
-def turn(status: ActionExecutionStatus = ActionExecutionStatus.COMPLETED) -> ActivityTurnResult:
-    action = ActionExecutionResult("action", ActionType.SPEAK.value, status, "out", "turn")
+def turn(
+    status: ActionExecutionStatus = ActionExecutionStatus.COMPLETED,
+) -> ActivityTurnResult:
+    action = ActionExecutionResult(
+        "action", ActionType.SPEAK.value, status, "out", "turn"
+    )
     return ActivityTurnResult(
         "turn",
         "stream_main_segment",
         output_result=ActivityOutputResult(
-            ActivityOutputStatus.COMPLETED
-            if status == ActionExecutionStatus.COMPLETED
-            else ActivityOutputStatus.FAILED,
+            (
+                ActivityOutputStatus.COMPLETED
+                if status == ActionExecutionStatus.COMPLETED
+                else ActivityOutputStatus.FAILED
+            ),
             "out",
             "turn",
             action_results=(action,),
@@ -130,7 +153,10 @@ async def test_requires_completed_opening_live_session_and_verified_state() -> N
     with pytest.raises(StreamMainSegmentRejected, match="opening.not_completed"):
         await usecase.start(
             StreamOpeningActivity(
-                opening.session_id, "trace", "opening", status=StreamOpeningStatus.FAILED
+                opening.session_id,
+                "trace",
+                "opening",
+                status=StreamOpeningStatus.FAILED,
             ),
             STATE,
         )
@@ -146,7 +172,11 @@ async def test_topic_selector_fallback_and_failed_retry_are_idempotent() -> None
     async def execute(_payload: dict[str, object], _trace: str) -> ActivityTurnResult:
         nonlocal calls
         calls += 1
-        return turn(ActionExecutionStatus.FAILED if calls == 1 else ActionExecutionStatus.COMPLETED)
+        return turn(
+            ActionExecutionStatus.FAILED
+            if calls == 1
+            else ActionExecutionStatus.COMPLETED
+        )
 
     usecase = StreamMainSegmentUsecase(
         sessions=sessions,

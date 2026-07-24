@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import pytest
@@ -91,12 +89,13 @@ def test_topic_history_returns_rotation_hint_when_topic_is_stagnating() -> None:
     topic_history.add(category=TopicCategory.SEA_LIFE, summary="海3")
 
     assert topic_history.rotation_hint() == (
-        "直近で sea_life 系の話題が続いているため、"
-        "次は別カテゴリへ自然に広げる"
+        "直近で sea_life 系の話題が続いているため、" "次は別カテゴリへ自然に広げる"
     )
 
 
-def test_topic_history_returns_none_rotation_hint_when_topic_is_not_stagnating() -> None:
+def test_topic_history_returns_none_rotation_hint_when_topic_is_not_stagnating() -> (
+    None
+):
     topic_history = TopicHistory()
 
     topic_history.add(category=TopicCategory.SEA_LIFE, summary="海")

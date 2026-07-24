@@ -12,7 +12,14 @@ def test_execution_requests_are_identified_without_feature_ids() -> None:
 
 
 def test_knowledge_past_and_negative_statements_are_not_execution_requests() -> None:
-    assert interpret_user_request("しりとりってどんな遊び？").kind == UserRequestKind.KNOWLEDGE
-    assert interpret_user_request("昨日しりとりをした").kind == UserRequestKind.PAST_EVENT
-    assert interpret_user_request("しりとりはしたくない").kind == UserRequestKind.NEGATIVE
+    assert (
+        interpret_user_request("しりとりってどんな遊び？").kind
+        == UserRequestKind.KNOWLEDGE
+    )
+    assert (
+        interpret_user_request("昨日しりとりをした").kind == UserRequestKind.PAST_EVENT
+    )
+    assert (
+        interpret_user_request("しりとりはしたくない").kind == UserRequestKind.NEGATIVE
+    )
     assert interpret_user_request("今日はいい天気だね").kind == UserRequestKind.CHAT

@@ -6,10 +6,8 @@ from typing import Any
 
 import pytest
 
-from app.domain.activities import ActivityStatus, ActivityType
-from app.domain.games import GameSessionStatus
-from app.runtime.activity_manager import ActivityManager
-from app.runtime.game_engine import GameEngine
+from app.plugins.games.engine import GameEngine
+from app.plugins.games.session import GameSessionStatus
 
 
 @dataclass(frozen=True)
@@ -133,34 +131,6 @@ def test_operation_without_active_session_is_rejected(operation: str) -> None:
             engine.complete_game({})
         else:
             engine.cancel_game("test")
-
-
-def test_game_activity_is_separate_from_session_lifecycle() -> None:
-    engine = GameEngine((FakeGameDefinition(),))
-    manager = ActivityManager(game_engine=engine)
-    session, activity = manager.start_game_activity(
-        "fake_game",
-        goal="Fake Gameをユーザーと遊ぶ",
-    )
-
-    assert activity.activity_type == ActivityType.GAME_WITH_USER
-    assert activity.status == ActivityStatus.ACTIVE
-    assert activity.context["game_session_id"] == session.session_id
-
-    manager.complete_processed_activity(activity.activity_id)
-
-    assert manager.foreground_activity is None
-    assert engine.get_active_session() == session
-
-    engine.complete_game({"winner": "user"})
-    assert engine.get_active_session() is None
-
-
-def test_activity_manager_uses_injected_game_engine() -> None:
-    engine = GameEngine((FakeGameDefinition(),))
-    manager = ActivityManager(game_engine=engine)
-
-    assert manager.game_engine is engine
 
 
 def test_completed_session_rejects_direct_transition_to_playing() -> None:

@@ -76,7 +76,9 @@ def test_longer_phrase_is_applied_first_for_same_priority(tmp_path: Path) -> Non
         encoding="utf-8",
     )
 
-    result = PronunciationCorrector(PronunciationDictionary.load(dictionary_path)).correct("東京湾")
+    result = PronunciationCorrector(
+        PronunciationDictionary.load(dictionary_path)
+    ).correct("東京湾")
 
     assert result.corrected_text == "とうきょうわん"
 
@@ -99,7 +101,9 @@ def test_disabled_rule_is_not_loaded(tmp_path: Path) -> None:
 
 
 def test_unmatched_text_is_unchanged() -> None:
-    corrector = PronunciationCorrector(PronunciationDictionary((_rule("人気", "にんき"),)))
+    corrector = PronunciationCorrector(
+        PronunciationDictionary((_rule("人気", "にんき"),))
+    )
 
     result = corrector.correct("今日はいい天気です")
 
@@ -129,15 +133,17 @@ def test_invalid_rule_does_not_discard_valid_rule(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    result = PronunciationCorrector(PronunciationDictionary.load(dictionary_path)).correct(
-        "どんな風に話そう"
-    )
+    result = PronunciationCorrector(
+        PronunciationDictionary.load(dictionary_path)
+    ).correct("どんな風に話そう")
 
     assert result.corrected_text == "どんなふうに話そう"
 
 
 def test_result_records_applied_rule_and_replacement_count() -> None:
-    corrector = PronunciationCorrector(PronunciationDictionary((_rule("人気", "にんき"),)))
+    corrector = PronunciationCorrector(
+        PronunciationDictionary((_rule("人気", "にんき"),))
+    )
 
     result = corrector.correct("人気の人気商品")
 

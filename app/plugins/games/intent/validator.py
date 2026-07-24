@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from app.plugins.games.game_engine import GameEngine
 from app.plugins.games.intent.command import GameIntent, GameIntentCommand
 from app.plugins.games.shiritori.state import ShiritoriPlayer, ShiritoriState
-from app.utils.trace import TraceLogger
+from app.shared.observability import PluginLogger
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,10 +18,12 @@ class GameCommandValidation:
 class GameCommandValidator:
     _allowed_controls = frozenset({"pause", "resume", "quit", "surrender"})
 
-    def __init__(self, engine: GameEngine, *, confidence_threshold: float = 0.85) -> None:
+    def __init__(
+        self, engine: GameEngine, *, confidence_threshold: float = 0.85
+    ) -> None:
         self._engine = engine
         self._confidence_threshold = confidence_threshold
-        self._trace_logger = TraceLogger()
+        self._trace_logger = PluginLogger(__name__)
 
     def validate(
         self,
@@ -30,8 +32,13 @@ class GameCommandValidator:
         current_state_version: int,
     ) -> GameCommandValidation:
         if command.state_version != current_state_version:
-            return self._reject(command, "stale_state", "game_command_validator:stale_state")
-        if command.requires_confirmation or command.confidence < self._confidence_threshold:
+            return self._reject(
+                command, "stale_state", "game_command_validator:stale_state"
+            )
+        if (
+            command.requires_confirmation
+            or command.confidence < self._confidence_threshold
+        ):
             self._trace_logger.info(
                 "game_command_validator:confirmation_required",
                 intent=command.intent.value,
@@ -41,7 +48,9 @@ class GameCommandValidator:
             return GameCommandValidation(False, True, "confidence_or_confirmation")
         session = self._engine.get_active_session()
         if command.intent == GameIntent.START_GAME:
-            if command.game_type is None or not self._engine.is_supported(command.game_type):
+            if command.game_type is None or not self._engine.is_supported(
+                command.game_type
+            ):
                 return self._reject(command, "unsupported_game")
             if session is not None:
                 return self._reject(command, "active_session_exists")
@@ -49,7 +58,10 @@ class GameCommandValidator:
             if session is None or not command.game_move:
                 return self._reject(command, "session_or_move_missing")
             state = session.metadata.get("shiritori_state")
-            if not isinstance(state, ShiritoriState) or state.current_turn != ShiritoriPlayer.USER:
+            if (
+                not isinstance(state, ShiritoriState)
+                or state.current_turn != ShiritoriPlayer.USER
+            ):
                 return self._reject(command, "not_user_turn")
         elif command.intent == GameIntent.GAME_CONTROL:
             if session is None or command.control not in self._allowed_controls:

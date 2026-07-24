@@ -26,7 +26,9 @@ class _ActionExecutor:
 
 
 def test_event_creates_trace_and_activity_turn_correlation() -> None:
-    event = AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"})
+    event = AgentEvent(
+        event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"}
+    )
 
     assert event.trace_context.trace_id
     assert event.trace_context.source_event_id == event.event_id
@@ -35,7 +37,9 @@ def test_event_creates_trace_and_activity_turn_correlation() -> None:
 
 @pytest.mark.asyncio
 async def test_user_turn_keeps_trace_from_activity_through_output() -> None:
-    event = AgentEvent(event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"})
+    event = AgentEvent(
+        event_type=AgentEventType.USER_TEXT, payload={"text": "こんにちは"}
+    )
     activity = Activity(
         activity_type=ActivityType.CONVERSATION_WITH_USER,
         goal="応答する",
@@ -93,7 +97,9 @@ def test_child_trace_keeps_parent_relationship() -> None:
 
 
 def test_llm_trace_has_formal_role_and_request_correlation() -> None:
-    trace = TraceContext.new(source_event_id="event-1").derive(activity_turn_id="turn-1")
+    trace = TraceContext.new(source_event_id="event-1").derive(
+        activity_turn_id="turn-1"
+    )
     activity = Activity(
         activity_type=ActivityType.BEHAVIOR_PLANNING,
         goal="意味解析",
@@ -129,7 +135,10 @@ async def test_bound_loggers_do_not_mix_parallel_trace_ids(tmp_path: Path) -> No
 
     try:
         await asyncio.gather(write("trace-a"), write("trace-b"))
-        records = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+        records = [
+            json.loads(line)
+            for line in log_path.read_text(encoding="utf-8").splitlines()
+        ]
         pairs = {(record["trace_id"], record["sequence"]) for record in records}
         assert pairs == {("trace-a", "trace-a"), ("trace-b", "trace-b")}
     finally:

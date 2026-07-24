@@ -1,0 +1,143 @@
+:root {
+  --sea-base: 40vh;
+  --sea-rise: 0px;
+  --depth-progress: 0;
+}
+
+html { background: #020c16; }
+body { position: relative; isolation: isolate; overflow-x: hidden; background: transparent; }
+
+/* 背景は常に1画面分の固定レイヤとし、本文の高さへ影響させない。 */
+.seascape {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: #010812;
+}
+
+.seascape::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: calc(var(--sea-base) - var(--sea-rise));
+  min-height: 0;
+  background:
+    radial-gradient(circle at 17% 22%, rgba(255, 236, 195, .58), transparent 17rem),
+    radial-gradient(ellipse at 68% 8%, rgba(226, 248, 255, .24), transparent 26rem),
+    linear-gradient(to bottom, #73b3c5 0%, #4b8da2 58%, #2e6e84 100%);
+  transition: height 80ms linear;
+}
+
+.seascape::after {
+  content: "";
+  position: absolute;
+  inset: calc(var(--sea-base) - var(--sea-rise)) 0 0;
+  background:
+    radial-gradient(ellipse at 50% 0%, rgba(126, 218, 240, .24), transparent 30%),
+    linear-gradient(to bottom,
+      #216b80 0%,
+      #15566b 11%,
+      #0d4358 24%,
+      #092f43 40%,
+      #061f33 58%,
+      #031321 78%,
+      #010812 100%);
+  box-shadow: inset 0 24px 48px rgba(133, 224, 245, .13);
+  filter: brightness(calc(1 - (var(--depth-progress) * .42)));
+  transition: inset 80ms linear, filter 120ms linear;
+}
+
+.sea-surface {
+  position: absolute;
+  top: calc(var(--sea-base) - var(--sea-rise));
+  left: -4%;
+  width: 108%;
+  height: 30px;
+  transform: translateY(-22px);
+  opacity: 1;
+  filter: drop-shadow(0 5px 10px rgba(112, 224, 248, .26));
+  transition: top 80ms linear;
+}
+
+.sea-surface::before,
+.sea-surface::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-repeat: repeat-x;
+  opacity: 1;
+}
+
+.sea-surface::before {
+  z-index: 2;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='26' viewBox='0 0 220 26'%3E%3Cpath d='M6 21 C16 21 24 7 41 4 C49 3 55 5 62 8 C51 10 46 15 48 21 L110 21 L110 26 L6 26 Z' fill='%23216b80'/%3E%3Cpath d='M6 21 C16 21 24 7 41 4 C49 3 55 5 62 8 C51 10 46 15 48 21' fill='none' stroke='%23e3fcff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 220px 26px;
+  animation: surface-wave-front 11s linear infinite;
+}
+
+.sea-surface::after {
+  z-index: 1;
+  top: 4px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='280' height='24' viewBox='0 0 280 24'%3E%3Cpath d='M8 19 C20 19 29 7 47 5 C55 4 62 6 69 9 C58 10 53 14 55 19 L128 19 L128 24 L8 24 Z' fill='%231b6177'/%3E%3Cpath d='M8 19 C20 19 29 7 47 5 C55 4 62 6 69 9 C58 10 53 14 55 19' fill='none' stroke='%23b8ecf9' stroke-width='1.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-size: 280px 24px;
+  animation: surface-wave-back 17s linear infinite;
+}
+
+.lighthouse {
+  position: absolute;
+  left: clamp(48px, 12vw, 210px);
+  top: calc(var(--sea-base) - var(--sea-rise) - 182px);
+  width: 148px;
+  height: 200px;
+  opacity: .96;
+  transform-origin: 50% 94%;
+  filter: drop-shadow(0 18px 17px rgba(1, 18, 27, .4));
+  background: center bottom / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 148 200'%3E%3Cg fill='none' stroke-linejoin='round'%3E%3Cpath d='M20 187c12-8 25-11 40-10h48c10 0 19 3 27 10l-7 7H26z' fill='%23071925' stroke='%235b94a5' stroke-width='2'/%3E%3Cpath d='M40 184h72l-8-13H48z' fill='%23061f2b' stroke='%23588491' stroke-width='2'/%3E%3Cpath d='M58 173l8-112h25l8 112z' fill='%23d9edf0' stroke='%230b3544' stroke-width='3'/%3E%3Cpath d='M64 96h30l2 20H62z' fill='%23749cab' opacity='.78'/%3E%3Cpath d='M63 61h31l-5-12H68z' fill='%2309212d' stroke='%23699aaa' stroke-width='2'/%3E%3Cpath d='M68 49V29h22v20' fill='%23cce7eb' stroke='%230b3544' stroke-width='3'/%3E%3Cpath d='M63 29h32l-6-9H69z' fill='%23071f2a' stroke='%23699aaa' stroke-width='2'/%3E%3Cpath d='M73 42V32m12 10V32' stroke='%230c4050' stroke-width='3'/%3E%3Cpath d='M59 54h36' stroke='%239fe8ff' stroke-width='2'/%3E%3Cpath d='M90 35l47-13-44 22z' fill='%23fff0b8' opacity='.18' stroke='none'/%3E%3Ccircle cx='79' cy='36' r='3' fill='%23fff1b8' stroke='none'/%3E%3Cpath d='M23 188c12 3 22 4 32 3 12-1 22-1 31 1 14 3 31 2 49-3' stroke='%239fe8ff' stroke-width='2' opacity='.45'/%3E%3C/g%3E%3C/svg%3E");
+  transition: top 80ms linear;
+  animation: lighthouse-drift 5.8s ease-in-out infinite;
+}
+
+.seascape-depth {
+  position: absolute;
+  inset: calc(var(--sea-base) - var(--sea-rise)) 0 0;
+  opacity: calc(.10 + (var(--depth-progress) * .12));
+  background:
+    radial-gradient(circle at 22% 14%, rgba(210, 246, 255, .28) 0 1px, transparent 2px),
+    radial-gradient(circle at 76% 31%, rgba(210, 246, 255, .18) 0 1px, transparent 2px),
+    radial-gradient(circle at 44% 52%, rgba(210, 246, 255, .12) 0 1px, transparent 2px);
+  background-size: 210px 300px, 290px 410px, 370px 520px;
+  transition: inset 80ms linear, opacity 120ms linear;
+}
+
+.topbar, .compact-topbar { z-index: 30; }
+main { position: relative; z-index: 1; }
+
+@keyframes surface-wave-front {
+  0% { background-position: 0 0; transform: translateY(0); }
+  25% { transform: translateY(-2px); }
+  50% { transform: translateY(2px); }
+  75% { transform: translateY(-1px); }
+  100% { background-position: 220px 0; transform: translateY(0); }
+}
+@keyframes surface-wave-back {
+  0% { background-position: 0 0; transform: translateY(1px); }
+  25% { transform: translateY(3px); }
+  50% { transform: translateY(-1px); }
+  75% { transform: translateY(2px); }
+  100% { background-position: 280px 0; transform: translateY(1px); }
+}
+@keyframes lighthouse-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) rotate(-.55deg); }
+  25% { transform: translate3d(2px, -3px, 0) rotate(.15deg); }
+  50% { transform: translate3d(4px, 1px, 0) rotate(.7deg); }
+  75% { transform: translate3d(1px, -2px, 0) rotate(-.2deg); }
+}
+
+@media (max-width: 900px) { .lighthouse { left: 28px; opacity: .8; } }
+@media (max-width: 620px) { .lighthouse { left: 20px; width: 108px; height: 150px; top: calc(var(--sea-base) - var(--sea-rise) - 137px); opacity: .72; } }
+@media (prefers-reduced-motion: reduce) {
+  .seascape::before, .seascape::after, .sea-surface, .lighthouse, .seascape-depth { transition: none; }
+  .sea-surface::before, .sea-surface::after, .lighthouse { animation: none; }
+}

@@ -4,8 +4,8 @@ from collections import OrderedDict, deque
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from app.domain.streaming import CommentCandidate
-from app.domain.streaming.comment_ranking import (
+from app.plugins.youtube_streaming.domain import CommentCandidate
+from app.plugins.youtube_streaming.domain.comment_ranking import (
     CommentResponseTarget,
     RankedCommentCandidate,
 )
@@ -14,7 +14,9 @@ from app.domain.streaming.comment_ranking import (
 class InMemoryCommentCandidateRepository:
     def __init__(self, capacity: int) -> None:
         self.capacity = capacity
-        self._items: OrderedDict[tuple[str, str], tuple[CommentCandidate, str]] = OrderedDict()
+        self._items: OrderedDict[tuple[str, str], tuple[CommentCandidate, str]] = (
+            OrderedDict()
+        )
         self.dropped_count = 0
         self.expired_count = 0
 
@@ -27,10 +29,15 @@ class InMemoryCommentCandidateRepository:
             self._items.popitem(last=False)
             self.dropped_count += 1
 
-    def valid(self, session_id: str, expires_before: datetime) -> tuple[CommentCandidate, ...]:
+    def valid(
+        self, session_id: str, expires_before: datetime
+    ) -> tuple[CommentCandidate, ...]:
         result = []
         for key, (candidate, status) in tuple(self._items.items()):
-            if candidate.session_id != session_id or status not in {"pending", "ranked"}:
+            if candidate.session_id != session_id or status not in {
+                "pending",
+                "ranked",
+            }:
                 continue
             if candidate.eligible_at < expires_before:
                 self._items[key] = (candidate, "expired")
@@ -48,13 +55,17 @@ class InMemoryCommentCandidateRepository:
 
 class InMemoryCommentRankingRepository:
     def __init__(self, capacity: int = 500) -> None:
-        self._runs: deque[tuple[str, tuple[RankedCommentCandidate, ...]]] = deque(maxlen=capacity)
+        self._runs: deque[tuple[str, tuple[RankedCommentCandidate, ...]]] = deque(
+            maxlen=capacity
+        )
 
     def save(self, session_id: str, values: tuple[RankedCommentCandidate, ...]) -> None:
         self._runs.append((session_id, values))
 
     def latest(self, session_id: str) -> tuple[RankedCommentCandidate, ...]:
-        return next((values for key, values in reversed(self._runs) if key == session_id), ())
+        return next(
+            (values for key, values in reversed(self._runs) if key == session_id), ()
+        )
 
 
 class InMemoryCommentSelectionRepository:
@@ -102,7 +113,9 @@ class InMemoryCommentSelectionRepository:
         self._candidate_index.add((item.session_id, item.candidate_id))
         return updated
 
-    def transition(self, selection_id: str, status: str) -> CommentResponseTarget | None:
+    def transition(
+        self, selection_id: str, status: str
+    ) -> CommentResponseTarget | None:
         item = self._items.get(selection_id)
         if item is None or item.reservation_status != "reserved":
             return None
@@ -123,7 +136,9 @@ class InMemoryCommentResponseHistoryRepository:
         self._items: dict[str, deque[tuple[str | None, str, str]]] = {}
         self._capacity = capacity
 
-    def record(self, session_id: str, author_id: str | None, text: str, message_type: str) -> None:
+    def record(
+        self, session_id: str, author_id: str | None, text: str, message_type: str
+    ) -> None:
         history = self._items.setdefault(session_id, deque(maxlen=self._capacity))
         history.append((author_id, text, message_type))
 

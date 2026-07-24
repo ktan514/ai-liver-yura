@@ -1,5 +1,3 @@
-
-
 from app.adapters.prompt.topic_memory_prompt_section import TopicMemoryPromptSection
 from app.domain.topic import TopicCategory
 from app.domain.topic_memory import SimilarTopicMemory, TopicMemoryEntry

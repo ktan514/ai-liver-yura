@@ -103,7 +103,7 @@ class SpeechSettings:
     pronunciation_dictionary_path: str
     speaker_id: int
     default_profile: str
-    emotion_profiles: dict[str, SpeechVoiceProfileSettings]
+    voice_intent_profiles: dict[str, SpeechVoiceProfileSettings]
     player: SpeechPlayerSettings
 
 
@@ -126,11 +126,32 @@ class TopicMemorySettings:
     database_service: str
     embedding_model: str
     summary: TopicMemorySummarySettings
+    duplicate_threshold: float = 0.95
+    max_entries: int | None = None
+    retention_days: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RelationshipMemorySettings:
+    enabled: bool = False
+    path: str = "data/relationship_memory.json"
+    max_entries: int = 1000
+
+
+@dataclass(frozen=True, slots=True)
+class AgentMemorySettings:
+    enabled: bool = False
+    path: str = "data/agent_memory.json"
+    max_history_entries: int = 64
 
 
 @dataclass(frozen=True, slots=True)
 class MemorySettings:
     topic_memory: TopicMemorySettings
+    relationship_memory: RelationshipMemorySettings = field(
+        default_factory=RelationshipMemorySettings
+    )
+    agent_memory: AgentMemorySettings = field(default_factory=AgentMemorySettings)
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,11 +308,17 @@ class CommentRankingSettings:
             "engagement",
             "fairness",
         }
-        if set(self.weights) != expected or abs(sum(self.weights.values()) - 1.0) > 0.000001:
+        if (
+            set(self.weights) != expected
+            or abs(sum(self.weights.values()) - 1.0) > 0.000001
+        ):
             raise ValueError("comment_ranking.weights_invalid")
         if any(not 0 <= value <= 1 for value in self.weights.values()):
             raise ValueError("comment_ranking.weights_invalid")
-        if not 0 <= self.selection_threshold <= 1 or not 0 <= self.minimum_conversation_fit <= 1:
+        if (
+            not 0 <= self.selection_threshold <= 1
+            or not 0 <= self.minimum_conversation_fit <= 1
+        ):
             raise ValueError("comment_ranking.threshold_invalid")
         positive = (
             self.candidate_ttl_seconds,
@@ -329,13 +356,23 @@ class CommentResponseSettings:
 
 @dataclass(frozen=True, slots=True)
 class StreamingSettings:
-    readiness: StreamingReadinessSettings = field(default_factory=StreamingReadinessSettings)
+    readiness: StreamingReadinessSettings = field(
+        default_factory=StreamingReadinessSettings
+    )
     obs: StreamingObsSettings = field(default_factory=StreamingObsSettings)
-    run_of_show: StreamingRunOfShowSettings = field(default_factory=StreamingRunOfShowSettings)
+    run_of_show: StreamingRunOfShowSettings = field(
+        default_factory=StreamingRunOfShowSettings
+    )
     fake: StreamingFakeSettings = field(default_factory=StreamingFakeSettings)
-    moderation: CommentModerationSettings = field(default_factory=CommentModerationSettings)
-    comment_ranking: CommentRankingSettings = field(default_factory=CommentRankingSettings)
-    comment_response: CommentResponseSettings = field(default_factory=CommentResponseSettings)
+    moderation: CommentModerationSettings = field(
+        default_factory=CommentModerationSettings
+    )
+    comment_ranking: CommentRankingSettings = field(
+        default_factory=CommentRankingSettings
+    )
+    comment_response: CommentResponseSettings = field(
+        default_factory=CommentResponseSettings
+    )
     health_timeout_seconds: float = 5.0
 
 
@@ -377,8 +414,12 @@ def load_app_config(config_path: Path = CONFIG_PATH) -> AppConfig:
         ),
         memory=_load_memory_settings(_require_dict(raw_config, "memory")),
         character=_load_character_settings(_require_dict(raw_config, "character")),
-        input_receivers=_load_input_receiver_settings(_require_dict(raw_config, "input_receivers")),
-        confirmation=_load_confirmation_settings(_require_dict(raw_config, "confirmation")),
+        input_receivers=_load_input_receiver_settings(
+            _require_dict(raw_config, "input_receivers")
+        ),
+        confirmation=_load_confirmation_settings(
+            _require_dict(raw_config, "confirmation")
+        ),
         plugins=_load_plugin_settings(raw_config.get("plugins")),
         streaming=_load_streaming_settings(raw_config.get("streaming")),
         config_path=str(resolved_path),
@@ -411,7 +452,9 @@ def _load_streaming_settings(value: object) -> StreamingSettings:
         any(value < 0 or value > 1 for value in parsed_weights.values())
         or abs(sum(parsed_weights.values()) - 1.0) > 0.000001
     ):
-        raise RuntimeError("streaming.comment_ranking.weightsの合計は1.0で指定してください。")
+        raise RuntimeError(
+            "streaming.comment_ranking.weightsの合計は1.0で指定してください。"
+        )
     audio_sources = obs.get("required_audio_sources", ["VOICEVOX"])
     if not isinstance(audio_sources, list) or not all(
         isinstance(item, str) and item for item in audio_sources
@@ -423,7 +466,11 @@ def _load_streaming_settings(value: object) -> StreamingSettings:
     ):
         raise RuntimeError("streaming.obs.optional_audio_sourcesは文字列listです。")
     timeout = value.get("health_timeout_seconds", 5.0)
-    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
+    if (
+        not isinstance(timeout, (int, float))
+        or isinstance(timeout, bool)
+        or timeout <= 0
+    ):
         raise RuntimeError("streaming.health_timeout_secondsは正数です。")
     return StreamingSettings(
         readiness=StreamingReadinessSettings(
@@ -432,15 +479,21 @@ def _load_streaming_settings(value: object) -> StreamingSettings:
             require_tts=_optional_bool(readiness, "require_tts", True),
             require_avatar=_optional_bool(readiness, "require_avatar", False),
             require_run_of_show=_optional_bool(readiness, "require_run_of_show", True),
-            require_emergency_stop=_optional_bool(readiness, "require_emergency_stop", False),
-            allow_required_degraded=_optional_bool(readiness, "allow_required_degraded", False),
+            require_emergency_stop=_optional_bool(
+                readiness, "require_emergency_stop", False
+            ),
+            allow_required_degraded=_optional_bool(
+                readiness, "allow_required_degraded", False
+            ),
             require_live_chat=_optional_bool(readiness, "require_live_chat", False),
         ),
         obs=StreamingObsSettings(
             expected_scene_collection=(
                 _optional_string(obs, "expected_scene_collection") or "AI Liver"
             ),
-            expected_start_scene=(_optional_string(obs, "expected_start_scene") or "Starting Soon"),
+            expected_start_scene=(
+                _optional_string(obs, "expected_start_scene") or "Starting Soon"
+            ),
             required_audio_sources=tuple(audio_sources),
             optional_audio_sources=tuple(optional_audio_sources),
             avatar_source_name=_optional_string(obs, "avatar_source_name"),
@@ -451,16 +504,23 @@ def _load_streaming_settings(value: object) -> StreamingSettings:
             max_scene_depth=int(obs.get("max_scene_depth", 8)),
         ),
         run_of_show=StreamingRunOfShowSettings(
-            directory=_optional_string(run_of_show, "directory") or "config/run_of_show",
+            directory=_optional_string(run_of_show, "directory")
+            or "config/run_of_show",
             default_id=_optional_string(run_of_show, "default_id") or "default",
         ),
         fake=StreamingFakeSettings(
             broadcast_id=_optional_string(fake, "broadcast_id") or "fake-broadcast-1",
-            broadcast_title=(_optional_string(fake, "broadcast_title") or "配信準備テスト枠"),
+            broadcast_title=(
+                _optional_string(fake, "broadcast_title") or "配信準備テスト枠"
+            ),
         ),
         moderation=CommentModerationSettings(
-            blocked_terms=tuple(str(item) for item in moderation.get("blocked_terms", [])),
-            allowed_terms=tuple(str(item) for item in moderation.get("allowed_terms", [])),
+            blocked_terms=tuple(
+                str(item) for item in moderation.get("blocked_terms", [])
+            ),
+            allowed_terms=tuple(
+                str(item) for item in moderation.get("allowed_terms", [])
+            ),
             max_comment_length=int(moderation.get("max_comment_length", 300)),
             repeated_message_window_seconds=int(
                 moderation.get("repeated_message_window_seconds", 30)
@@ -470,28 +530,38 @@ def _load_streaming_settings(value: object) -> StreamingSettings:
             unknown_message_type_policy=str(
                 moderation.get("unknown_message_type_policy", "ignore")
             ),
-            max_concurrent_evaluations=int(moderation.get("max_concurrent_evaluations", 4)),
-            evaluation_queue_capacity=int(moderation.get("evaluation_queue_capacity", 128)),
+            max_concurrent_evaluations=int(
+                moderation.get("max_concurrent_evaluations", 4)
+            ),
+            evaluation_queue_capacity=int(
+                moderation.get("evaluation_queue_capacity", 128)
+            ),
             timeout_seconds=float(moderation.get("timeout_seconds", 3.0)),
         ),
         comment_ranking=CommentRankingSettings(
             weights=parsed_weights,
             selection_threshold=float(ranking.get("selection_threshold", 0.55)),
-            minimum_conversation_fit=float(ranking.get("minimum_conversation_fit", 0.5)),
+            minimum_conversation_fit=float(
+                ranking.get("minimum_conversation_fit", 0.5)
+            ),
             candidate_ttl_seconds=int(ranking.get("candidate_ttl_seconds", 90)),
             reservation_ttl_seconds=int(ranking.get("reservation_ttl_seconds", 30)),
             max_pool_size=int(ranking.get("max_pool_size", 200)),
             max_rank_batch_size=int(ranking.get("max_rank_batch_size", 50)),
             history_size=int(ranking.get("history_size", 100)),
             author_cooldown_count=int(ranking.get("author_cooldown_count", 2)),
-            semantic_timeout_seconds=float(ranking.get("semantic_timeout_seconds", 2.0)),
+            semantic_timeout_seconds=float(
+                ranking.get("semantic_timeout_seconds", 2.0)
+            ),
             max_concurrent_rankings=int(ranking.get("max_concurrent_rankings", 1)),
             queue_capacity=int(ranking.get("queue_capacity", 16)),
         ),
         comment_response=CommentResponseSettings(
             max_characters=int(response.get("max_characters", 140)),
             max_sentences=int(response.get("max_sentences", 3)),
-            allow_follow_up_question=bool(response.get("allow_follow_up_question", True)),
+            allow_follow_up_question=bool(
+                response.get("allow_follow_up_question", True)
+            ),
             mention_author_name=str(response.get("mention_author_name", "optional")),
             repeat_comment_text=bool(response.get("repeat_comment_text", False)),
             response_cooldown_seconds=int(response.get("response_cooldown_seconds", 5)),
@@ -535,9 +605,11 @@ def _load_plugin_settings(value: object) -> PluginSettings:
             enabled=bool(games.get("enabled", True)),
             intent_interpreter=GameIntentInterpreterSettings(
                 enabled=bool(interpreter.get("enabled", True)),
-                model=interpreter.get("model")
-                if isinstance(interpreter.get("model"), str)
-                else None,
+                model=(
+                    interpreter.get("model")
+                    if isinstance(interpreter.get("model"), str)
+                    else None
+                ),
                 confidence_threshold=float(threshold),
                 max_attempts=int(interpreter.get("max_attempts", 2)),
             ),
@@ -568,7 +640,9 @@ def load_raw_config(config_path: Path = CONFIG_PATH) -> dict[str, Any]:
         raise RuntimeError(f"設定ファイルが空です: {config_path}")
 
     if not isinstance(raw_config, dict):
-        raise RuntimeError("設定ファイルの形式が不正です。YAML の最上位は object にしてください。")
+        raise RuntimeError(
+            "設定ファイルの形式が不正です。YAML の最上位は object にしてください。"
+        )
 
     return raw_config
 
@@ -583,7 +657,9 @@ def _load_app_settings(config: dict[str, Any]) -> AppSettings:
 def _load_trace_settings(config: dict[str, Any]) -> TraceSettings:
     level = _require_string(config, "level").upper()
     if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "OFF"}:
-        raise RuntimeError("trace.level は DEBUG, INFO, WARNING, ERROR, OFF から選択してください。")
+        raise RuntimeError(
+            "trace.level は DEBUG, INFO, WARNING, ERROR, OFF から選択してください。"
+        )
     output_format = _require_string(config, "format").lower()
     if output_format not in {"text", "jsonl"}:
         raise RuntimeError("trace.format は text または jsonl を指定してください。")
@@ -606,7 +682,9 @@ def _load_trace_settings(config: dict[str, Any]) -> TraceSettings:
     )
 
 
-def _load_response_generator_settings(config: dict[str, Any]) -> ResponseGeneratorSettings:
+def _load_response_generator_settings(
+    config: dict[str, Any],
+) -> ResponseGeneratorSettings:
     return ResponseGeneratorSettings(
         type=_require_string(config, "type"),
         model=_require_string(config, "model"),
@@ -619,7 +697,9 @@ def _load_llm_roles_settings(config: dict[str, Any]) -> LlmRolesSettings:
         situation_evaluator=_load_llm_role_settings(
             _require_dict(config, "situation_evaluator"), "situation_evaluator"
         ),
-        character=_load_llm_role_settings(_require_dict(config, "character"), "character"),
+        character=_load_llm_role_settings(
+            _require_dict(config, "character"), "character"
+        ),
         response_validator=_load_llm_role_settings(
             _require_dict(config, "response_validator"), "response_validator"
         ),
@@ -629,7 +709,9 @@ def _load_llm_roles_settings(config: dict[str, Any]) -> LlmRolesSettings:
 def _load_llm_role_settings(config: dict[str, Any], role: str) -> LlmRoleSettings:
     temperature = _require_float(config, "temperature")
     if not 0.0 <= temperature <= 2.0:
-        raise RuntimeError(f"llm_roles.{role}.temperature は0.0以上2.0以下にしてください。")
+        raise RuntimeError(
+            f"llm_roles.{role}.temperature は0.0以上2.0以下にしてください。"
+        )
     timeout = _require_positive_float(config, "timeout_seconds")
     return LlmRoleSettings(
         model=_require_string(config, "model"),
@@ -641,24 +723,30 @@ def _load_llm_role_settings(config: dict[str, Any], role: str) -> LlmRoleSetting
 
 def _load_speech_settings(config: dict[str, Any]) -> SpeechSettings:
     player = _require_dict(config, "player")
-    emotion_profiles_config = _require_dict(config, "emotion_profiles")
-    emotion_profiles = {
+    voice_intent_profiles_config = _require_dict(config, "voice_intent_profiles")
+    voice_intent_profiles = {
         name: _load_speech_voice_profile(profile, name)
-        for name, profile in emotion_profiles_config.items()
+        for name, profile in voice_intent_profiles_config.items()
         if isinstance(profile, dict)
     }
-    if len(emotion_profiles) != len(emotion_profiles_config):
-        raise RuntimeError("speech.emotion_profilesの各値はobject形式で指定してください。")
+    if len(voice_intent_profiles) != len(voice_intent_profiles_config):
+        raise RuntimeError(
+            "speech.voice_intent_profilesの各値はobject形式で指定してください。"
+        )
     default_profile = _require_string(config, "default_profile")
-    if default_profile not in emotion_profiles:
-        raise RuntimeError("speech.default_profileがemotion_profilesに定義されていません。")
+    if default_profile not in voice_intent_profiles:
+        raise RuntimeError(
+            "speech.default_profileがvoice_intent_profilesに定義されていません。"
+        )
     return SpeechSettings(
         enabled=_require_bool(config, "enabled"),
         service=_require_string(config, "service"),
-        pronunciation_dictionary_path=_require_string(config, "pronunciation_dictionary_path"),
+        pronunciation_dictionary_path=_require_string(
+            config, "pronunciation_dictionary_path"
+        ),
         speaker_id=_require_non_negative_int(config, "speaker_id"),
         default_profile=default_profile,
-        emotion_profiles=emotion_profiles,
+        voice_intent_profiles=voice_intent_profiles,
         player=SpeechPlayerSettings(
             type=_require_string(player, "type"),
             command=_optional_string(player, "command"),
@@ -666,14 +754,16 @@ def _load_speech_settings(config: dict[str, Any]) -> SpeechSettings:
     )
 
 
-def _load_speech_voice_profile(config: dict[str, Any], name: str) -> SpeechVoiceProfileSettings:
+def _load_speech_voice_profile(
+    config: dict[str, Any], name: str
+) -> SpeechVoiceProfileSettings:
     try:
         speed_scale = _require_positive_float(config, "speed_scale")
         pitch_scale = _require_float(config, "pitch_scale")
         intonation_scale = _require_positive_float(config, "intonation_scale")
         volume_scale = _require_positive_float(config, "volume_scale")
     except RuntimeError as error:
-        raise RuntimeError(f"speech.emotion_profiles.{name}: {error}") from error
+        raise RuntimeError(f"speech.voice_intent_profiles.{name}: {error}") from error
     return SpeechVoiceProfileSettings(
         speed_scale=speed_scale,
         pitch_scale=pitch_scale,
@@ -701,7 +791,9 @@ def _load_services(config: dict[str, Any]) -> dict[str, ServiceSettings]:
             raise RuntimeError(f"services.{key}.connect_timeout_secondsは正数です。")
         retry_delay = _optional_float(value, "retry_initial_delay_seconds")
         if retry_delay is not None and retry_delay <= 0:
-            raise RuntimeError(f"services.{key}.retry_initial_delay_secondsは正数です。")
+            raise RuntimeError(
+                f"services.{key}.retry_initial_delay_secondsは正数です。"
+            )
         oauth_timeout = _optional_float(value, "oauth_timeout_seconds")
         if oauth_timeout is not None and oauth_timeout <= 0:
             raise RuntimeError(f"services.{key}.oauth_timeout_secondsは正数です。")
@@ -770,16 +862,68 @@ def _load_topic_classifier_settings(config: dict[str, Any]) -> TopicClassifierSe
 
 # Memory settings loader functions
 def _load_memory_settings(config: dict[str, Any]) -> MemorySettings:
+    relationship_config = config.get("relationship_memory", {})
+    if not isinstance(relationship_config, dict):
+        raise RuntimeError("memory.relationship_memoryはobject形式で指定してください。")
+    max_entries = relationship_config.get("max_entries", 1000)
+    if (
+        not isinstance(max_entries, int)
+        or isinstance(max_entries, bool)
+        or max_entries <= 0
+    ):
+        raise RuntimeError("memory.relationship_memory.max_entriesは1以上の整数です。")
+    agent_config = config.get("agent_memory", {})
+    if not isinstance(agent_config, dict):
+        raise RuntimeError("memory.agent_memoryはobject形式で指定してください。")
+    max_history = agent_config.get("max_history_entries", 64)
+    if (
+        not isinstance(max_history, int)
+        or isinstance(max_history, bool)
+        or max_history <= 0
+    ):
+        raise RuntimeError("memory.agent_memory.max_history_entriesは1以上の整数です。")
     return MemorySettings(
         topic_memory=_load_topic_memory_settings(_require_dict(config, "topic_memory")),
+        relationship_memory=RelationshipMemorySettings(
+            enabled=_optional_bool(relationship_config, "enabled", False),
+            path=(
+                _optional_string(relationship_config, "path")
+                or "data/relationship_memory.json"
+            ),
+            max_entries=max_entries,
+        ),
+        agent_memory=AgentMemorySettings(
+            enabled=_optional_bool(agent_config, "enabled", False),
+            path=_optional_string(agent_config, "path") or "data/agent_memory.json",
+            max_history_entries=max_history,
+        ),
     )
 
 
 def _load_topic_memory_settings(config: dict[str, Any]) -> TopicMemorySettings:
+    duplicate_threshold = _optional_float(config, "duplicate_threshold")
+    if duplicate_threshold is None:
+        duplicate_threshold = 0.95
+    if not 0.0 <= duplicate_threshold <= 1.0:
+        raise RuntimeError(
+            "memory.topic_memory.duplicate_thresholdは0.0以上1.0以下で指定してください。"
+        )
+
+    max_entries = _optional_int(config, "max_entries")
+    if max_entries is not None and max_entries <= 0:
+        raise RuntimeError("memory.topic_memory.max_entriesは正の整数で指定してください。")
+
+    retention_days = _optional_int(config, "retention_days")
+    if retention_days is not None and retention_days <= 0:
+        raise RuntimeError("memory.topic_memory.retention_daysは正の整数で指定してください。")
+
     return TopicMemorySettings(
         enabled=_require_bool(config, "enabled"),
         database_service=_require_string(config, "database_service"),
         embedding_model=_require_string(config, "embedding_model"),
+        duplicate_threshold=float(duplicate_threshold),
+        max_entries=max_entries,
+        retention_days=retention_days,
         summary=_load_topic_memory_summary_settings(_require_dict(config, "summary")),
     )
 

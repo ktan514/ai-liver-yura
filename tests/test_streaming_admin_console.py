@@ -10,19 +10,6 @@ from app.admin_api.console import (
     freshness,
     operator_action_for,
 )
-from streaming_admin.ui.console_models import TimelineTableModel
-from streaming_admin.ui.stream_preparation_view_model import (
-    freshness_label,
-    start_button_decision,
-    update_mode_label,
-)
-
-
-def test_update_mode_and_freshness_labels() -> None:
-    assert update_mode_label("automatic") == "自動"
-    assert update_mode_label("manual") == "手動"
-    assert update_mode_label("event_driven") == "イベント駆動"
-    assert freshness_label("stale") == "情報が古い"
 
 
 def test_freshness_uses_observation_time() -> None:
@@ -75,28 +62,3 @@ def test_runtime_log_settings_can_change_level_and_disable_file() -> None:
     assert value["level"] == "TRACE"
     assert value["file_enabled"] is False
     assert value["ring_buffer_size"] == 42
-
-
-def test_timeline_filter_and_button_reason() -> None:
-    model = TimelineTableModel()
-    model.set_rows(
-        [
-            {"category": "obs", "result": "healthy", "event_name": "obs.updated"},
-            {
-                "category": "lifecycle",
-                "result": "failed",
-                "event_name": "opening.failed",
-                "error_code": "opening.timeout",
-            },
-        ]
-    )
-    model.set_filter("all", errors_only=True)
-    assert model.rowCount() == 1
-    model.set_filter("obs")
-    assert model.rowCount() == 1
-
-    enabled, reason = start_button_decision(
-        {"status": "preparing", "ready": False, "adapter_modes": {}}, False
-    )
-    assert enabled is False
-    assert "配信準備" in reason

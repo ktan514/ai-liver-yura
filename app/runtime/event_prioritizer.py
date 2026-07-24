@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Protocol
 
-from app.domain.events import AgentEvent, AgentEventType
+from app.domain.events import AgentEvent, AgentEventType, InputAuthority
 
 
 class EventPrioritizer(Protocol):
@@ -34,4 +34,8 @@ class DefaultEventPrioritizer:
 
     def prioritize(self, event: AgentEvent) -> AgentEvent:
         bonus = self._BONUS_BY_EVENT_TYPE.get(event.event_type, 0)
+        if event.authority == InputAuthority.ADMINISTRATOR:
+            bonus += 60
+        elif event.authority == InputAuthority.SYSTEM:
+            bonus += 80
         return replace(event, priority=event.priority + bonus)

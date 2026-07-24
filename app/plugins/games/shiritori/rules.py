@@ -1,4 +1,4 @@
-from app.domain.games.shiritori import (
+from app.plugins.games.shiritori.domain import (
     get_shiritori_head,
     get_shiritori_tail,
     normalize_shiritori_word,

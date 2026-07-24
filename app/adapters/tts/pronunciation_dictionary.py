@@ -55,7 +55,9 @@ class PronunciationDictionary:
 
         if raw_data is None:
             return cls()
-        if not isinstance(raw_data, dict) or not isinstance(raw_data.get("rules"), list):
+        if not isinstance(raw_data, dict) or not isinstance(
+            raw_data.get("rules"), list
+        ):
             logger.warning(
                 "pronunciation_dictionary:load:invalid_root",
                 path=str(dictionary_path),
@@ -70,7 +72,11 @@ class PronunciationDictionary:
 
         ordered_rules = sorted(
             valid_rules,
-            key=lambda rule: (-rule.priority, -len(rule.surface), rule.definition_order),
+            key=lambda rule: (
+                -rule.priority,
+                -len(rule.surface),
+                rule.definition_order,
+            ),
         )
         unique_rules: list[PronunciationRule] = []
         rules_by_surface: dict[str, PronunciationRule] = {}

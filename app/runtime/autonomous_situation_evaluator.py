@@ -10,13 +10,17 @@ from app.utils.trace import TraceLogger
 class AutonomousSituationEvaluator:
     """内的状態を発話本文を伴わない自律行動候補へ正規化する。"""
 
-    def evaluate(self, context: AutonomousSituationContext) -> AutonomousSituationAnalysis:
+    def evaluate(
+        self, context: AutonomousSituationContext
+    ) -> AutonomousSituationAnalysis:
         event = context.event_context
         continuation = str(event.get("continuation_decision") or "")
         selected_topic = str(event.get("selected_topic") or "").strip()
         interrupted = context.interrupted_topic
         interrupted_text = (
-            str(interrupted.get("original_text") or "").strip() if interrupted is not None else ""
+            str(interrupted.get("original_text") or "").strip()
+            if interrupted is not None
+            else ""
         )
         if continuation in {"resume_original", "resume_with_reframing"}:
             action = "topic_continue"
@@ -35,28 +39,34 @@ class AutonomousSituationEvaluator:
             relation = "none"
             topic = selected_topic
 
+        constraints: dict[str, object] = {
+            "max_length": "short",
+            "avoid_repetition": True,
+            "do_not_claim_external_execution": True,
+        }
         if not topic:
-            drive = max(
+            dominant_drive = max(
                 context.drive_state,
                 key=lambda name: context.drive_state[name],
                 default="curiosity",
             )
-            topic = {
-                "curiosity": "いま気になっていること",
-                "engagement": "この配信でこれから話したいこと",
-                "boredom": "気分転換に考えてみたいこと",
-                "energy": "いまの気分",
-            }.get(drive, "いま気になっていること")
+            topic = "現在の状況から話題を選ぶ"
+            constraints.update(
+                {
+                    "topic_selection_mode": "derive_from_context",
+                    "dominant_drive": dominant_drive,
+                    "recent_topic_novelty_required": bool(
+                        context.recent_speech_summary.strip()
+                        or context.recent_topic_summary.strip()
+                    ),
+                }
+            )
         analysis = AutonomousSituationAnalysis(
             suggested_action=action,
             topic_candidate=topic,
             planning_reason=str(event.get("reason") or "internal_drive"),
             relation_to_interrupted_topic=relation,
-            constraints={
-                "max_length": "short",
-                "avoid_repetition": True,
-                "do_not_claim_external_execution": True,
-            },
+            constraints=constraints,
         )
         TraceLogger().debug(
             "autonomous_situation_evaluator:evaluated",

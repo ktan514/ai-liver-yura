@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import json
@@ -57,7 +55,9 @@ def _create_conversation_activity() -> Activity:
 
 @pytest.mark.asyncio
 async def test_ollama_response_generator_returns_response_text() -> None:
-    generator = FakeOllamaResponseGenerator(response_data={"response": "こんにちは、ミナトだよ！"})
+    generator = FakeOllamaResponseGenerator(
+        response_data={"response": "こんにちは、ミナトだよ！"}
+    )
 
     response = await generator.generate_response(_create_conversation_activity())
 
@@ -66,7 +66,9 @@ async def test_ollama_response_generator_returns_response_text() -> None:
 
 @pytest.mark.asyncio
 async def test_ollama_response_generator_strips_response_text() -> None:
-    generator = FakeOllamaResponseGenerator(response_data={"response": "  こんにちは！  \n"})
+    generator = FakeOllamaResponseGenerator(
+        response_data={"response": "  こんにちは！  \n"}
+    )
 
     response = await generator.generate_response(_create_conversation_activity())
 
@@ -110,7 +112,9 @@ async def test_ollama_response_generator_logs_actual_request_and_response_to_deb
         log_llm_prompts=True,
         log_llm_responses=True,
     )
-    generator = FakeOllamaResponseGenerator(response_data={"response": "採用された返答全文"})
+    generator = FakeOllamaResponseGenerator(
+        response_data={"response": "採用された返答全文"}
+    )
     try:
         await generator.generate_response(_create_conversation_activity())
 
@@ -118,7 +122,9 @@ async def test_ollama_response_generator_logs_actual_request_and_response_to_deb
             json.loads(line)
             for line in debug_file.read_text(encoding="utf-8").splitlines()
         ]
-        request_record = next(record for record in records if record["label"] == "llm_request")
+        request_record = next(
+            record for record in records if record["label"] == "llm_request"
+        )
         response_record = next(
             record for record in records if record["label"] == "llm_response"
         )
@@ -138,7 +144,9 @@ async def test_ollama_response_generator_logs_actual_request_and_response_to_deb
 
 
 @pytest.mark.asyncio
-async def test_ollama_response_generator_returns_fallback_when_response_is_empty() -> None:
+async def test_ollama_response_generator_returns_fallback_when_response_is_empty() -> (
+    None
+):
     generator = FakeOllamaResponseGenerator(response_data={"response": "   "})
 
     response = await generator.generate_response(_create_conversation_activity())

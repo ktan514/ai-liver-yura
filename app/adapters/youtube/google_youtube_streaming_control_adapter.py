@@ -14,7 +14,9 @@ class GoogleYouTubeStreamingControlAdapter:
 
     adapter_type = "google"
 
-    def __init__(self, client_factory: Any, reader: GoogleYouTubePreparationAdapter) -> None:
+    def __init__(
+        self, client_factory: Any, reader: GoogleYouTubePreparationAdapter
+    ) -> None:
         self._client_factory = client_factory
         self._reader = reader
         self._lock = asyncio.Lock()

@@ -1,13 +1,17 @@
+import asyncio
+import json
+
 import pytest
 
 from app.domain.actions import ActionPlan, ActionType
-from app.domain.emotions import EmotionState, MoodType
+from app.domain.character_response import VoiceIntent
 from app.domain.events import AgentEvent, AgentEventType
 from app.domain.short_term_memory import ShortTermMemory
 from app.domain.topic import TopicCategory, TopicHistory
 from app.domain.topic_memory import SimilarTopicMemory, TopicMemoryEntry
 from app.ports.memory_summary_generator import MemorySummaryGenerator
 from app.usecases import ExecuteActionUsecase
+from app.utils.conversation_log import ConversationLogger
 
 
 class FakeEventPublisher:
@@ -22,11 +26,13 @@ class FakeSpeechSynthesizer:
     def __init__(self, audio_data: bytes = b"RIFF-test-wav") -> None:
         self.audio_data = audio_data
         self.received_texts: list[str] = []
-        self.received_emotion: EmotionState | None = None
+        self.received_voice_intent: VoiceIntent | None = None
 
-    async def synthesize(self, text: str, emotion: EmotionState | None = None) -> bytes:
+    async def synthesize(
+        self, text: str, voice_intent: VoiceIntent | None = None
+    ) -> bytes:
         self.received_texts.append(text)
-        self.received_emotion = emotion
+        self.received_voice_intent = voice_intent
         return self.audio_data
 
 
@@ -38,9 +44,39 @@ class FakeAudioPlayer:
         self.received_audio.append(audio_data)
 
 
+class FakeConversationOutputPublisher:
+    def __init__(self) -> None:
+        self.outputs: list[tuple[str, str, str]] = []
+
+    async def publish_text(self, *, kind: str, text: str, action_id: str) -> None:
+        self.outputs.append((kind, text, action_id))
+
+
 class FailingSpeechSynthesizer:
-    async def synthesize(self, text: str, emotion: EmotionState | None = None) -> bytes:
+    async def synthesize(
+        self, text: str, voice_intent: VoiceIntent | None = None
+    ) -> bytes:
         raise RuntimeError("VOICEVOX unavailable")
+
+
+@pytest.mark.asyncio
+async def test_prepare_records_text_handed_to_tts_once(tmp_path) -> None:
+    log_path = tmp_path / "conversation.jsonl"
+    usecase = ExecuteActionUsecase(
+        speech_synthesizer=FakeSpeechSynthesizer(),
+        audio_player=FakeAudioPlayer(),
+        conversation_logger=ConversationLogger(log_path),
+    )
+    action = ActionPlan(action_type=ActionType.SPEAK, text="読み上げる原稿")
+
+    prepared = await usecase.prepare(action)
+    await usecase.execute(prepared)
+
+    records = [json.loads(line) for line in log_path.read_text().splitlines()]
+    assert len(records) == 1
+    assert records[0]["speaker"] == "llm"
+    assert records[0]["source"] == "tts"
+    assert records[0]["text"] == "読み上げる原稿"
 
 
 # FakeTopicClassifier for testing topic classification and history recording
@@ -52,6 +88,18 @@ class FakeTopicClassifier:
     async def classify(self, text: str) -> TopicCategory:
         self.classified_texts.append(text)
         return self.category
+
+
+class BlockingTopicClassifier(FakeTopicClassifier):
+    def __init__(self, category: TopicCategory) -> None:
+        super().__init__(category)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def classify(self, text: str) -> TopicCategory:
+        self.started.set()
+        await self.release.wait()
+        return await super().classify(text)
 
 
 # FakeEmbeddingGenerator and FakeTopicMemoryStore for topic memory tests
@@ -144,14 +192,52 @@ async def test_speak_action_synthesizes_and_plays_audio() -> None:
     usecase = ExecuteActionUsecase(
         speech_synthesizer=synthesizer,
         audio_player=player,
-        emotion_provider=lambda: EmotionState(mood=MoodType.EXCITED),
     )
-    action_plan = ActionPlan(action_type=ActionType.SPEAK, text="こんにちは")
+    intent = VoiceIntent(style="excited")
+    action_plan = ActionPlan(
+        action_type=ActionType.SPEAK,
+        text="こんにちは",
+        metadata={"voice_intent": intent},
+    )
 
     await usecase.execute(action_plan)
 
     assert synthesizer.received_texts == ["こんにちは"]
-    assert synthesizer.received_emotion == EmotionState(mood=MoodType.EXCITED)
+    assert synthesizer.received_voice_intent == intent
+    assert player.received_audio == [b"RIFF-test-wav"]
+
+
+@pytest.mark.asyncio
+async def test_speak_action_publishes_text_to_conversation_output() -> None:
+    output = FakeConversationOutputPublisher()
+    usecase = ExecuteActionUsecase(
+        speech_synthesizer=FakeSpeechSynthesizer(),
+        audio_player=FakeAudioPlayer(),
+        conversation_output_publisher=output,
+    )
+    action_plan = ActionPlan(action_type=ActionType.SPEAK, text="Webへ表示")
+
+    await usecase.execute(action_plan)
+
+    assert output.outputs == [("speak", "Webへ表示", action_plan.action_id)]
+
+
+@pytest.mark.asyncio
+async def test_prepared_speech_is_not_synthesized_again_during_playback() -> None:
+    synthesizer = FakeSpeechSynthesizer()
+    player = FakeAudioPlayer()
+    usecase = ExecuteActionUsecase(
+        speech_synthesizer=synthesizer,
+        audio_player=player,
+    )
+    original = ActionPlan(action_type=ActionType.SPEAK, text="次の発話")
+
+    prepared = await usecase.prepare(original)
+
+    assert synthesizer.received_texts == ["次の発話"]
+    assert player.received_audio == []
+    await usecase.execute(prepared)
+    assert synthesizer.received_texts == ["次の発話"]
     assert player.received_audio == [b"RIFF-test-wav"]
 
 
@@ -165,7 +251,9 @@ async def test_speak_keeps_original_text_for_display_and_memory(capsys) -> None:
         audio_player=FakeAudioPlayer(),
     )
 
-    await usecase.execute(ActionPlan(action_type=ActionType.SPEAK, text="どんな風に話せばいいかな"))
+    await usecase.execute(
+        ActionPlan(action_type=ActionType.SPEAK, text="どんな風に話せばいいかな")
+    )
 
     assert "[speak] どんな風に話せばいいかな" in capsys.readouterr().out
     assert synthesizer.received_texts == ["どんな風に話せばいいかな"]
@@ -217,12 +305,44 @@ async def test_speak_action_records_topic_history_when_classifier_is_set() -> No
     await usecase.execute(action_plan)
 
     entries = topic_history.recent_entries()
-    assert topic_classifier.classified_texts == ["透明な体でゆらゆら漂う生き物って不思議だよね。"]
+    assert topic_classifier.classified_texts == [
+        "透明な体でゆらゆら漂う生き物って不思議だよね。"
+    ]
     assert len(entries) == 1
     assert entries[0].category == TopicCategory.SEA_LIFE
     assert entries[0].summary == "透明な体でゆらゆら漂う生き物って不思議だよね。"
     assert entries[0].source_text == "透明な体でゆらゆら漂う生き物って不思議だよね。"
     assert entries[0].activity_type == ActionType.SPEAK.value
+
+
+@pytest.mark.asyncio
+async def test_speak_can_record_topic_memory_outside_output_critical_path() -> None:
+    topic_history = TopicHistory()
+    classifier = BlockingTopicClassifier(TopicCategory.SEA_LIFE)
+    usecase = ExecuteActionUsecase(
+        topic_history=topic_history,
+        topic_classifier=classifier,
+        speech_synthesizer=FakeSpeechSynthesizer(),
+        audio_player=FakeAudioPlayer(),
+        background_topic_memory=True,
+    )
+
+    await usecase.execute(
+        ActionPlan(action_type=ActionType.SPEAK, text="クラゲの話")
+    )
+    await asyncio.wait_for(classifier.started.wait(), timeout=1.0)
+
+    assert usecase.pending_background_task_count == 1
+    assert topic_history.recent_entries() == []
+
+    classifier.release.set()
+    for _ in range(10):
+        if usecase.pending_background_task_count == 0:
+            break
+        await asyncio.sleep(0)
+
+    assert usecase.pending_background_task_count == 0
+    assert topic_history.recent_entries()[0].category == TopicCategory.SEA_LIFE
 
 
 @pytest.mark.asyncio
@@ -256,7 +376,9 @@ async def test_game_speech_does_not_record_topic_history_or_memory() -> None:
 
 # Test: SPEAK action records topic memory when embedding and store are set
 @pytest.mark.asyncio
-async def test_speak_action_records_topic_memory_when_embedding_and_store_are_set() -> None:
+async def test_speak_action_records_topic_memory_when_embedding_and_store_are_set() -> (
+    None
+):
     topic_history = TopicHistory()
     topic_classifier = FakeTopicClassifier(category=TopicCategory.NATURE)
     embedding_generator = FakeEmbeddingGenerator(embedding=[0.1, 0.2, 0.3])
@@ -275,7 +397,9 @@ async def test_speak_action_records_topic_memory_when_embedding_and_store_are_se
 
     await usecase.execute(action_plan)
 
-    assert embedding_generator.received_texts == ["海の色は時間や天気で変わるのが面白いよね。"]
+    assert embedding_generator.received_texts == [
+        "海の色は時間や天気で変わるのが面白いよね。"
+    ]
     assert len(topic_memory_store.saved_entries) == 1
     saved_entry = topic_memory_store.saved_entries[0]
     assert saved_entry.category == TopicCategory.NATURE
@@ -311,7 +435,9 @@ async def test_speak_action_does_not_record_topic_memory_when_embedding_generato
 
 # Test: SPEAK action does not record topic memory when embedding is empty
 @pytest.mark.asyncio
-async def test_speak_action_does_not_record_topic_memory_when_embedding_is_empty() -> None:
+async def test_speak_action_does_not_record_topic_memory_when_embedding_is_empty() -> (
+    None
+):
     topic_history = TopicHistory()
     topic_classifier = FakeTopicClassifier(category=TopicCategory.NATURE)
     embedding_generator = FakeEmbeddingGenerator(embedding=[])
@@ -335,7 +461,9 @@ async def test_speak_action_does_not_record_topic_memory_when_embedding_is_empty
 
 # Test: SPEAK action does not record topic history when classifier is not set
 @pytest.mark.asyncio
-async def test_speak_action_does_not_record_topic_history_when_classifier_is_not_set() -> None:
+async def test_speak_action_does_not_record_topic_history_when_classifier_is_not_set() -> (
+    None
+):
     topic_history = TopicHistory()
     usecase = ExecuteActionUsecase(topic_history=topic_history)
     action_plan = ActionPlan(
@@ -357,7 +485,9 @@ async def test_speak_action_records_topic_memory_with_generated_summary() -> Non
     topic_classifier = FakeTopicClassifier(category=TopicCategory.SEA_LIFE)
     embedding_generator = FakeEmbeddingGenerator(embedding=[0.1, 0.2, 0.3])
     topic_memory_store = FakeTopicMemoryStore()
-    memory_summary_generator = FakeMemorySummaryGenerator(summary="クラゲ展示がきれいだった記憶")
+    memory_summary_generator = FakeMemorySummaryGenerator(
+        summary="クラゲ展示がきれいだった記憶"
+    )
     usecase = ExecuteActionUsecase(
         topic_history=topic_history,
         topic_classifier=topic_classifier,
@@ -386,7 +516,9 @@ async def test_speak_action_records_topic_memory_with_generated_summary() -> Non
 
 
 @pytest.mark.asyncio
-async def test_speak_action_uses_original_text_when_generated_summary_is_empty() -> None:
+async def test_speak_action_uses_original_text_when_generated_summary_is_empty() -> (
+    None
+):
     topic_history = TopicHistory()
     topic_classifier = FakeTopicClassifier(category=TopicCategory.SEA_LIFE)
     embedding_generator = FakeEmbeddingGenerator(embedding=[0.1, 0.2, 0.3])

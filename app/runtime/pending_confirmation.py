@@ -44,7 +44,11 @@ class PendingConfirmationManager:
         current_time = now or datetime.now(timezone.utc)
         with self._lock:
             pending = self._current
-            if pending is not None and pending.is_pending and current_time >= pending.expires_at:
+            if (
+                pending is not None
+                and pending.is_pending
+                and current_time >= pending.expires_at
+            ):
                 self._finish(pending, ConfirmationStatus.EXPIRED)
                 self._trace_logger.info(
                     "pending_confirmation:expired",
@@ -97,9 +101,13 @@ class PendingConfirmationManager:
                 max_attempts=self._max_attempts,
                 context_snapshot=dict(context_snapshot),
                 candidate_plan=plan,
-                original_trace_id=trace_context.trace_id if trace_context else plan.trace_id,
+                original_trace_id=(
+                    trace_context.trace_id if trace_context else plan.trace_id
+                ),
                 parent_trace_id=(
-                    trace_context.parent_trace_id if trace_context else plan.parent_trace_id
+                    trace_context.parent_trace_id
+                    if trace_context
+                    else plan.parent_trace_id
                 ),
             )
             self._current = pending
@@ -156,7 +164,10 @@ class PendingConfirmationManager:
         *,
         source_event_id: str,
         constraint_validation: (
-            Callable[[ActivityPlan, dict[str, object]], ConstraintValidationResult | None] | None
+            Callable[
+                [ActivityPlan, dict[str, object]], ConstraintValidationResult | None
+            ]
+            | None
         ) = None,
     ) -> PendingConfirmation | None:
         with self._lock:
@@ -201,7 +212,9 @@ class PendingConfirmationManager:
                             else plan.constraints_schema_version
                         ),
                         validated_constraints=(
-                            validation.as_validated() if validation is not None else None
+                            validation.as_validated()
+                            if validation is not None
+                            else None
                         ),
                     )
                 elif validation is not None:
@@ -252,7 +265,10 @@ class PendingConfirmationManager:
     def _type_for(plan: ActivityPlan, ongoing_id: str | None) -> ConfirmationType:
         if plan.constraint_errors:
             return ConfirmationType.CONFIRM_CONSTRAINTS
-        if plan.decision == BehaviorDecision.SWITCH_ACTIVITY or plan.requested_new_activity:
+        if (
+            plan.decision == BehaviorDecision.SWITCH_ACTIVITY
+            or plan.requested_new_activity
+        ):
             return ConfirmationType.CONFIRM_SWITCH_ACTIVITY
         if plan.operation == ActivityOperation.STOP:
             return ConfirmationType.CONFIRM_STOP_ACTIVITY
@@ -325,9 +341,13 @@ class ConfirmationResolver:
                 constraint_updates=updates,
             )
         elif self._cancel.fullmatch(normalized):
-            result = self._result(ConfirmationResolutionKind.CANCEL, 1.0, "explicit_cancel")
+            result = self._result(
+                ConfirmationResolutionKind.CANCEL, 1.0, "explicit_cancel"
+            )
         elif self._negative.fullmatch(normalized):
-            result = self._result(ConfirmationResolutionKind.NEGATIVE, 1.0, "explicit_negative")
+            result = self._result(
+                ConfirmationResolutionKind.NEGATIVE, 1.0, "explicit_negative"
+            )
         elif self._affirmative.fullmatch(normalized):
             result = self._result(
                 ConfirmationResolutionKind.AFFIRMATIVE, 1.0, "explicit_affirmative"
@@ -337,7 +357,8 @@ class ConfirmationResolver:
                 ConfirmationResolutionKind.NEW_REQUEST, 0.95, "explicit_topic_change"
             )
         elif len(normalized) >= 8 and any(
-            ending in normalized for ending in ("して", "しよう", "教えて", "調べて", "話そう")
+            ending in normalized
+            for ending in ("して", "しよう", "教えて", "調べて", "話そう")
         ):
             result = self._result(
                 ConfirmationResolutionKind.NEW_REQUEST, 0.8, "independent_request"
@@ -349,9 +370,13 @@ class ConfirmationResolver:
         self._trace_logger.debug(
             "pending_confirmation:input_classified",
             confirmation_id=pending.confirmation_id,
-            trace_id=trace_context.trace_id if trace_context else pending.resolution_trace_id,
+            trace_id=(
+                trace_context.trace_id if trace_context else pending.resolution_trace_id
+            ),
             parent_trace_id=(
-                trace_context.parent_trace_id if trace_context else pending.original_trace_id
+                trace_context.parent_trace_id
+                if trace_context
+                else pending.original_trace_id
             ),
             component_role="confirmation_resolver",
             resolution=result.kind.value,

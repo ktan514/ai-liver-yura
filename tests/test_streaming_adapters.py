@@ -13,7 +13,7 @@ from app.adapters.streaming import (
     VoiceVoxHealthConfig,
     YamlRunOfShowRepository,
 )
-from app.domain.streaming import HealthStatus, YouTubeBroadcastSummary
+from app.plugins.youtube_streaming.domain import HealthStatus, YouTubeBroadcastSummary
 
 
 @pytest.mark.asyncio
@@ -70,7 +70,9 @@ def test_yaml_run_of_show_validates_required_fields(tmp_path: Path) -> None:
 async def test_voicevox_health_checks_version_speaker_and_player_without_synthesis(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    adapter = VoiceVoxHealthAdapter(VoiceVoxHealthConfig("http://voicevox", 1, 89, "test-player"))
+    adapter = VoiceVoxHealthAdapter(
+        VoiceVoxHealthConfig("http://voicevox", 1, 89, "test-player")
+    )
     calls: list[str] = []
 
     def get_json(path: str) -> object:
@@ -85,8 +87,12 @@ async def test_voicevox_health_checks_version_speaker_and_player_without_synthes
 
 
 @pytest.mark.asyncio
-async def test_voicevox_health_reports_missing_player(monkeypatch: pytest.MonkeyPatch) -> None:
-    adapter = VoiceVoxHealthAdapter(VoiceVoxHealthConfig("http://voicevox", 1, 89, "missing"))
+async def test_voicevox_health_reports_missing_player(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = VoiceVoxHealthAdapter(
+        VoiceVoxHealthConfig("http://voicevox", 1, 89, "missing")
+    )
     monkeypatch.setattr(
         adapter,
         "_get_json",

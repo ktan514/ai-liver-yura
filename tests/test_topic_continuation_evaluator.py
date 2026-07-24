@@ -42,7 +42,9 @@ def test_completed_low_importance_topic_is_not_resumed() -> None:
 
 def test_important_unfinished_topic_is_resumed_with_reintroduction() -> None:
     result = TopicContinuationEvaluator().evaluate(
-        _topic(importance=0.9, interest=0.85, incompleteness=0.95, interruption_turns=1),
+        _topic(
+            importance=0.9, interest=0.85, incompleteness=0.95, interruption_turns=1
+        ),
         emotion=EmotionState(mood=MoodType.HAPPY, arousal=0.7, talkativeness=0.8),
         drive=DriveState(curiosity=0.8),
         now=NOW + timedelta(minutes=1),

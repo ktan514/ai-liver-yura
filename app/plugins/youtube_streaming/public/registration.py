@@ -5,15 +5,19 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from app.core.contracts.plugins import (
+from app.plugins.youtube_streaming.application.service import (
+    StreamingApplicationService,
+)
+from app.plugins.youtube_streaming.public.activity_provider import (
+    StreamingActivityProvider,
+)
+from app.shared.contracts.plugins.registration import (
     CapabilityRegistration,
     CommandRejected,
     PluginHealth,
     PluginHealthStatus,
     PluginRegistration,
 )
-from app.plugins.youtube_streaming.application.service import StreamingApplicationService
-from app.plugins.youtube_streaming.public.activity_provider import StreamingActivityProvider
 
 
 class MethodHandler:
@@ -30,7 +34,9 @@ class MethodHandler:
             raise CommandRejected(
                 "YouTube Streaming command/query rejected",
                 plugin_id="youtube_streaming",
-                reason_code=str(getattr(error, "code", None) or error or "stream.operation_failed"),
+                reason_code=str(
+                    getattr(error, "code", None) or error or "stream.operation_failed"
+                ),
             ) from error
 
 
@@ -83,7 +89,9 @@ def _commands(service: StreamingApplicationService) -> dict[str, MethodHandler]:
     }
     if service.demo_mode:
         values["demo.live_chat.submit"] = service.enqueue_demo_comment
-    return {capability: MethodHandler(callback) for capability, callback in values.items()}
+    return {
+        capability: MethodHandler(callback) for capability, callback in values.items()
+    }
 
 
 def _queries(service: StreamingApplicationService) -> dict[str, MethodHandler]:
@@ -110,6 +118,7 @@ def _queries(service: StreamingApplicationService) -> dict[str, MethodHandler]:
     }
     handlers: dict[str, MethodHandler] = {}
     for capability, callback in values.items():
+
         def invoke(_: Any, selected: Callable[[], Any] = callback) -> Any:
             return selected()
 

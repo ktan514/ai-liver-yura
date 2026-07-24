@@ -5,7 +5,7 @@ import asyncio
 import pytest
 
 from app.adapters.input import ConsoleInputReceiver
-from app.domain.events import AgentEvent, AgentEventType
+from app.domain.events import AgentEvent, AgentEventType, InputAuthority
 
 
 class FakeInputProvider:
@@ -25,7 +25,9 @@ class DecodeErrorThenQuitInputProvider:
     async def __call__(self) -> str | None:
         if not self._failed:
             self._failed = True
-            raise UnicodeDecodeError("utf-8", b"\xe3", 0, 1, "invalid continuation byte")
+            raise UnicodeDecodeError(
+                "utf-8", b"\xe3", 0, 1, "invalid continuation byte"
+            )
         return "quit"
 
 
@@ -36,7 +38,9 @@ async def test_console_input_receiver_publishes_user_text_event() -> None:
     async def publish_event(event: AgentEvent) -> None:
         published_events.append(event)
 
-    receiver = ConsoleInputReceiver(input_provider=FakeInputProvider(["こんにちは", None]))
+    receiver = ConsoleInputReceiver(
+        input_provider=FakeInputProvider(["こんにちは", None])
+    )
 
     await receiver.start(publish_event)
     await asyncio.sleep(0)
@@ -48,6 +52,7 @@ async def test_console_input_receiver_publishes_user_text_event() -> None:
         "text": "こんにちは",
         "source": "console",
     }
+    assert published_events[0].authority == InputAuthority.ADMINISTRATOR
 
 
 @pytest.mark.asyncio
@@ -57,7 +62,9 @@ async def test_console_input_receiver_strips_text() -> None:
     async def publish_event(event: AgentEvent) -> None:
         published_events.append(event)
 
-    receiver = ConsoleInputReceiver(input_provider=FakeInputProvider(["  こんにちは  ", None]))
+    receiver = ConsoleInputReceiver(
+        input_provider=FakeInputProvider(["  こんにちは  ", None])
+    )
 
     await receiver.start(publish_event)
     await asyncio.sleep(0)
@@ -90,7 +97,9 @@ async def test_console_input_receiver_stops_on_exit() -> None:
     async def publish_event(event: AgentEvent) -> None:
         published_events.append(event)
 
-    receiver = ConsoleInputReceiver(input_provider=FakeInputProvider(["exit", "ignored"]))
+    receiver = ConsoleInputReceiver(
+        input_provider=FakeInputProvider(["exit", "ignored"])
+    )
 
     await receiver.start(publish_event)
     await asyncio.sleep(0)
@@ -106,7 +115,9 @@ async def test_console_input_receiver_stops_on_quit() -> None:
     async def publish_event(event: AgentEvent) -> None:
         published_events.append(event)
 
-    receiver = ConsoleInputReceiver(input_provider=FakeInputProvider(["quit", "ignored"]))
+    receiver = ConsoleInputReceiver(
+        input_provider=FakeInputProvider(["quit", "ignored"])
+    )
 
     await receiver.start(publish_event)
     await asyncio.sleep(0)

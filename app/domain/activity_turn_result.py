@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from enum import Enum
 from uuid import uuid4
 
-from app.domain.character_response import ActivityExecutionResult, ActivityExecutionStatus
+from app.domain.character_response import (
+    ActivityExecutionResult,
+    ActivityExecutionStatus,
+)
 
 
 class CharacterGenerationStatus(str, Enum):
@@ -115,7 +118,10 @@ class ActivityTurnResult:
         output = self.output_result
         if output is not None and output.status == ActivityOutputStatus.CANCELED:
             return "canceled"
-        if execution is not None and execution.status == ActivityExecutionStatus.REJECTED:
+        if (
+            execution is not None
+            and execution.status == ActivityExecutionStatus.REJECTED
+        ):
             return "execution_rejected"
         if execution is not None and execution.status == ActivityExecutionStatus.FAILED:
             return "execution_failed"
@@ -124,7 +130,10 @@ class ActivityTurnResult:
             ActivityOutputStatus.PARTIALLY_COMPLETED,
         }:
             return f"execution_{self._execution_label()}_output_{output.status.value}"
-        if character is not None and character.status == CharacterGenerationStatus.FALLBACK_USED:
+        if (
+            character is not None
+            and character.status == CharacterGenerationStatus.FALLBACK_USED
+        ):
             if output is not None and output.status == ActivityOutputStatus.COMPLETED:
                 return "execution_succeeded_character_fallback"
             return "character_fallback"
@@ -134,7 +143,10 @@ class ActivityTurnResult:
 
     @property
     def failure_stage(self) -> str | None:
-        if self.output_result is not None and self.output_result.failure_stage is not None:
+        if (
+            self.output_result is not None
+            and self.output_result.failure_stage is not None
+        ):
             return self.output_result.failure_stage
         if (
             self.character_result is not None

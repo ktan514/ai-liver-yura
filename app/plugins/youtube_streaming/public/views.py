@@ -3,7 +3,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from app.domain.streaming import HealthCheckItem, StreamSession, YouTubeBroadcastSummary
+from app.plugins.youtube_streaming.domain import (
+    HealthCheckItem,
+    StreamSession,
+    YouTubeBroadcastSummary,
+)
 
 
 def timestamp(value: datetime | None) -> str | None:
@@ -56,4 +60,3 @@ def session_snapshot(
         "observed_at": timestamp(session.updated_at),
         "adapter_modes": {"youtube": youtube_adapter_type, "obs": obs_adapter_type},
     }
-

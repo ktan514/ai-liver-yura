@@ -7,6 +7,9 @@ from app.domain.actions import ActionPlan
 from app.domain.activities import Activity
 from app.domain.drives import DriveState
 from app.domain.emotions import EmotionState
+from app.domain.memory import AgentMemoryState
+from app.domain.relationships import RelationshipMemory
+from app.domain.situation import SituationState
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,6 +23,9 @@ class AgentState:
     prepared_actions: list[ActionPlan] = field(default_factory=list)
     current_emotion: EmotionState = field(default_factory=EmotionState)
     current_drive: DriveState = field(default_factory=DriveState)
+    relationship_memory: RelationshipMemory = field(default_factory=RelationshipMemory)
+    current_situation: SituationState = field(default_factory=SituationState)
+    memory: AgentMemoryState = field(default_factory=AgentMemoryState)
     attention_target: str | None = None
     stream_status: str = "idle"
     last_user_input_at: datetime | None = None
@@ -76,6 +82,23 @@ class AgentState:
             updated_at=datetime.now(timezone.utc),
         )
 
+    def with_relationship_memory(self, memory: RelationshipMemory) -> AgentState:
+        return replace(
+            self,
+            relationship_memory=memory,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    def with_situation(self, situation: SituationState) -> AgentState:
+        return replace(
+            self,
+            current_situation=situation,
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    def with_memory(self, memory: AgentMemoryState) -> AgentState:
+        return replace(self, memory=memory, updated_at=datetime.now(timezone.utc))
+
     def with_attention_target(self, attention_target: str | None) -> AgentState:
         return replace(
             self,
@@ -93,23 +116,23 @@ class AgentState:
             updated_at=datetime.now(timezone.utc),
         )
 
-    def mark_user_input_received(self) -> AgentState:
+    def mark_user_input_received(self, occurred_at: datetime | None = None) -> AgentState:
         return replace(
             self,
-            last_user_input_at=datetime.now(timezone.utc),
+            last_user_input_at=occurred_at or datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
 
-    def mark_speech_started(self) -> AgentState:
+    def mark_speech_started(self, occurred_at: datetime | None = None) -> AgentState:
         return replace(
             self,
-            last_speech_started_at=datetime.now(timezone.utc),
+            last_speech_started_at=occurred_at or datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )
 
-    def mark_speech_finished(self) -> AgentState:
+    def mark_speech_finished(self, occurred_at: datetime | None = None) -> AgentState:
         return replace(
             self,
-            last_speech_finished_at=datetime.now(timezone.utc),
+            last_speech_finished_at=occurred_at or datetime.now(timezone.utc),
             updated_at=datetime.now(timezone.utc),
         )

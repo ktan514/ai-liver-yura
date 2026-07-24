@@ -1,16 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
-
-import httpx
 from fastapi.testclient import TestClient
 
 from app.admin_api import create_admin_api
-from app.bootstrap import compose_streaming
+from app.bootstrap import compose_streaming, create_stream_preparation_runtime
 from app.config.app_config import load_app_config
-from app.runtime.runtime_factory import create_stream_preparation_runtime
-from streaming_admin.client import CoreApiClient, CoreApiError
-from streaming_admin.config import AdminClientConfig
 
 
 def api_client(token: str = "secret") -> TestClient:
@@ -59,21 +53,6 @@ def test_admin_api_options_and_prepare_are_dtos() -> None:
     assert "selected_stream_id" not in response.json()
 
 
-def test_core_api_client_reports_core_unavailable(monkeypatch: Any) -> None:
-    def fail(*args: object, **kwargs: object) -> object:
-        raise httpx.ConnectError("offline")
-
-    monkeypatch.setattr(httpx, "request", fail)
-    client = CoreApiClient(AdminClientConfig())
-    try:
-        client.health()
-    except CoreApiError as error:
-        assert error.code == "runtime.unavailable"
-        assert error.retryable is True
-    else:
-        raise AssertionError("CoreApiError was not raised")
-
-
 def test_structured_validation_error() -> None:
     client = api_client()
     response = client.post(
@@ -92,7 +71,11 @@ def test_admin_console_exposes_freshness_capabilities_diagnostics_and_settings()
         console = client.get("/api/v1/admin/console", headers=headers)
         assert console.status_code == 200
         payload = console.json()
-        assert {item["name"] for item in payload["services"]} == {"Core", "OBS", "YouTube"}
+        assert {item["name"] for item in payload["services"]} == {
+            "Core",
+            "OBS",
+            "YouTube",
+        }
         assert all(item["update_mode"] for item in payload["services"])
         assert all(
             item["freshness"] in {"fresh", "stale", "unknown"} for item in payload["services"]

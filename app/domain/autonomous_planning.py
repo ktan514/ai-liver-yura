@@ -21,6 +21,7 @@ class AutonomousSituationContext:
     ongoing_activity: dict[str, object] | None
     available_activity_definitions: tuple[str, ...]
     current_time_context: str
+    relationship_state: dict[str, object] = field(default_factory=dict)
     event_context: dict[str, object] = field(default_factory=dict)
     trace_context: TraceContext | None = None
 
@@ -33,4 +34,6 @@ class AutonomousSituationAnalysis:
     topic_candidate: str
     planning_reason: str
     relation_to_interrupted_topic: str
+    conversation_phase: str | None = None
+    initiative_level: float | None = None
     constraints: dict[str, object] = field(default_factory=dict)

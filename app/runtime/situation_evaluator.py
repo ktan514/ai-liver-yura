@@ -4,7 +4,6 @@ import json
 from dataclasses import asdict, replace
 from typing import Any
 
-from app.adapters.prompt import SituationEvaluatorPromptBuilder
 from app.core.plugins.user_request import UserRequestKind, interpret_user_request
 from app.domain.activities import Activity, ActivityType
 from app.domain.activity_constraints import ActivityConstraintValidator
@@ -17,6 +16,7 @@ from app.domain.behavior import (
     SpeechAct,
 )
 from app.ports.llm_roles import SituationEvaluationModel
+from app.ports.prompt_builder import SituationPromptBuilder
 from app.runtime.activity_matcher_resolver import ActivityMatcherResolver
 from app.utils.trace import TraceLogger
 
@@ -28,21 +28,25 @@ class SituationEvaluator:
         self,
         model: SituationEvaluationModel,
         *,
+        prompt_builder: SituationPromptBuilder,
         confidence_threshold: float = 0.85,
         max_attempts: int = 1,
-        prompt_builder: SituationEvaluatorPromptBuilder | None = None,
         constraint_validator: ActivityConstraintValidator | None = None,
         matcher_resolver: ActivityMatcherResolver | None = None,
     ) -> None:
         if not 0.0 <= confidence_threshold <= 1.0:
-            raise ValueError("confidence_threshold は0.0以上1.0以下で指定してください。")
+            raise ValueError(
+                "confidence_threshold は0.0以上1.0以下で指定してください。"
+            )
         if max_attempts < 1:
             raise ValueError("max_attempts は1以上で指定してください。")
         self._model = model
         self._confidence_threshold = confidence_threshold
         self._max_attempts = max_attempts
-        self._prompt_builder = prompt_builder or SituationEvaluatorPromptBuilder()
-        self._constraint_validator = constraint_validator or ActivityConstraintValidator()
+        self._prompt_builder = prompt_builder
+        self._constraint_validator = (
+            constraint_validator or ActivityConstraintValidator()
+        )
         self._matcher_resolver = matcher_resolver or ActivityMatcherResolver(
             self._constraint_validator
         )
@@ -52,10 +56,28 @@ class SituationEvaluator:
         self._trace_logger.debug(
             "situation_evaluator:evaluation_started",
             source_event_id=context.source_event_id,
-            candidate_activity_types=[item.activity_type for item in context.activity_definitions],
+            candidate_activity_types=[
+                item.activity_type for item in context.activity_definitions
+            ],
             ongoing_activity_type=context.ongoing_activity_type,
         )
         definitions = self._candidate_definitions(context)
+        if context.event_type != "user_text":
+            semantic = await self._evaluate_with_llm(
+                replace(context, activity_definitions=definitions)
+            )
+            if semantic is not None:
+                return semantic
+            return SituationAnalysis(
+                activity_candidate=(
+                    definitions[0].activity_type if len(definitions) == 1 else None
+                ),
+                operation=ActivityOperation.START,
+                goal="現在状態に応じたActivityを開始する",
+                confidence=0.0,
+                reason="system_event_evaluation_failed",
+                evaluator_type="fallback",
+            )
         request = interpret_user_request(context.user_text)
         if self._is_negated_expression(context.user_text):
             request = replace(
@@ -64,20 +86,51 @@ class SituationEvaluator:
                 confidence=max(request.confidence, 0.95),
                 reason="negative_expression",
             )
-        non_execution = self._non_execution(context.user_text, request.kind, request.reason)
+        non_execution = self._non_execution(
+            context.user_text, request.kind, request.reason
+        )
         if non_execution is not None:
             return non_execution
+
+        if self._is_greeting(context.user_text):
+            return SituationAnalysis(
+                activity_candidate=None,
+                operation=ActivityOperation.DISCUSS,
+                goal="ユーザーからの社会的な接触を受け取り、一往復分応答する",
+                speech_act=SpeechAct.GREETING,
+                conversation_phase="greeting",
+                initiative_level=0.15,
+                confidence=0.99,
+                reason="social_greeting",
+                evaluator_type="deterministic",
+            )
 
         deterministic = self._deterministic(context, definitions)
         if deterministic is not None:
             return deterministic
 
-        if definitions:
-            semantic = await self._evaluate_with_llm(
-                replace(context, activity_definitions=definitions)
+        if context.instruction_trusted and self._is_administrative_direction(
+            context.user_text, request.kind
+        ):
+            return SituationAnalysis(
+                activity_candidate=None,
+                operation=ActivityOperation.DISCUSS,
+                goal="管理者の自然文による進行指示に沿って、その場のトークを行う",
+                speech_act=SpeechAct.COMMAND,
+                confidence=max(request.confidence, 0.95),
+                reason="trusted_administrator_direction",
+                evaluator_type="administrator_direction",
             )
-            if semantic is not None:
-                return semantic
+
+        semantic = await self._evaluate_with_llm(
+            replace(
+                context,
+                request_kind=request.kind.value,
+                activity_definitions=definitions,
+            )
+        )
+        if semantic is not None:
+            return semantic
 
         if (
             context.ongoing_activity is not None
@@ -166,7 +219,12 @@ class SituationEvaluator:
                     attempt=attempt,
                 )
                 return None
-            analysis = self.parse(raw, context.activity_definitions)
+            analysis = self.parse(
+                raw,
+                context.activity_definitions,
+                intent_flags_can_cancel_activity=context.event_type
+                != "curiosity_peak",
+            )
             self._trace_logger.llm_response(
                 purpose="behavior_planning",
                 provider="situation_evaluator",
@@ -185,13 +243,19 @@ class SituationEvaluator:
                 stage="parsed" if analysis is not None else "schema_validation_failed",
                 llm_role="situation_evaluator",
                 service="situation_evaluator",
-                trace_id=(context.trace_context.trace_id if context.trace_context else None),
+                trace_id=(
+                    context.trace_context.trace_id if context.trace_context else None
+                ),
                 parent_trace_id=(
-                    context.trace_context.parent_trace_id if context.trace_context else None
+                    context.trace_context.parent_trace_id
+                    if context.trace_context
+                    else None
                 ),
                 source_event_id=context.source_event_id,
                 activity_turn_id=(
-                    context.trace_context.activity_turn_id if context.trace_context else None
+                    context.trace_context.activity_turn_id
+                    if context.trace_context
+                    else None
                 ),
                 attempt=attempt + 1,
             )
@@ -206,6 +270,8 @@ class SituationEvaluator:
         self,
         raw: str,
         definitions: tuple[ActivityDefinition, ...] = (),
+        *,
+        intent_flags_can_cancel_activity: bool = True,
     ) -> SituationAnalysis | None:
         text = raw.strip()
         if text.startswith("```"):
@@ -248,6 +314,25 @@ class SituationEvaluator:
             )
         except ValueError:
             return None
+        conversation_phase_value = payload.get("conversation_phase")
+        conversation_phase = (
+            str(conversation_phase_value)
+            if conversation_phase_value is not None
+            else None
+        )
+        if conversation_phase not in {None, "greeting", "opening", "active", "winding_down"}:
+            return None
+        initiative_value = payload.get("initiative_level")
+        if initiative_value is None:
+            initiative_level = None
+        elif (
+            isinstance(initiative_value, (int, float))
+            and not isinstance(initiative_value, bool)
+            and 0.0 <= float(initiative_value) <= 1.0
+        ):
+            initiative_level = float(initiative_value)
+        else:
+            return None
         constraints = payload["constraints"]
         confidence = payload["confidence"]
         flags = ("negated", "hypothetical", "past_reference", "knowledge_question")
@@ -262,11 +347,17 @@ class SituationEvaluator:
         if not 0.0 <= float(confidence) <= 1.0:
             return None
         activity_type = str(payload["activity_type"])
-        flags_force_conversation = any(bool(payload[field]) for field in flags)
-        candidate = (
-            None if activity_type == "conversation" or flags_force_conversation else activity_type
+        flags_force_conversation = intent_flags_can_cancel_activity and any(
+            bool(payload[field]) for field in flags
         )
-        definition = next((item for item in definitions if item.activity_type == candidate), None)
+        candidate = (
+            None
+            if activity_type == "conversation" or flags_force_conversation
+            else activity_type
+        )
+        definition = next(
+            (item for item in definitions if item.activity_type == candidate), None
+        )
         if candidate is not None and definition is None:
             return None
         if definition is not None and operation not in definition.supported_operations:
@@ -297,7 +388,9 @@ class SituationEvaluator:
         if validation is not None:
             self._trace_logger.debug(
                 "activity_constraints:validated",
-                activity_type=definition.activity_type if definition is not None else None,
+                activity_type=(
+                    definition.activity_type if definition is not None else None
+                ),
                 validation_stage="situation_analysis",
                 source="llm",
                 schema_version=validation.schema_version,
@@ -318,6 +411,8 @@ class SituationEvaluator:
                 else dict(constraints)
             ),
             speech_act=speech_act,
+            conversation_phase=conversation_phase,
+            initiative_level=initiative_level,
             negated=bool(payload["negated"]),
             hypothetical=bool(payload["hypothetical"]),
             past_reference=bool(payload["past_reference"]),
@@ -345,7 +440,9 @@ class SituationEvaluator:
         return tuple(definitions)
 
     def _deterministic(
-        self, context: BehaviorPlanningContext, definitions: tuple[ActivityDefinition, ...]
+        self,
+        context: BehaviorPlanningContext,
+        definitions: tuple[ActivityDefinition, ...],
     ) -> SituationAnalysis | None:
         resolved = self._matcher_resolver.resolve(
             context.user_text,
@@ -354,7 +451,11 @@ class SituationEvaluator:
             conversation_context={
                 "source_event_id": context.source_event_id,
                 "ongoing_activity_type": context.ongoing_activity_type,
-                **(context.trace_context.as_log_fields() if context.trace_context else {}),
+                **(
+                    context.trace_context.as_log_fields()
+                    if context.trace_context
+                    else {}
+                ),
             },
         )
         if resolved is None:
@@ -424,7 +525,8 @@ class SituationEvaluator:
         negated = kind == UserRequestKind.NEGATIVE
         operation: ActivityOperation | None = (
             ActivityOperation.EXPLAIN
-            if knowledge and any(marker in text for marker in ("って何", "ルール", "教えて"))
+            if knowledge
+            and any(marker in text for marker in ("って何", "ルール", "教えて"))
             else ActivityOperation.DISCUSS
         )
         if negated or past:
@@ -457,6 +559,25 @@ class SituationEvaluator:
         )
 
     @staticmethod
+    def _is_administrative_direction(text: str, kind: UserRequestKind) -> bool:
+        if kind == UserRequestKind.EXECUTION:
+            return True
+        normalized = text.strip()
+        return any(
+            marker in normalized
+            for marker in (
+                "オープニング",
+                "本題に入",
+                "メインに入",
+                "雑談を始め",
+                "話題を変え",
+                "次の話題",
+                "締めに入",
+                "エンディング",
+            )
+        )
+
+    @staticmethod
     def _is_hypothetical(text: str) -> bool:
         return any(
             marker in text for marker in ("としたら", "とすれば", "仮に")
@@ -465,7 +586,11 @@ class SituationEvaluator:
     @staticmethod
     def _speech_act(text: str) -> SpeechAct:
         normalized = text.strip()
-        if any(marker in normalized for marker in ("しませんか", "しない？", "しようか")):
+        if SituationEvaluator._is_greeting(normalized):
+            return SpeechAct.GREETING
+        if any(
+            marker in normalized for marker in ("しませんか", "しない？", "しようか")
+        ):
             return SpeechAct.PROPOSAL
         if normalized.endswith(("？", "?")):
             return SpeechAct.QUESTION
@@ -474,3 +599,17 @@ class SituationEvaluator:
         if normalized.endswith(("始めて", "やめて")):
             return SpeechAct.COMMAND
         return SpeechAct.STATEMENT
+
+    @staticmethod
+    def _is_greeting(text: str) -> bool:
+        normalized = text.strip().lower().rstrip("。.!！?？")
+        return normalized in {
+            "こんにちは",
+            "こんばんは",
+            "おはよう",
+            "おはようございます",
+            "やあ",
+            "どうも",
+            "hello",
+            "hi",
+        }

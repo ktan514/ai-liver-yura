@@ -7,7 +7,9 @@ from app.adapters.streaming.fake_streaming_control import (
     FakeObsStreamingControlAdapter,
     FakeYouTubeStreamingControlAdapter,
 )
-from app.adapters.streaming.in_memory_session_repository import InMemoryStreamSessionRepository
+from app.adapters.streaming.in_memory_session_repository import (
+    InMemoryStreamSessionRepository,
+)
 from app.domain.activity_turn_result import (
     ActionExecutionResult,
     ActionExecutionStatus,
@@ -15,7 +17,8 @@ from app.domain.activity_turn_result import (
     ActivityOutputStatus,
     ActivityTurnResult,
 )
-from app.domain.streaming import (
+from app.plugins.youtube_streaming.application import EndStreamSessionUsecase
+from app.plugins.youtube_streaming.domain import (
     ApproveNormalStreamEndCommand,
     EmergencyStopStreamCommand,
     RunOfShowSegment,
@@ -25,7 +28,6 @@ from app.domain.streaming import (
     StreamSession,
     StreamSessionStatus,
 )
-from app.usecases import EndStreamSessionUsecase
 
 
 class Ros:
@@ -37,7 +39,9 @@ class Ros:
 
 
 def closing() -> RunOfShowSegment:
-    return RunOfShowSegment("closing", "closing", "締め", 60, True, "llm", "closing-v1", 20, "感謝")
+    return RunOfShowSegment(
+        "closing", "closing", "締め", 60, True, "llm", "closing-v1", 20, "感謝"
+    )
 
 
 def turn(success: bool = True) -> ActivityTurnResult:
@@ -118,7 +122,9 @@ def fixture(
 @pytest.mark.asyncio
 async def test_normal_end_runs_closing_then_stops_external_services() -> None:
     usecase, sessions, session, events, obs, youtube = fixture(closing())
-    command = ApproveNormalStreamEndCommand("end", "end-trace", session.session_id, 0, "operator")
+    command = ApproveNormalStreamEndCommand(
+        "end", "end-trace", session.session_id, 0, "operator"
+    )
     result = await usecase.normal(command)
     assert result.successful and result.end_mode == "normal"
     assert sessions.get(session.session_id).status == StreamSessionStatus.COMPLETED  # type: ignore[union-attr]
@@ -166,7 +172,9 @@ async def test_version_and_main_completion_are_required() -> None:
     usecase, _sessions, session, _events, _obs, _youtube = fixture(closing())
     with pytest.raises(StreamEndRejected, match="version_mismatch"):
         await usecase.normal(
-            ApproveNormalStreamEndCommand("end", "trace", session.session_id, 9, "operator")
+            ApproveNormalStreamEndCommand(
+                "end", "trace", session.session_id, 9, "operator"
+            )
         )
 
 

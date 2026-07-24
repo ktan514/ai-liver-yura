@@ -46,7 +46,9 @@ class FakeObsClient:
                     "isGroup": True,
                 }
             ],
-            "Character Group": [{"sourceName": "Yura", "sceneItemEnabled": True, "isGroup": False}],
+            "Character Group": [
+                {"sourceName": "Yura", "sceneItemEnabled": True, "isGroup": False}
+            ],
         }
         self.disconnect_calls = 0
         self.calls: list[str] = []
@@ -147,7 +149,9 @@ async def test_snapshot_inspects_obs_without_write_requests() -> None:
         ("SOMETHING_NEW", False, False, "unknown"),
     ],
 )
-def test_output_status_mapping(state: str, active: bool, reconnecting: bool, expected: str) -> None:
+def test_output_status_mapping(
+    state: str, active: bool, reconnecting: bool, expected: str
+) -> None:
     response = SimpleNamespace(
         output_state=state,
         output_active=active,
@@ -183,7 +187,9 @@ async def test_nested_cycle_is_bounded_and_duplicate_avatar_is_ambiguous() -> No
             {"sourceName": "Yura", "sceneItemEnabled": True, "isGroup": False},
         ],
     }
-    snapshot = await adapter(FakeObsClient(scene_items=items), max_scene_depth=3).snapshot()
+    snapshot = await adapter(
+        FakeObsClient(scene_items=items), max_scene_depth=3
+    ).snapshot()
     assert snapshot.avatar_source_visible is False
     assert len(snapshot.avatar_source_paths) == 2
 
@@ -194,7 +200,9 @@ async def test_retryable_connection_error_retries_and_auth_does_not() -> None:
     factory = FakeFactory([ConnectionRefusedError(), client])
     value = ObsWebSocketPreparationAdapter(
         factory,  # type: ignore[arg-type]
-        ObsWebSocketPreparationConfig((), max_retries=1, retry_initial_delay_seconds=0.001),
+        ObsWebSocketPreparationConfig(
+            (), max_retries=1, retry_initial_delay_seconds=0.001
+        ),
     )
     await value.connect()
     assert factory.calls == 2
@@ -203,7 +211,9 @@ async def test_retryable_connection_error_retries_and_auth_does_not() -> None:
     auth_factory = FakeFactory([RuntimeError("authentication password rejected")])
     auth_adapter = ObsWebSocketPreparationAdapter(
         auth_factory,  # type: ignore[arg-type]
-        ObsWebSocketPreparationConfig((), max_retries=3, retry_initial_delay_seconds=0.001),
+        ObsWebSocketPreparationConfig(
+            (), max_retries=3, retry_initial_delay_seconds=0.001
+        ),
     )
     with pytest.raises(ObsAdapterError, match="obs.authentication_failed"):
         await auth_adapter.connect()
@@ -224,7 +234,9 @@ def test_configuration_and_error_mapping_never_expose_password(
     assert ObsErrorMapper.map(TimeoutError()).retryable is True
     assert (
         ObsErrorMapper.map(
-            RuntimeError("failed to identify client with the server, check connection settings")
+            RuntimeError(
+                "failed to identify client with the server, check connection settings"
+            )
         ).failure_code
         == "obs.authentication_failed"
     )

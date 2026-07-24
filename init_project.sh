@@ -96,7 +96,7 @@ Activity-driven modular AI liver agent.
 ## Runtime
 
 - Python 3.10.5
-- PyQt6
+- Browser-based local web interfaces
 
 ## Architecture
 
@@ -123,7 +123,6 @@ fi
 
 if [ ! -f requirements.txt ]; then
   cat > requirements.txt <<'EOF'
-PyQt6
 python-dotenv
 PyYAML
 pydantic

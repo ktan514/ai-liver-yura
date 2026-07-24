@@ -34,7 +34,9 @@ async def test_openai_logs_actual_responses_request_and_full_result(
     debug_file = tmp_path / "runtime_debug.log"
     sent: dict[str, object] = {}
 
-    def fake_urlopen(request: urllib.request.Request, timeout: float) -> _FakeHttpResponse:
+    def fake_urlopen(
+        request: urllib.request.Request, timeout: float
+    ) -> _FakeHttpResponse:
         sent["body"] = json.loads(request.data or b"{}")
         sent["timeout"] = timeout
         return _FakeHttpResponse({"output_text": "採用されたOpenAI返答全文"})
@@ -76,7 +78,9 @@ async def test_openai_logs_actual_responses_request_and_full_result(
             json.loads(line)
             for line in debug_file.read_text(encoding="utf-8").splitlines()
         ]
-        request_record = next(record for record in records if record["label"] == "llm_request")
+        request_record = next(
+            record for record in records if record["label"] == "llm_request"
+        )
         parsed_record = next(
             record
             for record in records

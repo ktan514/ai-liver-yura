@@ -1,4 +1,5 @@
-from app.plugins.youtube_streaming.application.service import StreamingApplicationService
-from app.plugins.youtube_streaming.public.registration import create_registration
+"""YouTube Streaming Plugin package.
 
-__all__ = ["StreamingApplicationService", "create_registration"]
+Concrete application/public entry points are imported explicitly so loading a domain module
+does not initialize the full plugin graph.
+"""

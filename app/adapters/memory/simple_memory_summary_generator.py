@@ -11,7 +11,9 @@ class SimpleMemorySummaryGeneratorConfig:
 
 
 class SimpleMemorySummaryGenerator(MemorySummaryGenerator):
-    def __init__(self, config: SimpleMemorySummaryGeneratorConfig | None = None) -> None:
+    def __init__(
+        self, config: SimpleMemorySummaryGeneratorConfig | None = None
+    ) -> None:
         self._config = config or SimpleMemorySummaryGeneratorConfig()
 
     async def generate_summary(self, text: str) -> str:

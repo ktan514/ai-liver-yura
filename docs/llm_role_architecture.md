@@ -220,7 +220,26 @@ allowed / forbidden claimsは特定機能の固定文一覧ではなく、Activi
 - 成功・失敗の確定
 - RegistryにないActivityの追加
 
-Character LLMにはCharacterProfile、EmotionState、会話文脈、Response Context、Activity Resultを渡す。
+Character LLMにはCharacterProfile、EmotionState、現在の相手とのRelationshipState集約値、
+直近のユーザー/ゆら会話Turn、直近発話、TopicHistory、Response Context、Activity Resultを渡す。
+RelationshipStateはBehavior Planningにも渡すが、Capabilityや実行事実の判定根拠にはしない。
+Character LLMは発話・表情・ジェスチャーに加え、音声エンジン固有値ではない
+`VoiceIntent.style`を返す。CoreはEmotionStateをVOICEVOX等のパラメータへ直接変換せず、
+EmotionState自身も表現・反応・固定待機秒を決定しない。自律Activityの開始間隔など
+行動選択に必要な解釈は専用Policy、発話・表情・身振りの解釈はCharacter LLMが担当する。
+SPEAK ActionからSpeechSynthesizer PortへVoiceIntentを伝達する。
+
+表現意図が発話途中で変化する場合、Character LLMは`ReactionPlan`内に2〜8件の
+`ReactionSegment`を返す。各Segmentはspeech、expression、gesture、VoiceIntent、
+0〜3秒のpause_after_secondsだけを持つ。単語単位には分割せず、変化がない場合は
+従来の単一Segmentとして扱う。Action PlannerはSegment順をmetadataへ固定し、
+Schedulerは各Segmentの字幕・表情・身振りを音声より先に実行してから次Segmentへ進む。
+特定エンジンの話者ID、style ID、pitch、speed等はこの契約へ含めない。
+
+各LLM RoleのResponseGenerator AdapterはLLM Provider Pluginで包み、
+`llm.provider.default`、`llm.provider.situation_evaluator`、
+`llm.provider.character`、`llm.provider.response_validator`として独立管理する。
+Provider例外時は該当Capabilityだけを解除し、Role間で障害を連鎖させない。
 
 ## 11. Response Validator
 
@@ -270,6 +289,11 @@ llm_roles:
 初期状態では同一Provider・Modelを共有してよい。
 ただしFactory、設定、PromptBuilder、Portはロール別に分離する。
 
+各ロールのPrompt構築は、`SituationPromptBuilder`、
+`CharacterRolePromptBuilder`、`ResponseValidationPromptBuilder`の契約を通じて
+Runtimeへ注入する。Runtimeサービスは具体Prompt Builderを生成・importせず、
+Composition Rootだけが使用する実装を選択する。
+
 ## 13. 既存クラスからの移行
 
 - `BehaviorPlanner`: Situation Evaluator結果を使う行動選択へ整理する
@@ -311,6 +335,8 @@ INFO:
 DEBUG:
 
 - Situation Evaluator入力
+- `SituationState`は直近Event種別・入力元・注意対象・Activityスナップショットを継続し、入力本文は保持しない
+- Situation Evaluator、Behavior Planner、Character LLMは同じ状況スナップショットを役割別に参照する
 - ActivityDefinition候補
 - LLM生出力
 - Schema解析結果

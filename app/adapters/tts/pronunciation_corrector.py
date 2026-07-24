@@ -34,7 +34,9 @@ class PronunciationCorrector:
             for rule_index, rule in enumerate(self._dictionary.rules):
                 if text.startswith(rule.surface, position):
                     corrected_parts.append(rule.reading)
-                    replacement_counts[rule_index] = replacement_counts.get(rule_index, 0) + 1
+                    replacement_counts[rule_index] = (
+                        replacement_counts.get(rule_index, 0) + 1
+                    )
                     position += len(rule.surface)
                     matched = True
                     break

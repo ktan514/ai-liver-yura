@@ -1,6 +1,10 @@
-from app.domain.games import ShiritoriGameDefinition, ShiritoriPlayer, ShiritoriState
+from app.plugins.games.engine import GameEngine
 from app.plugins.games.intent import GameCommandValidator, GameIntent, GameIntentCommand
-from app.runtime.game_engine import GameEngine
+from app.plugins.games.shiritori.domain import (
+    ShiritoriGameDefinition,
+    ShiritoriPlayer,
+    ShiritoriState,
+)
 
 
 def _command(
@@ -28,10 +32,14 @@ def test_validator_accepts_supported_start_and_rejects_duplicate() -> None:
     engine = GameEngine((ShiritoriGameDefinition(),))
     validator = GameCommandValidator(engine)
 
-    assert validator.validate(_command(GameIntent.START_GAME), current_state_version=0).accepted
+    assert validator.validate(
+        _command(GameIntent.START_GAME), current_state_version=0
+    ).accepted
     engine.start_game("shiritori")
 
-    result = validator.validate(_command(GameIntent.START_GAME), current_state_version=0)
+    result = validator.validate(
+        _command(GameIntent.START_GAME), current_state_version=0
+    )
 
     assert result.accepted is False
     assert result.reason == "active_session_exists"

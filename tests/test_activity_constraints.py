@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from app.adapters.prompt import SituationEvaluatorPromptBuilder
 from app.domain.activity_constraints import (
     ActivityConstraintValidator,
     LegacyConstraintSchemaAdapter,
@@ -66,7 +67,9 @@ def _valid() -> dict[str, object]:
     }
 
 
-def _definition(schema: dict[str, object] | None = None, version: str = "2") -> ActivityDefinition:
+def _definition(
+    schema: dict[str, object] | None = None, version: str = "2"
+) -> ActivityDefinition:
     return ActivityDefinition(
         activity_type="external_search",
         display_name="外部検索",
@@ -79,7 +82,9 @@ def _definition(schema: dict[str, object] | None = None, version: str = "2") -> 
 
 
 def test_strict_schema_validates_types_defaults_nested_objects_and_arrays() -> None:
-    result = ActivityConstraintValidator().validate(_valid(), STRICT_SCHEMA, schema_version="2")
+    result = ActivityConstraintValidator().validate(
+        _valid(), STRICT_SCHEMA, schema_version="2"
+    )
 
     assert result.valid is True
     assert result.normalized_constraints["mode"] == "safe"
@@ -101,14 +106,20 @@ def test_strict_schema_validates_types_defaults_nested_objects_and_arrays() -> N
         ({"tags": ["a", "b", "c"]}, "max_items", "tags"),
         ({"tags": [1]}, "invalid_type", "tags.0"),
         ({"options": {}}, "required", "options.level"),
-        ({"options": {"level": 1, "unknown": True}}, "additional_property", "options.unknown"),
+        (
+            {"options": {"level": 1, "unknown": True}},
+            "additional_property",
+            "options.unknown",
+        ),
         ({"unknown": True}, "additional_property", "unknown"),
     ],
 )
 def test_strict_schema_reports_structured_errors(
     updates: dict[str, object], code: str, path: str
 ) -> None:
-    result = ActivityConstraintValidator().validate({**_valid(), **updates}, STRICT_SCHEMA)
+    result = ActivityConstraintValidator().validate(
+        {**_valid(), **updates}, STRICT_SCHEMA
+    )
 
     assert result.valid is False
     assert any(error.code == code and error.path == path for error in result.errors)
@@ -122,10 +133,15 @@ def test_required_optional_nullable_and_explicit_default_are_distinct() -> None:
         {**_valid(), "nullable": None}, STRICT_SCHEMA
     )
 
-    assert any(error.code == "required" and error.path == "name" for error in missing_result.errors)
+    assert any(
+        error.code == "required" and error.path == "name"
+        for error in missing_result.errors
+    )
     assert (
         "nullable"
-        not in ActivityConstraintValidator().validate(_valid(), STRICT_SCHEMA).applied_defaults
+        not in ActivityConstraintValidator()
+        .validate(_valid(), STRICT_SCHEMA)
+        .applied_defaults
     )
     assert nullable_result.valid is True
 
@@ -189,7 +205,9 @@ def test_same_validator_supports_stream_control_constraints() -> None:
 
 def test_legacy_schema_adapter_is_explicit_and_deprecated() -> None:
     schema, warnings = LegacyConstraintSchemaAdapter().adapt({"theme": "string"})
-    valid = ActivityConstraintValidator().validate({"theme": "sea"}, {"theme": "string"})
+    valid = ActivityConstraintValidator().validate(
+        {"theme": "sea"}, {"theme": "string"}
+    )
     invalid = ActivityConstraintValidator().validate({"theme": []}, {"theme": "string"})
 
     assert schema["type"] == "object"
@@ -224,7 +242,10 @@ def test_situation_and_behavior_planner_preserve_candidate_but_ask_for_invalid_c
             "reason": "test",
         }
     )
-    evaluator = SituationEvaluator(ResponseGeneratorRoleAdapter(StubResponseGenerator(raw)))
+    evaluator = SituationEvaluator(
+        ResponseGeneratorRoleAdapter(StubResponseGenerator(raw)),
+        prompt_builder=SituationEvaluatorPromptBuilder(),
+    )
     analysis = evaluator.parse(raw, (definition,))
     assert analysis is not None
     context = BehaviorPlanningContext(
@@ -234,7 +255,10 @@ def test_situation_and_behavior_planner_preserve_candidate_but_ask_for_invalid_c
         activity_definitions=(definition,),
     )
 
-    plan = BehaviorPlanner(StubResponseGenerator(raw)).plan_from_analysis(context, analysis)
+    plan = BehaviorPlanner(
+        StubResponseGenerator(raw),
+        situation_prompt_builder=SituationEvaluatorPromptBuilder(),
+    ).plan_from_analysis(context, analysis)
 
     assert analysis.constraint_errors[0].code == "invalid_type"
     assert plan.decision == BehaviorDecision.ASK_CONFIRMATION
@@ -245,7 +269,9 @@ def test_situation_and_behavior_planner_preserve_candidate_but_ask_for_invalid_c
 @pytest.mark.asyncio
 async def test_deterministic_matcher_output_is_validated_by_the_same_schema() -> None:
     class InvalidMatcher:
-        def match(self, context: ActivityMatcherContext) -> DeterministicActivityMatch | None:
+        def match(
+            self, context: ActivityMatcherContext
+        ) -> DeterministicActivityMatch | None:
             return DeterministicActivityMatch(
                 operation=ActivityOperation.START,
                 goal="開始する",
@@ -268,7 +294,10 @@ async def test_deterministic_matcher_output_is_validated_by_the_same_schema() ->
         available_capabilities=frozenset(),
         activity_definitions=(definition,),
     )
-    evaluator = SituationEvaluator(ResponseGeneratorRoleAdapter(StubResponseGenerator("unused")))
+    evaluator = SituationEvaluator(
+        ResponseGeneratorRoleAdapter(StubResponseGenerator("unused")),
+        prompt_builder=SituationEvaluatorPromptBuilder(),
+    )
 
     analysis = await evaluator.evaluate(context)
 
@@ -276,7 +305,9 @@ async def test_deterministic_matcher_output_is_validated_by_the_same_schema() ->
     assert analysis.activity_candidate is None
 
 
-def test_activity_plan_validator_revalidates_and_marks_constraints_as_validated() -> None:
+def test_activity_plan_validator_revalidates_and_marks_constraints_as_validated() -> (
+    None
+):
     definition = _definition()
 
     def definitions() -> tuple[ActivityDefinition, ...]:

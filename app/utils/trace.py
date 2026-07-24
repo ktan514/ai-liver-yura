@@ -28,7 +28,9 @@ class TraceLevel(IntEnum):
             return cls[value.upper()]
         except KeyError as error:
             choices = ", ".join(level.name for level in cls)
-            raise ValueError(f"未対応のトレースレベルです: {value} ({choices})") from error
+            raise ValueError(
+                f"未対応のトレースレベルです: {value} ({choices})"
+            ) from error
 
 
 class TraceLogger:
@@ -126,7 +128,9 @@ class TraceLogger:
     def error(self, label: str, **values: object) -> None:
         self._write(TraceLevel.ERROR, label, values)
 
-    def bind(self, context: TraceContext | None = None, **values: object) -> TraceContextLogger:
+    def bind(
+        self, context: TraceContext | None = None, **values: object
+    ) -> TraceContextLogger:
         bound = context.as_log_fields() if context is not None else {}
         return TraceContextLogger(self, {**bound, **values})
 
@@ -158,7 +162,7 @@ class TraceLogger:
         character_generation_result_id: str | None = None,
         output_unit_id: str | None = None,
         activity_result_id: str | None = None,
-        game_session_id: str | None = None,
+        plugin_session_id: str | None = None,
         request_id: str | None = None,
         attempt: int = 1,
     ) -> None:
@@ -191,7 +195,7 @@ class TraceLogger:
             character_generation_result_id=character_generation_result_id,
             output_unit_id=output_unit_id,
             activity_result_id=activity_result_id,
-            game_session_id=game_session_id,
+            plugin_session_id=plugin_session_id,
             request_id=request_id,
             attempt=attempt,
         )
@@ -222,7 +226,7 @@ class TraceLogger:
         character_generation_result_id: str | None = None,
         output_unit_id: str | None = None,
         activity_result_id: str | None = None,
-        game_session_id: str | None = None,
+        plugin_session_id: str | None = None,
         request_id: str | None = None,
         attempt: int = 1,
     ) -> None:
@@ -253,7 +257,7 @@ class TraceLogger:
             character_generation_result_id=character_generation_result_id,
             output_unit_id=output_unit_id,
             activity_result_id=activity_result_id,
-            game_session_id=game_session_id,
+            plugin_session_id=plugin_session_id,
             request_id=request_id,
             attempt=attempt,
         )
@@ -295,16 +299,23 @@ class TraceLogger:
     ) -> None:
         """動的レベルまたは既存呼び出し用のTraceを出力する。"""
 
-        record_level = TraceLevel.parse(level) if level is not None else self._infer_level(label)
+        record_level = (
+            TraceLevel.parse(level) if level is not None else self._infer_level(label)
+        )
         self._write(record_level, label, values)
 
-    def _write(self, record_level: TraceLevel, label: str, values: dict[str, object]) -> None:
+    def _write(
+        self, record_level: TraceLevel, label: str, values: dict[str, object]
+    ) -> None:
         """設定レベル以上のTraceを1行で出力する。"""
 
         primary_enabled = (
-            self._minimum_level is not TraceLevel.OFF and record_level >= self._minimum_level
+            self._minimum_level is not TraceLevel.OFF
+            and record_level >= self._minimum_level
         )
-        debug_enabled = self._debug_file_enabled and self._minimum_level is not TraceLevel.OFF
+        debug_enabled = (
+            self._debug_file_enabled and self._minimum_level is not TraceLevel.OFF
+        )
         if not primary_enabled and not debug_enabled:
             return
 
@@ -340,7 +351,8 @@ class TraceLogger:
             return "***MASKED***"
         if isinstance(value, dict):
             return {
-                str(item_key): cls._mask(item, str(item_key)) for item_key, item in value.items()
+                str(item_key): cls._mask(item, str(item_key))
+                for item_key, item in value.items()
             }
         if is_dataclass(value) and not isinstance(value, type):
             return cls._mask(asdict(value))
@@ -351,7 +363,11 @@ class TraceLogger:
         if isinstance(value, str):
             masked = value
             for env_key, env_value in os.environ.items():
-                if env_value and len(env_value) >= 4 and cls._sensitive_env_key.search(env_key):
+                if (
+                    env_value
+                    and len(env_value) >= 4
+                    and cls._sensitive_env_key.search(env_key)
+                ):
                     masked = masked.replace(env_value, "***MASKED***")
             for pattern in cls._inline_secret_patterns:
                 if pattern.groups == 1:
@@ -412,7 +428,11 @@ class TraceLogger:
 
     @staticmethod
     def _format_value(value: object) -> str:
-        if isinstance(value, str) and value and not any(char.isspace() for char in value):
+        if (
+            isinstance(value, str)
+            and value
+            and not any(char.isspace() for char in value)
+        ):
             return value
         return json.dumps(value, ensure_ascii=False, default=str)
 
@@ -432,7 +452,9 @@ class NullTraceLogger:
     def error(self, label: str, **values: object) -> None:
         pass
 
-    def bind(self, context: TraceContext | None = None, **values: object) -> TraceContextLogger:
+    def bind(
+        self, context: TraceContext | None = None, **values: object
+    ) -> TraceContextLogger:
         return TraceContextLogger(self, values)
 
     def llm_request(self, **values: object) -> None:
@@ -457,13 +479,19 @@ class NullTraceLogger:
 class TraceContextLogger:
     """TraceContextを各レコードへ一貫して付与するLogger Adapter。"""
 
-    def __init__(self, logger: TraceLogger | NullTraceLogger, values: dict[str, object]) -> None:
+    def __init__(
+        self, logger: TraceLogger | NullTraceLogger, values: dict[str, object]
+    ) -> None:
         self._logger = logger
         self._values = dict(values)
 
-    def bind(self, context: TraceContext | None = None, **values: object) -> TraceContextLogger:
+    def bind(
+        self, context: TraceContext | None = None, **values: object
+    ) -> TraceContextLogger:
         contextual = context.as_log_fields() if context is not None else {}
-        return TraceContextLogger(self._logger, {**self._values, **contextual, **values})
+        return TraceContextLogger(
+            self._logger, {**self._values, **contextual, **values}
+        )
 
     def debug(self, label: str, **values: object) -> None:
         self._logger.debug(label, **self._merge(values))
@@ -477,7 +505,9 @@ class TraceContextLogger:
     def error(self, label: str, **values: object) -> None:
         self._logger.error(label, **self._merge(values))
 
-    def write(self, label: str, *, level: str | TraceLevel | None = None, **values: object) -> None:
+    def write(
+        self, label: str, *, level: str | TraceLevel | None = None, **values: object
+    ) -> None:
         self._logger.write(label, level=level, **self._merge(values))
 
     def _merge(self, values: dict[str, object]) -> dict[str, object]:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import Any
 from urllib import error, request
@@ -9,6 +8,7 @@ from app.domain.activities import Activity
 from app.domain.character import CharacterProfile
 from app.ports.prompt_builder import PromptBuilder
 from app.ports.response_generator import ResponseGenerator
+from app.utils.async_blocking import run_cancellable_blocking
 from app.utils.llm_trace import build_llm_trace_context
 from app.utils.trace import TraceLogger
 
@@ -94,7 +94,9 @@ class OllamaResponseGenerator(ResponseGenerator):
             prompt_length=len(self.latest_prompt),
         )
 
-        response_data = await asyncio.to_thread(self._post_generate_request, payload)
+        response_data = await run_cancellable_blocking(
+            self._post_generate_request, payload
+        )
         self._trace_logger.write(
             "ollama_response_generator:generate_response:response_received",
             activity_id=activity.activity_id,
@@ -164,7 +166,9 @@ class OllamaResponseGenerator(ResponseGenerator):
                 api_url=self._api_url,
                 timeout_seconds=self._timeout_seconds,
             )
-            with request.urlopen(http_request, timeout=self._timeout_seconds) as response:
+            with request.urlopen(
+                http_request, timeout=self._timeout_seconds
+            ) as response:
                 response_body = response.read().decode("utf-8")
                 self._trace_logger.write(
                     "ollama_response_generator:post_generate_request:http_response_received",
@@ -189,7 +193,9 @@ class OllamaResponseGenerator(ResponseGenerator):
                 error_message=str(exc),
                 response_length=len(response_body),
             )
-            raise RuntimeError("Ollama API のレスポンスJSON解析に失敗しました。") from exc
+            raise RuntimeError(
+                "Ollama API のレスポンスJSON解析に失敗しました。"
+            ) from exc
 
         if not isinstance(decoded_body, dict):
             self._trace_logger.write(

@@ -38,7 +38,9 @@ class ObsWebSocketStreamingControlAdapter:
         self._state_timeout = state_timeout_seconds
         self._poll_interval = poll_interval_seconds
         self._lock = asyncio.Lock()
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="obs-control")
+        self._executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="obs-control"
+        )
         self._client: ObsRequestClient | None = None
         self._connection_status = "disconnected"
         self._closed = False
@@ -132,7 +134,9 @@ class ObsWebSocketStreamingControlAdapter:
                 raise ObsAdapterError("timeout", failure_code, True)
             await asyncio.sleep(self._poll_interval)
 
-    async def _request_locked(self, operation: Callable[[ObsRequestClient], Any]) -> Any:
+    async def _request_locked(
+        self, operation: Callable[[ObsRequestClient], Any]
+    ) -> Any:
         await self._connect_locked()
         client = self._client
         assert client is not None

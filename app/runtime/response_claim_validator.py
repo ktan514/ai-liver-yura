@@ -91,12 +91,16 @@ class IndependentClaimExtractor:
         ),
         (
             ClaimType.ACTIVITY_CONTINUED,
-            re.compile(r"(?:継続|再開)(?:した|しました)|(?:まだ|引き続き).{0,20}続けている"),
+            re.compile(
+                r"(?:継続|再開)(?:した|しました)|(?:まだ|引き続き).{0,20}続けている"
+            ),
             0.98,
         ),
         (
             ClaimType.ACTIVITY_RUNNING,
-            re.compile(r"(?:実行|処理|進行|稼働)(?:中|している)|(?:ゲーム|活動).{0,12}続けている"),
+            re.compile(
+                r"(?:実行|処理|進行|稼働)(?:中|している)|(?:ゲーム|活動).{0,12}続けている"
+            ),
             0.98,
         ),
         (
@@ -252,9 +256,7 @@ class DeterministicFactValidator:
         reason = (
             "deterministic_facts_valid"
             if accepted
-            else reasons[0]
-            if reasons
-            else "claims_conflict_with_result"
+            else reasons[0] if reasons else "claims_conflict_with_result"
         )
         result = ResponseValidationResult(
             accepted=accepted,
@@ -268,7 +270,9 @@ class DeterministicFactValidator:
             "operation": context.operation,
             "execution_status": context.status.value,
             "self_reported_claims": [claim.value for claim in response.claims],
-            "self_reported_claim_details": [asdict(claim) for claim in response.claim_details],
+            "self_reported_claim_details": [
+                asdict(claim) for claim in response.claim_details
+            ],
             "extracted_claims": [asdict(claim) for claim in extracted_claims],
             "claim_differences": list(reasons),
             "accepted": accepted,
@@ -283,8 +287,12 @@ class DeterministicFactValidator:
     def _invalid_self_reported(
         context: ResponseContext, response: CharacterResponse
     ) -> tuple[ResponseClaim, ...]:
-        forbidden = tuple(claim for claim in response.claims if claim in context.forbidden_claims)
-        unknown = tuple(claim for claim in response.claims if claim not in context.allowed_claims)
+        forbidden = tuple(
+            claim for claim in response.claims if claim in context.forbidden_claims
+        )
+        unknown = tuple(
+            claim for claim in response.claims if claim not in context.allowed_claims
+        )
         return tuple(dict.fromkeys((*forbidden, *unknown)))
 
     @staticmethod
@@ -320,7 +328,9 @@ class DeterministicFactValidator:
             )
         conflicts = extracted & invalid
         ordered = sorted(conflicts, key=lambda item: item.value)
-        return tuple(f"claim_not_supported_by_{status.value}:{claim.value}" for claim in ordered)
+        return tuple(
+            f"claim_not_supported_by_{status.value}:{claim.value}" for claim in ordered
+        )
 
     @staticmethod
     def _claim_differences(
@@ -341,9 +351,15 @@ class DeterministicFactValidator:
             differences.append("speech_positive_self_report_negative")
         if extracted_negative and reported_positive:
             differences.append("speech_negative_self_report_positive")
-        if ClaimType.ACTIVITY_RUNNING in extracted and self_reported & _COMPLETION_CLAIMS:
+        if (
+            ClaimType.ACTIVITY_RUNNING in extracted
+            and self_reported & _COMPLETION_CLAIMS
+        ):
             differences.append("speech_running_self_report_completed")
-        if extracted & _COMPLETION_CLAIMS and ClaimType.ACTIVITY_CONTINUED in self_reported:
+        if (
+            extracted & _COMPLETION_CLAIMS
+            and ClaimType.ACTIVITY_CONTINUED in self_reported
+        ):
             differences.append("speech_completed_self_report_continued")
         return tuple(differences)
 
@@ -385,7 +401,10 @@ class DeterministicFactValidator:
     ) -> tuple[str, ...]:
         differences: list[str] = []
         for claim in claims:
-            if claim.activity_type is not None and claim.activity_type != context.activity_type:
+            if (
+                claim.activity_type is not None
+                and claim.activity_type != context.activity_type
+            ):
                 differences.append("self_reported_activity_type_mismatch")
             if claim.operation is not None and claim.operation != context.operation:
                 differences.append("self_reported_operation_mismatch")
@@ -399,7 +418,11 @@ class DeterministicFactValidator:
         speech: str,
     ) -> tuple[str, ...]:
         topic = (context.topic or "").strip()
-        if context.activity_type != "autonomous_talk" or len(topic) < 4 or len(speech) < 8:
+        if (
+            context.activity_type != "autonomous_talk"
+            or len(topic) < 4
+            or len(speech) < 8
+        ):
             return ()
         if topic in {
             "いま気になっていること",
@@ -413,7 +436,8 @@ class DeterministicFactValidator:
         if len(normalized_topic) < 3:
             return ()
         topic_bigrams = {
-            normalized_topic[index : index + 2] for index in range(len(normalized_topic) - 1)
+            normalized_topic[index : index + 2]
+            for index in range(len(normalized_topic) - 1)
         }
         if any(token in normalized_speech for token in topic_bigrams):
             return ()

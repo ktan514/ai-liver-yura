@@ -39,7 +39,9 @@ class ObsWebSocketClientConfig:
         if not 1 <= self.port <= 65535:
             raise ObsAdapterError("configuration", "obs.configuration.port_invalid")
         if not self.password_env.strip():
-            raise ObsAdapterError("configuration", "obs.configuration.password_env_missing")
+            raise ObsAdapterError(
+                "configuration", "obs.configuration.password_env_missing"
+            )
         if self.connect_timeout_seconds <= 0 or self.request_timeout_seconds <= 0:
             raise ObsAdapterError("configuration", "obs.configuration.timeout_invalid")
 

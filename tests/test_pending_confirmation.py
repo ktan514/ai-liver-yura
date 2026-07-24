@@ -10,7 +10,10 @@ from app.domain.pending_confirmation import (
     PendingConfirmation,
 )
 from app.runtime import ActivityManager, AgentLifeService
-from app.runtime.pending_confirmation import ConfirmationResolver, PendingConfirmationManager
+from app.runtime.pending_confirmation import (
+    ConfirmationResolver,
+    PendingConfirmationManager,
+)
 
 
 def _plan() -> ActivityPlan:
@@ -74,19 +77,35 @@ def test_manager_expires_and_releases_autonomous_suppression() -> None:
     assert manager.history[-1].status == ConfirmationStatus.EXPIRED
 
 
-def test_resolver_distinguishes_answers_from_quote_past_negation_and_correction() -> None:
+def test_resolver_distinguishes_answers_from_quote_past_negation_and_correction() -> (
+    None
+):
     manager = PendingConfirmationManager()
     pending = _pending(manager)
     resolver = ConfirmationResolver()
 
-    assert resolver.resolve("はい", pending).kind == ConfirmationResolutionKind.AFFIRMATIVE
-    assert resolver.resolve("いいえ", pending).kind == ConfirmationResolutionKind.NEGATIVE
-    assert resolver.resolve("確認はいい", pending).kind == ConfirmationResolutionKind.CANCEL
     assert (
-        resolver.resolve("それより検索して", pending).kind == ConfirmationResolutionKind.NEW_REQUEST
+        resolver.resolve("はい", pending).kind == ConfirmationResolutionKind.AFFIRMATIVE
     )
-    for text in ("「はい」と言ったらどうなる？", "さっきは「うん」って言ったよ", "はいじゃない"):
-        assert resolver.resolve(text, pending).kind == ConfirmationResolutionKind.AMBIGUOUS
+    assert (
+        resolver.resolve("いいえ", pending).kind == ConfirmationResolutionKind.NEGATIVE
+    )
+    assert (
+        resolver.resolve("確認はいい", pending).kind
+        == ConfirmationResolutionKind.CANCEL
+    )
+    assert (
+        resolver.resolve("それより検索して", pending).kind
+        == ConfirmationResolutionKind.NEW_REQUEST
+    )
+    for text in (
+        "「はい」と言ったらどうなる？",
+        "さっきは「うん」って言ったよ",
+        "はいじゃない",
+    ):
+        assert (
+            resolver.resolve(text, pending).kind == ConfirmationResolutionKind.AMBIGUOUS
+        )
     clarification = resolver.resolve("うん、でも停止じゃなくて一時停止", pending)
     assert clarification.kind == ConfirmationResolutionKind.CLARIFICATION
     assert clarification.constraint_updates == {"requested_transition": "pause"}

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from app.domain.games import (
+from app.plugins.games.activity_factory import TransientGameActivityFactory
+from app.plugins.games.engine import GameEngine
+from app.plugins.games.shiritori.domain import (
     ShiritoriGameDefinition,
     ShiritoriPlayer,
     ShiritoriState,
@@ -12,10 +14,7 @@ from app.domain.games import (
     normalize_shiritori_word,
     validate_shiritori_word,
 )
-from app.runtime.action_planner import ActionPlanner
-from app.runtime.activity_manager import ActivityManager
-from app.runtime.game_engine import GameEngine
-from app.runtime.shiritori_game_service import ShiritoriGameService
+from app.plugins.games.shiritori.service import ShiritoriGameService
 
 
 class SequenceResponseGenerator:
@@ -28,9 +27,11 @@ class SequenceResponseGenerator:
         return self._responses.pop(0)
 
 
-def _create_service() -> tuple[GameEngine, ActivityManager, ShiritoriGameService]:
+def _create_service() -> (
+    tuple[GameEngine, TransientGameActivityFactory, ShiritoriGameService]
+):
     engine = GameEngine((ShiritoriGameDefinition(),))
-    manager = ActivityManager(game_engine=engine)
+    manager = TransientGameActivityFactory()
     return engine, manager, ShiritoriGameService(engine)
 
 
@@ -39,7 +40,9 @@ def test_shiritori_definition_and_initial_turns() -> None:
 
     ai_session, _ = service.start_game(manager)
     assert engine.is_supported("shiritori") is True
-    assert ai_session.metadata["shiritori_state"] == ShiritoriState(current_turn=ShiritoriPlayer.AI)
+    assert ai_session.metadata["shiritori_state"] == ShiritoriState(
+        current_turn=ShiritoriPlayer.AI
+    )
 
     engine.cancel_game("test_reset")
     user_session, _ = service.start_game(manager, started_by=ShiritoriPlayer.USER)
@@ -142,11 +145,11 @@ async def test_ai_structured_output_updates_state_and_uses_utterance() -> None:
     engine, manager, service = _create_service()
     _, activity = service.start_game(manager)
     generator = SequenceResponseGenerator(
-        ['{"game_action":"play_word","word":"うみ","utterance":"「うみ」！ 次は「み」だよ。"}']
+        [
+            '{"game_action":"play_word","word":"うみ","utterance":"「うみ」！ 次は「み」だよ。"}'
+        ]
     )
-    planner = ActionPlanner(generator, shiritori_game_service=service)  # type: ignore[arg-type]
-
-    group = await planner.plan(activity)
+    utterance = await service.generate_ai_turn(activity, generator)
 
     state = engine.get_active_session().metadata["shiritori_state"]  # type: ignore[union-attr]
     assert state.last_word == "うみ"
@@ -154,8 +157,7 @@ async def test_ai_structured_output_updates_state_and_uses_utterance() -> None:
     assert state.current_turn == ShiritoriPlayer.USER
     assert state.used_words == ("うみ",)
     assert state.turn_count == 1
-    assert group.action_plans[0].text == "「うみ」！ 次は「み」だよ。"
-    assert group.action_plans[0].metadata["skip_topic_memory"] is True
+    assert utterance == "「うみ」！ 次は「み」だよ。"
 
 
 @pytest.mark.asyncio
@@ -165,8 +167,7 @@ async def test_game_progression_water_requires_ta_for_next_ai_word() -> None:
     first_generator = SequenceResponseGenerator(
         ['{"game_action":"play_word","word":"うみ","utterance":"うみ！"}']
     )
-    await ActionPlanner(first_generator, shiritori_game_service=service).plan(first_activity)  # type: ignore[arg-type]
-    manager.complete_processed_activity(first_activity.activity_id)
+    await service.generate_ai_turn(first_activity, first_generator)
 
     user_result, ai_activity = service.submit_user_word(manager, "ミネラルウォーター")
 
@@ -175,7 +176,7 @@ async def test_game_progression_water_requires_ta_for_next_ai_word() -> None:
     second_generator = SequenceResponseGenerator(
         ['{"game_action":"play_word","word":"たこ","utterance":"じゃあ「たこ」！"}']
     )
-    await ActionPlanner(second_generator, shiritori_game_service=service).plan(ai_activity)  # type: ignore[arg-type]
+    await service.generate_ai_turn(ai_activity, second_generator)
     state = engine.get_active_session().metadata["shiritori_state"]  # type: ignore[union-attr]
     assert state.last_word == "たこ"
     assert state.expected_head == "こ"
@@ -194,7 +195,7 @@ async def test_invalid_ai_output_retries_finitely_then_accepts_valid_word() -> N
         ]
     )
 
-    utterance = await service.generate_ai_turn(activity, generator)  # type: ignore[arg-type]
+    utterance = await service.generate_ai_turn(activity, generator)
 
     assert utterance == "うみ！"
     assert generator.call_count == 3
@@ -223,7 +224,7 @@ async def test_ai_generation_limit_without_fallback_completes_as_surrender() -> 
     )
     generator = SequenceResponseGenerator(["invalid", "invalid", "invalid"])
 
-    utterance = await service.generate_ai_turn(activity, generator)  # type: ignore[arg-type]
+    utterance = await service.generate_ai_turn(activity, generator)
 
     assert "私の負け" in utterance
     assert generator.call_count == 3

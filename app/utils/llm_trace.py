@@ -64,13 +64,16 @@ def build_llm_trace_context(activity: Activity) -> LlmTraceContext:
             or activity.context.get("ongoing_activity_id")
         )
         or trace_context.ongoing_activity_id,
-        game_session_id=_optional_string(
-            activity.context.get("game_session_id") or activity.context.get("session_id")
+        plugin_session_id=_optional_string(
+            activity.context.get("plugin_session_id")
+            or activity.context.get("session_id")
         )
-        or trace_context.game_session_id,
+        or trace_context.plugin_session_id,
         confirmation_id=_optional_string(confirmation_payload.get("confirmation_id"))
         or trace_context.confirmation_id,
-        activity_execution_result_id=_optional_string(getattr(execution_result, "result_id", None))
+        activity_execution_result_id=_optional_string(
+            getattr(execution_result, "result_id", None)
+        )
         or trace_context.activity_execution_result_id,
         character_generation_result_id=_optional_string(
             getattr(character_result, "result_id", None)
@@ -80,9 +83,11 @@ def build_llm_trace_context(activity: Activity) -> LlmTraceContext:
     return LlmTraceContext(
         purpose=purpose,
         activity_id=activity.activity_id,
-        event_id=activity.source_event_id or _optional_string(activity.context.get("event_id")),
+        event_id=activity.source_event_id
+        or _optional_string(activity.context.get("event_id")),
         session_id=_optional_string(
-            activity.context.get("game_session_id") or activity.context.get("session_id")
+            activity.context.get("plugin_session_id")
+            or activity.context.get("session_id")
         ),
         user_input=(
             event_payload.get("text")
@@ -121,10 +126,8 @@ def _purpose(activity: Activity) -> str:
         return role
     if activity.activity_type == ActivityType.BEHAVIOR_PLANNING:
         return "behavior_planning"
-    if activity.activity_type == ActivityType.GAME_INPUT_CLASSIFICATION:
-        return "game_intent_classification"
-    if activity.activity_type == ActivityType.GAME_WITH_USER:
-        return "game_response_generation"
+    if activity.activity_type == ActivityType.PLUGIN_ACTIVITY:
+        return "plugin_response_generation"
     if activity.activity_type == ActivityType.AUTONOMOUS_TALK:
         return "autonomous_talk"
     return "conversation_generation"
@@ -135,4 +138,8 @@ def _optional_string(value: object) -> str | None:
 
 
 def _positive_int(value: object) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else 1
+    return (
+        value
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0
+        else 1
+    )

@@ -20,4 +20,3 @@ class ActivityPolicy(Protocol):
         activity_type: str | None = None,
         trace_id: str = "",
     ) -> PolicyDecision: ...
-

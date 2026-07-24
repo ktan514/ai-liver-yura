@@ -1,16 +1,20 @@
 from __future__ import annotations
 
-import asyncio
 import copy
 import json
 from dataclasses import dataclass
 from typing import Any
 from urllib import error, parse, request
 
-from app.adapters.tts.audio_query_corrector import AudioQueryCorrector, NoOpAudioQueryCorrector
+from app.adapters.tts.audio_query_corrector import (
+    AudioQueryCorrector,
+    NoOpAudioQueryCorrector,
+)
 from app.adapters.tts.pronunciation_corrector import PronunciationCorrector
-from app.domain.emotions import EmotionState
+from app.adapters.tts.voicevox_voice_intent_mapper import VoiceVoxVoiceIntentMapper
+from app.domain.character_response import VoiceIntent
 from app.ports.speech_synthesizer import SpeechSynthesizer
+from app.utils.async_blocking import run_cancellable_blocking
 from app.utils.trace import TraceLogger
 
 
@@ -28,7 +32,7 @@ class VoiceVoxSpeechSynthesizerConfig:
     speaker_id: int
     timeout_seconds: float = 30.0
     default_profile: str = "neutral"
-    emotion_profiles: dict[str, VoiceVoxSpeechProfile] | None = None
+    voice_intent_profiles: dict[str, VoiceVoxSpeechProfile] | None = None
 
 
 class VoiceVoxSpeechSynthesizer(SpeechSynthesizer):
@@ -39,17 +43,21 @@ class VoiceVoxSpeechSynthesizer(SpeechSynthesizer):
         config: VoiceVoxSpeechSynthesizerConfig,
         pronunciation_corrector: PronunciationCorrector | None = None,
         audio_query_corrector: AudioQueryCorrector | None = None,
+        voice_intent_mapper: VoiceVoxVoiceIntentMapper | None = None,
     ) -> None:
         self._config = config
         self._pronunciation_corrector = pronunciation_corrector
         self._audio_query_corrector = audio_query_corrector or NoOpAudioQueryCorrector()
+        self._voice_intent_mapper = voice_intent_mapper or VoiceVoxVoiceIntentMapper()
         self._trace_logger = TraceLogger()
 
-    async def synthesize(self, text: str, emotion: EmotionState | None = None) -> bytes:
+    async def synthesize(
+        self, text: str, voice_intent: VoiceIntent | None = None
+    ) -> bytes:
         if not text.strip():
             raise ValueError("音声合成するテキストが空です。")
-        profile = self._resolve_profile(emotion)
-        return await asyncio.to_thread(self._synthesize_sync, text, profile)
+        profile = self._resolve_profile(voice_intent)
+        return await run_cancellable_blocking(self._synthesize_sync, text, profile)
 
     def _synthesize_sync(self, text: str, profile: VoiceVoxSpeechProfile) -> bytes:
         corrected_text = self._correct_pronunciation(text)
@@ -103,12 +111,36 @@ class VoiceVoxSpeechSynthesizer(SpeechSynthesizer):
     def _abbreviate(text: str, max_length: int = 80) -> str:
         return text if len(text) <= max_length else f"{text[:max_length]}…"
 
-    def _resolve_profile(self, emotion: EmotionState | None) -> VoiceVoxSpeechProfile:
-        profiles = self._config.emotion_profiles or {
+    def _resolve_profile(
+        self, voice_intent: VoiceIntent | None
+    ) -> VoiceVoxSpeechProfile:
+        profiles = self._config.voice_intent_profiles or {
             "neutral": VoiceVoxSpeechProfile(1.0, 0.0, 1.0, 1.0)
         }
-        profile_name = emotion.mood.value if emotion is not None else self._config.default_profile
-        return profiles.get(profile_name, profiles[self._config.default_profile])
+        default_profile = profiles.get(self._config.default_profile)
+        if default_profile is None:
+            default_profile = next(iter(profiles.values()))
+        profile_name = (
+            voice_intent.style
+            if voice_intent is not None
+            else self._config.default_profile
+        )
+        base = profiles.get(profile_name, default_profile)
+        if voice_intent is None:
+            return base
+        speed, pitch, intonation, volume = self._voice_intent_mapper.map(
+            base_speed=base.speed_scale,
+            base_pitch=base.pitch_scale,
+            base_intonation=base.intonation_scale,
+            base_volume=base.volume_scale,
+            intent=voice_intent,
+        )
+        return VoiceVoxSpeechProfile(
+            speed_scale=speed,
+            pitch_scale=pitch,
+            intonation_scale=intonation,
+            volume_scale=volume,
+        )
 
     def _create_audio_query(self, text: str) -> dict[str, Any]:
         query = parse.urlencode({"text": text, "speaker": self._config.speaker_id})
@@ -148,7 +180,9 @@ class VoiceVoxSpeechSynthesizer(SpeechSynthesizer):
             method="POST",
         )
         try:
-            with request.urlopen(http_request, timeout=self._config.timeout_seconds) as response:
+            with request.urlopen(
+                http_request, timeout=self._config.timeout_seconds
+            ) as response:
                 response_body = response.read()
                 if not isinstance(response_body, bytes):
                     raise RuntimeError("VOICEVOX APIの応答形式が不正です。")

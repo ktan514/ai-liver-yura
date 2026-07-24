@@ -1,4 +1,8 @@
-from app.adapters.obs.models import ObsAudioSourceState, ObsInspection, ObsSourceVisibility
+from app.adapters.obs.models import (
+    ObsAudioSourceState,
+    ObsInspection,
+    ObsSourceVisibility,
+)
 from app.adapters.obs.obs_error_mapper import ObsAdapterError, ObsErrorMapper
 from app.adapters.obs.obs_status_mapper import ObsStatusMapper
 from app.adapters.obs.obs_websocket_client_factory import (

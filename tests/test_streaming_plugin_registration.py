@@ -2,19 +2,23 @@ from __future__ import annotations
 
 import pytest
 
-from app.bootstrap import compose_streaming
-from app.config.app_config import load_app_config
-from app.runtime.runtime_factory import (
+from app.bootstrap import (
+    compose_streaming,
     create_stream_preparation_runtime,
     create_streaming_demo_config,
 )
+from app.config.app_config import load_app_config
+from app.shared.contracts.plugins.registration import (
+    PluginActivityRequest,
+    PluginActivitySpec,
+)
 
 
-def test_streaming_plugin_exposes_commands_queries_and_demo_capability_conditionally() -> None:
+def test_streaming_plugin_exposes_commands_queries_and_demo_capability_conditionally() -> (
+    None
+):
     config = load_app_config()
-    plugin_config = config.plugins.registrations["youtube_streaming"]
-    assert plugin_config.enabled is True
-    assert plugin_config.config_reference == "streaming"
+    assert "youtube_streaming" not in config.plugins.registrations
     standard_runtime = create_stream_preparation_runtime(config)
     standard = compose_streaming(standard_runtime)
     registration = standard.registry.registration("youtube_streaming")
@@ -48,4 +52,26 @@ async def test_streaming_lifecycle_is_managed_only_by_generic_registry() -> None
     assert health["youtube_streaming"].status.value == "healthy"
     await composition.registry.stop_all()
     await composition.registry.stop_all()
-    assert (await composition.registry.health())["youtube_streaming"].status.value == "stopped"
+    assert (await composition.registry.health())[
+        "youtube_streaming"
+    ].status.value == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_streaming_activity_provider_returns_shared_spec_not_core_activity() -> (
+    None
+):
+    composition = compose_streaming(
+        create_stream_preparation_runtime(load_app_config())
+    )
+    provider = composition.registry.resolve_activity_provider("stream.activity.opening")
+
+    result = await provider.create_activity(
+        PluginActivityRequest(
+            "stream.activity.opening", {"session_id": "s-1"}, "trace-1"
+        )
+    )
+
+    assert isinstance(result, PluginActivitySpec)
+    assert result.activity_type == "stream_opening_greeting"
+    assert result.trace_id == "trace-1"

@@ -1,5 +1,3 @@
-
-
 import pytest
 
 from app.adapters.memory.llm_memory_summary_generator import (
@@ -29,7 +27,10 @@ async def test_generate_summary_uses_model_response() -> None:
 
     assert summary == "イルカのジャンプの軽やかさに興味を示した"
     assert len(model.received_prompts) == 1
-    assert "あなたはAIキャラクターの長期記憶を作る要約器です。" in model.received_prompts[0]
+    assert (
+        "あなたはAIキャラクターの長期記憶を作る要約器です。"
+        in model.received_prompts[0]
+    )
     assert "# 条件" in model.received_prompts[0]
     assert "# 発話" in model.received_prompts[0]
     assert (
@@ -39,21 +40,26 @@ async def test_generate_summary_uses_model_response() -> None:
 
 
 @pytest.mark.asyncio
-async def test_generate_summary_normalizes_input_and_model_response_whitespace() -> None:
+async def test_generate_summary_normalizes_input_and_model_response_whitespace() -> (
+    None
+):
     model = FakeMemorySummaryModel(
         summary="  水面に反射する光や波の変化に\n関心を持った  "
     )
     generator = LlmMemorySummaryGenerator(model=model)
 
-    summary = await generator.generate_summary("水面に\n\nキラキラ   反射する光が気になる")
+    summary = await generator.generate_summary(
+        "水面に\n\nキラキラ   反射する光が気になる"
+    )
 
     assert summary == "水面に反射する光や波の変化に 関心を持った"
     assert "水面に キラキラ 反射する光が気になる" in model.received_prompts[0]
 
 
 @pytest.mark.asyncio
-async def test_generate_summary_returns_empty_string_without_calling_model_when_text_is_blank(
-) -> None:
+async def test_generate_summary_returns_empty_string_without_calling_model_when_text_is_blank() -> (
+    None
+):
     model = FakeMemorySummaryModel(summary="呼ばれない")
     generator = LlmMemorySummaryGenerator(model=model)
 
@@ -64,7 +70,9 @@ async def test_generate_summary_returns_empty_string_without_calling_model_when_
 
 
 @pytest.mark.asyncio
-async def test_generate_summary_falls_back_to_original_text_when_model_response_is_blank() -> None:
+async def test_generate_summary_falls_back_to_original_text_when_model_response_is_blank() -> (
+    None
+):
     model = FakeMemorySummaryModel(summary="   ")
     generator = LlmMemorySummaryGenerator(
         model=model,

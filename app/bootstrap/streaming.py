@@ -14,15 +14,28 @@ from app.adapters.streaming import (
     InMemoryCommentSelectionRepository,
 )
 from app.admin_api.service import AdminApiService
-from app.core.application.events import ApplicationEventBroker
-from app.core.application.plugins import ActivityDispatcher, PluginRegistry
-from app.core.contracts.plugins import PluginActivityRequest
-from app.domain.events import AgentEvent, AgentEventType
-from app.plugins.youtube_streaming.application.service import StreamingApplicationService
-from app.plugins.youtube_streaming.public.activity_provider import StreamingActivityProvider
+from app.domain.activities import Activity, ActivityType
+from app.domain.events import AgentEvent, AgentEventType, InputAuthority
+from app.domain.trace_context import TraceContext
+from app.plugins.youtube_streaming.application.service import (
+    StreamingApplicationService,
+)
+from app.plugins.youtube_streaming.public.activity_provider import (
+    StreamingActivityProvider,
+)
 from app.plugins.youtube_streaming.public.evidence import ManualCheckRecorder
 from app.plugins.youtube_streaming.public.registration import create_registration
 from app.runtime.runtime_coordinator import RuntimeCoordinator
+from app.shared.contracts.plugins.registration import PluginActivityRequest
+from app.shared.contracts.plugins.runtime import (
+    PluginActionResult,
+    PluginActivityResult,
+    PluginCharacterResult,
+    PluginEvent,
+    PluginOutputResult,
+)
+from app.shared.observability import ApplicationEventBroker
+from app.shared.plugin_host import ActivityDispatcher, PluginRegistry
 
 
 class RuntimeCoreActivityAdapter:
@@ -38,17 +51,52 @@ class RuntimeCoreActivityAdapter:
 
     async def execute(
         self, capability: str, payload: dict[str, object], trace_id: str
-    ) -> Any:
+    ) -> PluginActivityResult:
         request = PluginActivityRequest(capability, payload, trace_id)
-        activity = (
+        spec = (
             await self._activities.dispatch(request)
             if self._activities is not None
             else await self._fallback_activity_provider.create_activity(request)
         )
-        return await self._runtime.execute_external_activity(activity)
+        activity = Activity(
+            activity_type=ActivityType(spec.activity_type),
+            goal=spec.goal,
+            priority=spec.priority,
+            context={
+                **dict(spec.context),
+                "trace_context": TraceContext(trace_id=spec.trace_id or trace_id),
+            },
+            interruptible=spec.interruptible,
+            source_event_id=spec.source_event_id,
+        )
+        result = await self._runtime.execute_external_activity(activity)
+        character = result.character_result
+        output = result.output_result
+        return PluginActivityResult(
+            activity_turn_id=result.activity_turn_id,
+            final_status=result.final_status,
+            failure_stage=result.failure_stage,
+            character_result=(
+                PluginCharacterResult(character.result_id, character.adopted_text)
+                if character is not None
+                else None
+            ),
+            output_result=(
+                PluginOutputResult(
+                    tuple(
+                        PluginActionResult(
+                            item.action_id, item.action_type, item.status.value
+                        )
+                        for item in output.action_results
+                    )
+                )
+                if output is not None
+                else None
+            ),
+        )
 
-    async def publish_event(self, event: AgentEvent) -> None:
-        await self._runtime.publish_event(event)
+    async def publish_event(self, event: PluginEvent) -> None:
+        await self._runtime.publish_event(self._to_core_event(event))
 
     def configure_lifecycle_gate(self, gate: Any) -> None:
         self._runtime.configure_activity_policy(gate)
@@ -69,14 +117,50 @@ class RuntimeCoreActivityAdapter:
         self._runtime.register_event_enricher(enrich)
 
     def configure_comment_moderation(self, handler: Any) -> None:
+        async def handle(event: AgentEvent) -> object:
+            return await handler(
+                PluginEvent(
+                    event_type=event.event_type.value,
+                    payload=event.payload,
+                    priority=event.priority,
+                    occurred_at=event.occurred_at,
+                    event_id=event.event_id,
+                    discardable=event.discardable,
+                    replace_key=event.replace_key,
+                    trace_id=event.trace_context.trace_id,
+                )
+            )
+
         self._runtime.subscribe_event(
             AgentEventType.YOUTUBE_COMMENT,
-            handler,
-            predicate=lambda event: event.payload.get("moderation_status") == "not_evaluated",
+            handle,
+            predicate=lambda event: event.payload.get("moderation_status")
+            == "not_evaluated",
         )
 
     def cancel_outputs(self) -> bool:
         return self._runtime.cancel_outputs()
+
+    @staticmethod
+    def _to_core_event(event: PluginEvent) -> AgentEvent:
+        return AgentEvent(
+            event_type=AgentEventType(event.event_type),
+            payload=dict(event.payload),
+            priority=event.priority,
+            occurred_at=event.occurred_at,
+            event_id=event.event_id,
+            discardable=event.discardable,
+            replace_key=event.replace_key,
+            authority=(
+                InputAuthority.VIEWER
+                if event.event_type == AgentEventType.YOUTUBE_COMMENT.value
+                else InputAuthority.USER
+            ),
+            trace_context=TraceContext(
+                trace_id=event.trace_id,
+                source_event_id=event.event_id,
+            ),
+        )
 
 
 class DefaultStreamingRepositoryFactory:
@@ -126,7 +210,9 @@ def compose_streaming(
         manual_check_log=cast(ManualCheckRecorder | None, manual_check_log),
         repository_factory=DefaultStreamingRepositoryFactory(),
     )
-    activity_adapter = RuntimeCoreActivityAdapter(runtime) if runtime is not None else None
+    activity_adapter = (
+        RuntimeCoreActivityAdapter(runtime) if runtime is not None else None
+    )
     if activity_adapter is not None:
         application.configure_opening(activity_adapter)
     registry = PluginRegistry()
@@ -156,6 +242,9 @@ def compose_streaming(
                         )
                     ),
                 },
+                "agent_runtime": (
+                    runtime.diagnostic_snapshot() if runtime is not None else {}
+                ),
             },
         ),
         registry=registry,

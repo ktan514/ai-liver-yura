@@ -39,6 +39,7 @@ class FakeAgentLifeService:
         self.received_now: list[datetime | None] = []
         self.handled_events: list[AgentEvent] = []
         self.sync_count = 0
+        self.rejected_events: list[AgentEvent] = []
 
     def plan_next_event(self, now: datetime | None = None) -> AgentEvent | None:
         self.received_now.append(now)
@@ -50,6 +51,15 @@ class FakeAgentLifeService:
     def sync_from_activity_manager(self) -> None:
         self.sync_count += 1
 
+    def record_autonomous_plan_rejected(
+        self,
+        event: AgentEvent,
+        *,
+        rejected_at: datetime | None = None,
+        reconsider_after_seconds: float | None = None,
+    ) -> None:
+        self.rejected_events.append(event)
+
 
 class FakeActivityManager:
     def __init__(self, activity: Activity) -> None:
@@ -58,6 +68,17 @@ class FakeActivityManager:
 
     def handle_event(self, event: AgentEvent) -> Activity:
         self.handled_events.append(event)
+        return self.activity
+
+    def update_activity_context(
+        self, activity_id: str, updates: dict[str, object]
+    ) -> Activity | None:
+        if activity_id != self.activity.activity_id:
+            return None
+        self.activity = replace(
+            self.activity,
+            context={**self.activity.context, **updates},
+        )
         return self.activity
 
 
@@ -111,7 +132,9 @@ def _create_agent_event() -> AgentEvent:
 
 
 # Thread 起動直後のタイミング差を吸収するため、起動状態になるまで待つ。
-def _wait_until_running(thread: ActivityPlannerThread, timeout_seconds: float = 1.0) -> bool:
+def _wait_until_running(
+    thread: ActivityPlannerThread, timeout_seconds: float = 1.0
+) -> bool:
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if thread.is_running:
@@ -152,7 +175,9 @@ def test_run_once_does_not_plan_when_output_queue_is_full() -> None:
     request_queue: Queue[ActivityPlanningRequest] = Queue()
     planned_activity_queue = PlannedActivityQueue()
     planned_activity_queue.put(_create_planned_activity(priority=10))
-    planning_service = FakeActivityPlanningService(_create_planned_activity(priority=90))
+    planning_service = FakeActivityPlanningService(
+        _create_planned_activity(priority=90)
+    )
     thread = _create_thread(
         request_queue,
         planned_activity_queue,
@@ -167,7 +192,9 @@ def test_run_once_does_not_plan_when_output_queue_is_full() -> None:
     assert planning_service.received_now == []
 
 
-def test_activity_planning_service_enriches_activity_before_returning_planned_activity() -> None:
+def test_activity_planning_service_enriches_activity_before_returning_planned_activity() -> (
+    None
+):
     event = _create_agent_event()
     activity = Activity(
         activity_type=ActivityType.AUTONOMOUS_TALK,
@@ -189,7 +216,7 @@ def test_activity_planning_service_enriches_activity_before_returning_planned_ac
     planned_activity = planning_service.plan_once(now=now)
 
     assert planned_activity is not None
-    assert planned_activity.activity is not activity
+    assert planned_activity.activity is activity_manager.activity
     assert planned_activity.activity.context == {
         "original": "value",
         "similar_topic_memories": ["memory-1"],
