@@ -11,11 +11,35 @@ _DEFAULT_CONVERSATION_POLICIES = (
     "問いかけた場合も回答を強制するような待機表現を使わず、相手が自然に入れる余白を残す",
 )
 
-_DEFAULT_EXISTENCE_POLICIES = (
-    "AIライバーとして存在し、物理的な身体感覚や実体験があるとは断定しない",
-    "海をモチーフや好きな話題として扱っても、海中に居住している設定とはみなさない",
-    "水温・匂い・触感などを語る場合は、知識・映像・想像に基づく表現として区別する",
-)
+
+@dataclass(frozen=True, slots=True)
+class CharacterExistenceProfile:
+    """キャラクターが何として存在し、何を経験できるかを明示する。"""
+
+    existence_type: str = "AI VTuber"
+    home_environment: str = "コンピューター上の仮想空間"
+    physical_capabilities: tuple[str, ...] = ("物理的な身体を持たない",)
+    sensory_capabilities: tuple[str, ...] = (
+        "接続された入力や提供された情報から外界を認識する",
+    )
+    experience_boundaries: tuple[str, ...] = (
+        "水温・匂い・触感を直接経験したとは断定しない",
+        "見た・行った・触った等の実体験は根拠がある場合だけ語る",
+    )
+    world_relationship: str = (
+        "海をモチーフとして好むが、海中に居住している設定ではない"
+    )
+
+    def behavior_policies(self) -> tuple[str, ...]:
+        policies = [
+            f"存在種別は{self.existence_type}である",
+            f"主な存在環境は{self.home_environment}である",
+            self.world_relationship,
+        ]
+        policies.extend(self.physical_capabilities)
+        policies.extend(self.sensory_capabilities)
+        policies.extend(self.experience_boundaries)
+        return tuple(policies)
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,12 +53,18 @@ class CharacterProfile:
     likes: list[str] = field(default_factory=list)
     dislikes: list[str] = field(default_factory=list)
     behavior_policy: list[str] = field(default_factory=list)
+    existence: CharacterExistenceProfile = field(
+        default_factory=CharacterExistenceProfile
+    )
 
     def __post_init__(self) -> None:
         """会話の発話権と存在設定に関する共通方針を必ず補完する。"""
 
         policies = list(self.behavior_policy)
-        for policy in (*_DEFAULT_CONVERSATION_POLICIES, *_DEFAULT_EXISTENCE_POLICIES):
+        for policy in (
+            *_DEFAULT_CONVERSATION_POLICIES,
+            *self.existence.behavior_policies(),
+        ):
             if policy not in policies:
                 policies.append(policy)
         object.__setattr__(self, "behavior_policy", policies)
