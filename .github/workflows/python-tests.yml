@@ -3,8 +3,13 @@ name: Python tests
 on:
   push:
     branches:
-      - feature/chatgpt-conversation-turn-handoff
-      - feature/yura-autonomous-agent-refactor
+      - "feature/**"
+      - "refactor/**"
+      - "fix/**"
+      - "hotfix/**"
+      - "test/**"
+      - "ci/**"
+      - "chore/**"
     paths-ignore:
       - "docs/**"
       - "**/*.md"
